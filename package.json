@@ -1,5 +1,5 @@
 {
-  "name": "enterprise-agent-connect",
+  "name": "@arbium/enterprise-agent-connect",
   "version": "0.1.0",
   "type": "module",
   "description": "Enterprise Agent Connect server: the service, its migrations and the built-in connectors",

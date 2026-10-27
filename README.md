@@ -82,7 +82,7 @@ delete the database too).
 lists its setup steps, as click paths and as commands), add your own app
 ([docs/http-connector.md](docs/http-connector.md)), or embed the service in your own Node app
 with `createAgentConnect({...})` from the server package (`npm install
-@enterprise-agent-connect/server`; the typed admin client is `@enterprise-agent-connect/client`).
+@arbium/enterprise-agent-connect`; the typed admin client is `@arbium/enterprise-agent-connect-client`).
 
 Only `/agent-connect/mcp` and `/agent-connect/teams` may be public. The admin API refuses any
 request that carries `X-Forwarded-For`, so never route it through a public load balancer.

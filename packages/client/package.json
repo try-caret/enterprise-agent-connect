@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-agent-connect/client",
+  "name": "@arbium/enterprise-agent-connect-client",
   "version": "0.1.0",
   "description": "Typed client for the Agent Connect admin API (v1), and the pure logic admin pages share",
   "type": "module",
