@@ -1,0 +1,43 @@
+# Agent Connect and a Postgres for it. Quick start (README.md):
+#   cp .env.example .env, fill the three secrets, then docker compose up --build --wait
+name: agent-connect
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agent_connect
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: agent_connect
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "agent_connect", "-d", "agent_connect"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  agent-connect:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://agent_connect:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/agent_connect
+      DATABASE_SSL: disable
+      MIGRATE_ON_START: "true"
+    # This machine only: /agent-connect/admin is behind the admin token alone. Expose the
+    # service through a reverse proxy that routes only /agent-connect/mcp and /agent-connect/teams.
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/agent-connect/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres:

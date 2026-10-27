@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # A throwaway Postgres for the store and upgrade tests. Disposable, no data, no secret.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres@localhost:5432/ac_test
+      DATABASE_SSL: disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - id: install
+        run: npm ci --no-audit --no-fund
+      - run: npm run check
+      # The steps below run even when the type-check failed, so one push shows every failure.
+      - name: Create the test database
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: scripts/test-databases.sh postgres://postgres@localhost:5432
+      # Includes the connector conformance tests (connector.test.ts, capabilities.test.ts).
+      - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm test
+      - name: Generated API files are current
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          npm run client
+          git status --porcelain -- packages/server/openapi.json packages/client/src/schema.ts | grep . \
+            && { echo "::error::Run npm run client and commit the result."; exit 1; } \
+            || true
+      - name: Server package builds
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run build && npm pack --dry-run
+      - name: Docker image builds
+        if: ${{ !cancelled() }}
+        run: docker build -f deploy/docker/Dockerfile .
+      - uses: azure/setup-helm@v5
+      - name: Helm chart renders
+        if: ${{ !cancelled() }}
+        run: |
+          helm lint deploy/helm/agent-connect --set image.repository=x,image.tag=x,existingSecret=x
+          helm template t deploy/helm/agent-connect --set image.repository=x,image.tag=x,existingSecret=x >/dev/null

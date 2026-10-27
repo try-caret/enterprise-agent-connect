@@ -1,0 +1,118 @@
+{
+  "id": "microsoft",
+  "name": "Microsoft 365",
+  "logo": "/brand/registry/microsoft-365.svg",
+  "identity": "An app you register in your own Microsoft Entra tenant. Your Microsoft apps here share it: you enter its details once. It reaches only what you grant it, and you can remove it at any time.",
+  "sharedIdentity": "{brand.productName}'s shared app, approved by your administrator in your Microsoft Entra tenant. Your Microsoft apps here share it. It reaches only what was approved, and you can remove it at any time under Enterprise applications.",
+  "accountKey": "tenantId",
+  "principalKeys": ["clientId", "servicePrincipalId"],
+  "certificate": true,
+  "setup": [
+    {
+      "title": "Register the {brand.microsoft.appName} app",
+      "body": "Every Microsoft app you set up here uses this one app registration, for this organization only and with no redirect address. Keep its Application (client) ID and Directory (tenant) ID for step 3.",
+      "link": {
+        "label": "Open App registrations",
+        "href": "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+      },
+      "click": [
+        "Sign in to the Microsoft Entra admin center as at least an Application Developer.",
+        "Go to Entra ID, then App registrations, and select New registration.",
+        "Name it {brand.microsoft.appName}. Under Supported account types choose Single tenant only. Leave the redirect address empty and select Register.",
+        "On the app's Overview page, copy the Application (client) ID and the Directory (tenant) ID."
+      ],
+      "copy": [
+        "az login --allow-no-subscriptions",
+        "APP_ID=$(az ad app create --display-name \"{brand.microsoft.appName}\" --sign-in-audience AzureADMyOrg --query appId -o tsv)",
+        "az ad sp create --id $APP_ID",
+        "echo \"Application (client) ID: $APP_ID\"; echo \"Directory (tenant) ID: $(az account show --query tenantId -o tsv)\""
+      ],
+      "shell": "bash",
+      "confirm": "microsoft-app-registered"
+    },
+    {
+      "title": "Add its sign-in certificate",
+      "body": "Create the certificate here and download it, then upload it to the app. {brand.productName} signs in with the matching private key, which never leaves {brand.productName} and is never shown to anyone.",
+      "certificate": true,
+      "click": [
+        "Select Download certificate below (or Create certificate if there is none yet) to get {brand.resourcePrefix}-agents.cer.",
+        "In App registrations, open {brand.microsoft.appName}.",
+        "Select Certificates & secrets, then Certificates, then Upload certificate.",
+        "Choose {brand.resourcePrefix}-agents.cer and select Add."
+      ],
+      "copy": [
+        "# In the folder you downloaded {brand.resourcePrefix}-agents.cer to, in the same shell as step 1 (or set APP_ID to the Application (client) ID)",
+        "az ad app credential reset --id $APP_ID --cert \"@{brand.resourcePrefix}-agents.cer\" --append"
+      ],
+      "shell": "bash"
+    }
+  ],
+  "fields": [
+    {
+      "id": "tenant_id",
+      "label": "Directory (tenant) ID",
+      "help": "On the app's Overview page.",
+      "placeholder": "00000000-0000-0000-0000-000000000000",
+      "secret": false
+    },
+    {
+      "id": "client_id",
+      "label": "Application (client) ID",
+      "help": "On the app's Overview page.",
+      "placeholder": "00000000-0000-0000-0000-000000000000",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret",
+      "help": "Only if you use a client secret instead of the certificate: the secret's Value, from Certificates & secrets.",
+      "secret": true,
+      "optional": true
+    }
+  ],
+  "addAgent": [
+    {
+      "title": "Create the agent's mailbox",
+      "body": "A shared mailbox: it needs no license, and nobody signs in to it. Its address is the agent's email.",
+      "apps": ["outlook-mail", "outlook-calendar"],
+      "link": {
+        "label": "Open Shared mailboxes",
+        "href": "https://admin.microsoft.com/Adminportal/Home#/SharedMailbox"
+      },
+      "click": [
+        "In the Microsoft 365 admin center, go to Teams & groups, then Shared mailboxes. Select Show all if you do not see Teams & groups.",
+        "Select Add a shared mailbox. Enter the name \"{agentName}\" and the email address \"{agentEmail}\", then select Save changes.",
+        "Skip adding members: the agent needs none."
+      ],
+      "copy": [
+        "# Needs the ExchangeOnlineManagement module: Install-Module ExchangeOnlineManagement -Scope CurrentUser",
+        "Connect-ExchangeOnline",
+        "New-Mailbox -Shared -Name '{agentName}' -DisplayName '{agentName}' -PrimarySmtpAddress '{agentEmail}'"
+      ],
+      "shell": "powershell"
+    },
+    {
+      "title": "Add it to {brand.microsoft.mailboxGroup}",
+      "body": "Membership of this group is what lets the app open the mailbox, and nothing else. Microsoft can take up to about 2 hours to apply it. Check access tells you when it works.",
+      "apps": ["outlook-mail", "outlook-calendar"],
+      "agentCheck": true,
+      "link": {
+        "label": "Open Mail-enabled security groups",
+        "href": "https://admin.exchange.microsoft.com/#/groups"
+      },
+      "click": [
+        "In the Exchange admin center, go to Recipients, then Groups, then Mail-enabled security.",
+        "Open {brand.microsoft.mailboxGroup}, then Members, and select View all and manage members.",
+        "Add \"{agentEmail}\" and select Save changes."
+      ],
+      "copy": [
+        "# Needs the ExchangeOnlineManagement module: Install-Module ExchangeOnlineManagement -Scope CurrentUser",
+        "Connect-ExchangeOnline",
+        "Add-DistributionGroupMember -Identity '{brand.microsoft.mailboxGroup}' -Member '{agentEmail}' -BypassSecurityGroupManagerCheck",
+        "Test-ServicePrincipalAuthorization -Identity '{clientId}' -Resource '{agentEmail}'"
+      ],
+      "shell": "powershell"
+    }
+  ],
+  "revoke": "In the Microsoft Entra admin center, open App registrations, then {brand.microsoft.appName}, and delete it, or remove its certificate or secret. Every Microsoft app connected here stops at once."
+}

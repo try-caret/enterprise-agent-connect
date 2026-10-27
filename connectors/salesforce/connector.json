@@ -1,0 +1,122 @@
+{
+  "id": "salesforce",
+  "name": "Salesforce",
+  "description": "Let agents look up and work on the Salesforce records you choose.",
+  "logo": "/brand/salesforce.svg",
+  "identity": "A Salesforce integration user named \"{brand.microsoft.appName}\". It uses a Salesforce Integration license, not a full user license.",
+  "accountKey": "myDomain",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an integration user",
+      "body": "In Setup, open Users and create a user named \"{brand.microsoft.appName}\" with the Salesforce Integration user license and the \"Minimum Access - API Only Integrations\" profile.",
+      "link": {
+        "label": "About integration users",
+        "href": "https://help.salesforce.com/s/articleView?id=sf.integration_user.htm"
+      }
+    },
+    {
+      "title": "Give it access to the records agents need",
+      "body": "Create a permission set for the Salesforce API Integration license with these object permissions on each object agents should use, plus access to their fields. Assign it to the integration user. Agents never see more than this user can. You can narrow each agent to specific objects here later.",
+      "permissions": true
+    },
+    {
+      "title": "Create an External Client App",
+      "body": "In Setup, open External Client App Manager and create an app named \"{brand.microsoft.appName}\". Enable OAuth, enter any callback URL (it is not used), select this OAuth scope, and enable the Client Credentials Flow.",
+      "copy": ["{scopes}"]
+    },
+    {
+      "title": "Run the app as the integration user",
+      "body": "In the app's Policies, under OAuth Policies, enable the Client Credentials Flow and set Run As to the \"{brand.microsoft.appName}\" user. Then open its Settings, select Consumer Key and Secret, and copy both."
+    },
+    {
+      "title": "Find your My Domain",
+      "body": "In Setup, open My Domain and copy the current My Domain URL, for example your-company.my.salesforce.com."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "my_domain",
+      "label": "My Domain",
+      "help": "Your Salesforce address, ending in .my.salesforce.com.",
+      "placeholder": "your-company.my.salesforce.com",
+      "secret": false
+    },
+    {
+      "id": "client_id",
+      "label": "Consumer key",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Consumer secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read records",
+      "description": "Query and read records.",
+      "required": true,
+      "scopes": ["Manage user data via APIs (api)"],
+      "permissions": ["Read"],
+      "tools": ["salesforce_query", "salesforce_get_record"]
+    },
+    {
+      "id": "create",
+      "label": "Create records",
+      "description": "Create new records.",
+      "scopes": ["Manage user data via APIs (api)"],
+      "permissions": ["Create"],
+      "tools": ["salesforce_create_record"]
+    },
+    {
+      "id": "update",
+      "label": "Update records",
+      "description": "Change fields on existing records.",
+      "scopes": ["Manage user data via APIs (api)"],
+      "permissions": ["Edit"],
+      "tools": ["salesforce_update_record"]
+    },
+    {
+      "id": "delete",
+      "label": "Delete records",
+      "description": "Delete records. They go to the Recycle Bin, where Salesforce removes them after 15 days. Deleting a parent record also deletes its child records, so an agent limited to some objects cannot delete a record whose children are of other objects.",
+      "destructive": true,
+      "scopes": ["Manage user data via APIs (api)"],
+      "permissions": ["Edit", "Delete"],
+      "tools": ["salesforce_delete_record"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "objects",
+      "label": "Objects",
+      "help": "Leave empty to allow every object the integration user can read.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,79}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/services/data/v63.0/sobjects/User/{userId}?fields=Username",
+    "label": "Signed in as",
+    "show": "Username"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/services/data/v63.0/sobjects",
+    "label": "Objects agents can see",
+    "show": "sobjects[].name",
+    "match": {
+      "queryable": true,
+      "layoutable": true,
+      "customSetting": false,
+      "deprecatedAndHidden": false
+    }
+  },
+  "revoke": "In Setup, open External Client App Manager, then {brand.microsoft.appName}, and disable the app or deactivate the {brand.microsoft.appName} user."
+}

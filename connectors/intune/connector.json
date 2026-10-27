@@ -1,0 +1,106 @@
+{
+  "id": "intune",
+  "name": "Microsoft Intune",
+  "description": "Let agents look up the devices Intune manages: who uses them, their system and version, compliance, encryption, last check-in and the apps found on them. Read-only.",
+  "logo": "/brand/registry/intune.svg",
+  "identity": "Your Microsoft app registration, through the Microsoft connection. It can read your managed devices and, if you allow it, their Autopilot status, and change nothing: it cannot wipe, lock, retire or sync a device, or change an Autopilot profile. Each API key can be kept to the devices of people in chosen groups.",
+  "provider": "microsoft",
+  "order": 6,
+  "accountKey": "tenantId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Add these Microsoft Graph permissions to the app",
+      "body": "In the app, open API permissions, select Add a permission, then Microsoft Graph, then Application permissions, and add exactly these. They only read. Do not add DeviceManagementManagedDevices.ReadWrite.All, DeviceManagementManagedDevices.PrivilegedOperations.All or DeviceManagementServiceConfig.ReadWrite.All: they let the app change, wipe or retire devices or change Autopilot. Your organization needs an Intune license.",
+      "copy": [
+        "az ad app permission add --id {clientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions \"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)=Role\""
+      ],
+      "click": [
+        "In the Microsoft Entra admin center, go to Entra ID, then App registrations, and open {brand.microsoft.appName}.",
+        "Select API permissions, then Add a permission, then Microsoft Graph, then Application permissions.",
+        "Tick {scopes} and select Add permissions."
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Grant admin consent",
+      "body": "Still under API permissions, select \"Grant admin consent\". This needs a Global Administrator or Privileged Role Administrator. Each permission should then show Granted. With Commands, a permission that was granted already is answered with \"Permission being assigned already exists\", which is fine.",
+      "click": [
+        "Still under API permissions, select Grant admin consent for your organization, then Yes.",
+        "Each permission should show Granted under Status."
+      ],
+      "copy": [
+        "SP=$(az ad sp show --id {clientId} --query id -o tsv)",
+        "GRAPH=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)",
+        "az rest --method post --url \"https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments\" --body \"{\\\"principalId\\\": \\\"$SP\\\", \\\"resourceId\\\": \\\"$GRAPH\\\", \\\"appRoleId\\\": \\\"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)\\\"}\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "people_groups",
+      "label": "Keeping keys to groups of people",
+      "secret": false,
+      "options": [
+        {
+          "value": "off",
+          "label": "Not used",
+          "description": "Each API key reaches every managed device."
+        },
+        {
+          "value": "groups",
+          "label": "Keep keys to people's groups",
+          "description": "Lets you keep an API key to the devices whose primary user is in groups you choose. The app then also reads your organization's people and group memberships.",
+          "scopes": ["User.ReadBasic.All", "GroupMember.Read.All"]
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Look up managed devices",
+      "description": "List and search managed devices, read one device's details and the apps found on it, a person's devices, and compliance across devices.",
+      "required": true,
+      "note": "Reaches every managed device unless you keep a key to chosen groups under API keys. Read-only.",
+      "scopes": ["DeviceManagementManagedDevices.Read.All"],
+      "permissions": [],
+      "tools": [
+        "intune_list_devices",
+        "intune_get_device",
+        "intune_device_apps",
+        "intune_person_devices",
+        "intune_compliance_summary"
+      ],
+      "forbidden": "Microsoft refused this. The app needs {scopes} with admin consent (the Microsoft Intune page in {brand.productName} shows how), and your organization needs an Intune license."
+    },
+    {
+      "id": "autopilot",
+      "label": "Read Autopilot status",
+      "description": "Look up a Windows Autopilot device by serial number: its enrollment state, profile, group tag, last contact with Intune and, once managed, its compliance and primary user.",
+      "note": "Reads the Autopilot device list of your whole organization. Read-only. The answer also reads the managed device, which \"Look up managed devices\" (always on) allows.",
+      "scopes": ["DeviceManagementServiceConfig.Read.All"],
+      "permissions": [],
+      "tools": ["intune_autopilot_status"],
+      "forbidden": "Microsoft refused this. The app needs {scopes} with admin consent (the Microsoft Intune page in {brand.productName} shows how), and your organization needs an Intune license."
+    }
+  ],
+  "limits": [
+    {
+      "id": "groups",
+      "label": "Groups",
+      "help": "Optional: only devices whose primary user is in these groups (their object IDs, from Groups in the Microsoft Entra admin center). Needs \"Keep keys to people's groups\" on the Microsoft Intune page. At most 20. Leave empty for every device. Autopilot status (if allowed) also needs any user assigned on the Autopilot record to be in these groups; for a device no person is tied to yet (a spare), it answers only the serial number, the Autopilot enrollment state and whether Intune manages it and its compliance: no device id, names or group tag.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    }
+  ],
+  "verify": {
+    "label": "Microsoft permissions the app has",
+    "check": "permissions",
+    "ifEmpty": "The app has no Microsoft Graph application permissions yet. Add the permissions above and grant admin consent."
+  },
+  "revoke": "Remove DeviceManagementManagedDevices.Read.All and DeviceManagementServiceConfig.Read.All (and User.ReadBasic.All and GroupMember.Read.All, unless another app here needs them) from the app under API permissions. To stop every Microsoft app at once, remove the app registration (see the Microsoft connection)."
+}

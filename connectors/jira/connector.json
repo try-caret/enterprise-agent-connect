@@ -1,0 +1,129 @@
+{
+  "id": "jira",
+  "name": "Jira",
+  "description": "Let agents search, read and work on issues in the Jira projects you choose.",
+  "logo": "/brand/jira.svg",
+  "identity": "An Atlassian service account named \"{brand.microsoft.appName}\". It uses no Jira seat.",
+  "accountKey": "cloudId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a service account with Jira access",
+      "body": "In Atlassian Administration, create a service account named \"{brand.microsoft.appName}\". When it asks you to select an app role, set Jira to User and leave every other app, including Jira Administration, on None. Without a Jira role the account cannot use Jira at all.",
+      "click": [
+        "Atlassian Administration > Directory > Service accounts > Create service account",
+        "Name: {brand.microsoft.appName}",
+        "Select app role: Jira > User (every other app, including Jira Administration: None) > Create"
+      ],
+      "link": {
+        "label": "Open Atlassian Administration",
+        "href": "https://admin.atlassian.com"
+      }
+    },
+    {
+      "title": "Add it to the projects agents should work in",
+      "body": "How you do this depends on the project. In a team-managed project (the usual kind on the Free plan), add the service account as a Member: Members can browse, comment on, move and create issues, and Viewers can only read. In a company-managed project on Standard or Premium, give it a project role whose permissions include the ones below. Without Browse projects the projects are listed but their issues stay hidden. You can narrow each agent to specific projects here later.",
+      "click": [
+        "Team-managed project: the project > Project settings > Access > Add people > {brand.microsoft.appName} > Role: Member > Add",
+        "Company-managed project: the project > Project settings > People > Add people > {brand.microsoft.appName} > a role with the permissions below"
+      ],
+      "permissions": true
+    },
+    {
+      "title": "Create OAuth 2.0 credentials",
+      "body": "On the service account, select Create credentials, then OAuth 2.0, and select exactly these scopes. Copy the client ID and secret: Atlassian shows the secret only once.",
+      "copy": ["{scopes}"]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "site",
+      "label": "Jira site",
+      "help": "The part before .atlassian.net in your Jira address.",
+      "placeholder": "your-company",
+      "secret": false
+    },
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read issues",
+      "description": "Search and read issues and list projects.",
+      "required": true,
+      "scopes": ["read:jira-work"],
+      "permissions": ["Browse projects"],
+      "tools": ["jira_search_issues", "jira_get_issue", "jira_list_projects"]
+    },
+    {
+      "id": "comment",
+      "label": "Comment",
+      "description": "Add comments to issues. In a service project a comment is public (the customer is emailed) unless the agent marks it as an internal note.",
+      "scopes": ["write:jira-work"],
+      "permissions": ["Add comments"],
+      "tools": ["jira_add_comment"]
+    },
+    {
+      "id": "transition",
+      "label": "Move issues",
+      "description": "Move issues to another status, such as In Progress or Done.",
+      "scopes": ["write:jira-work"],
+      "permissions": ["Transition issues"],
+      "tools": ["jira_list_transitions", "jira_transition_issue"]
+    },
+    {
+      "id": "create",
+      "label": "Create issues",
+      "description": "Create new issues in the allowed projects.",
+      "scopes": ["write:jira-work"],
+      "permissions": ["Create issues"],
+      "tools": ["jira_create_issue"]
+    },
+    {
+      "id": "delete",
+      "label": "Delete issues",
+      "description": "Delete issues for good. Jira cannot bring a deleted issue back.",
+      "destructive": true,
+      "scopes": ["write:jira-work"],
+      "permissions": ["Delete issues"],
+      "tools": ["jira_delete_issue"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "projects",
+      "label": "Projects",
+      "help": "Leave empty to allow every project the service account can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/rest/api/3/serverInfo",
+    "label": "Connected Jira site",
+    "show": "baseUrl"
+  },
+  "discover": {
+    "method": "POST",
+    "path": "/rest/api/3/permissions/project",
+    "body": {
+      "permissions": ["BROWSE_PROJECTS"]
+    },
+    "label": "Projects agents can see",
+    "show": "projects[].key",
+    "ifEmpty": "The service account cannot browse any project yet, so agents will find no issues. Give it a role with Browse projects in each project agents need, then check again."
+  },
+  "revoke": "In Atlassian Administration, open Directory, then Service accounts, then {brand.microsoft.appName}, and revoke its credentials."
+}

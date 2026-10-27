@@ -1,0 +1,99 @@
+name: Release
+
+# A v* tag publishes the server and client npm packages to GitHub Packages. Once the repository
+# variable PUBLIC_RELEASE is "true" (and the NPM_TOKEN secret is set), it also publishes them to
+# npmjs as @enterprise-agent-connect/server and /client, and the image to
+# ghcr.io/try-caret/enterprise-agent-connect.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: "@try-caret"
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      # GitHub Packages only takes the owner's scope, so the packages publish as
+      # @try-caret/*; the public names come with npmjs in Phase 5.
+      - name: Version and name
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          npm pkg set version="$v" name=@try-caret/enterprise-agent-connect
+          (cd packages/client && npm pkg set version="$v" name=@try-caret/enterprise-agent-connect-client)
+          [[ $v == *-* ]] && echo "DIST_TAG=next" >> "$GITHUB_ENV" || echo "DIST_TAG=latest" >> "$GITHUB_ENV"
+      - run: npm run build && npm publish --tag "$DIST_TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npx tsc -p packages/client && npm publish ./packages/client --tag "$DIST_TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  npmjs:
+    if: vars.PUBLIC_RELEASE == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - name: Version and name
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          npm pkg set version="$v" name=@enterprise-agent-connect/server
+          (cd packages/client && npm pkg set version="$v")
+          [[ $v == *-* ]] && echo "DIST_TAG=next" >> "$GITHUB_ENV" || echo "DIST_TAG=latest" >> "$GITHUB_ENV"
+      - run: npm run build && npm publish --access public --provenance --tag "$DIST_TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npx tsc -p packages/client && npm publish ./packages/client --access public --provenance --tag "$DIST_TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  image:
+    if: vars.PUBLIC_RELEASE == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          img=ghcr.io/${{ github.repository }}
+          tags="$img:$v"
+          [[ $v == *-* ]] || tags="$tags,$img:latest"
+          echo "TAGS=$tags" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          push: true
+          tags: ${{ env.TAGS }}

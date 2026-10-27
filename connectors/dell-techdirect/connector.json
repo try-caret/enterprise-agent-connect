@@ -1,0 +1,39 @@
+{
+  "id": "dell-techdirect",
+  "name": "Dell TechDirect",
+  "description": "Let agents look up warranty coverage for your Dell computers by service tag.",
+  "logo": "/brand/registry/dell.svg",
+  "identity": "An API key from your company's Dell TechDirect account, approved for the Warranty API.",
+  "accountKey": "keyId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Request a Warranty API key",
+      "body": "Sign in to Dell TechDirect as your company's administrator, open APIs, and request access to the Warranty API. Dell reviews each request, which can take a few days.",
+      "link": { "label": "Dell TechDirect", "href": "https://techdirect.dell.com/" }
+    },
+    {
+      "title": "Copy the keys",
+      "body": "Once Dell approves the request, open APIs, then API Key Management, and copy the client ID and client secret of the production key."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    { "id": "client_id", "label": "Client ID", "secret": false },
+    { "id": "client_secret", "label": "Client secret", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "warranty",
+      "label": "Look up warranties",
+      "description": "Read the model, ship date and warranty coverage of Dell computers by service tag.",
+      "required": true,
+      "scopes": ["Warranty API"],
+      "permissions": [],
+      "tools": ["dell_warranty_lookup"]
+    }
+  ],
+  "limits": [],
+  "verify": { "label": "Dell answers", "check": "warranty" },
+  "revoke": "In Dell TechDirect, open APIs, then API Key Management, and delete the key."
+}

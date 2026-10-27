@@ -1,0 +1,85 @@
+{
+  "id": "entra",
+  "name": "Microsoft Entra ID",
+  "description": "Let agents look up people and groups in your organization: titles, departments, managers, direct reports, group memberships and licenses. Read-only.",
+  "logo": "/brand/registry/entra.svg",
+  "identity": "Your Microsoft app registration, through the Microsoft connection. It can read your organization's people and groups and change nothing. Each API key can be kept to chosen groups or administrative units.",
+  "provider": "microsoft",
+  "order": 5,
+  "accountKey": "tenantId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Add these Microsoft Graph permissions to the app",
+      "body": "In the app, open API permissions, select Add a permission, then Microsoft Graph, then Application permissions, and add exactly these. They only read. Do not add User.ReadWrite.All, Group.ReadWrite.All, GroupMember.ReadWrite.All or Directory.ReadWrite.All: they let the app change people and groups.",
+      "copy": [
+        "az ad app permission add --id {clientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions \"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)=Role\""
+      ],
+      "click": [
+        "In the Microsoft Entra admin center, go to Entra ID, then App registrations, and open {brand.microsoft.appName}.",
+        "Select API permissions, then Add a permission, then Microsoft Graph, then Application permissions.",
+        "Tick {scopes} and select Add permissions."
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Grant admin consent",
+      "body": "Still under API permissions, select \"Grant admin consent\". This needs a Global Administrator or Privileged Role Administrator. Each permission should then show Granted. With Commands, a permission that was granted already is answered with \"Permission being assigned already exists\", which is fine.",
+      "click": [
+        "Still under API permissions, select Grant admin consent for your organization, then Yes.",
+        "Each permission should show Granted under Status."
+      ],
+      "copy": [
+        "SP=$(az ad sp show --id {clientId} --query id -o tsv)",
+        "GRAPH=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)",
+        "az rest --method post --url \"https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments\" --body \"{\\\"principalId\\\": \\\"$SP\\\", \\\"resourceId\\\": \\\"$GRAPH\\\", \\\"appRoleId\\\": \\\"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)\\\"}\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Look up people and groups",
+      "description": "Find people and read their name, job title, department, office, manager, direct reports, whether their account is on, their licenses and their groups. Find groups and list their members.",
+      "required": true,
+      "note": "Reaches everyone in your organization unless you keep a key to chosen groups or administrative units under API keys. Read-only.",
+      "scopes": ["User.Read.All", "GroupMember.Read.All", "LicenseAssignment.Read.All"],
+      "permissions": [],
+      "tools": [
+        "entra_get_person",
+        "entra_search_people",
+        "entra_person_groups",
+        "entra_group_members",
+        "entra_search_groups"
+      ],
+      "forbidden": "Microsoft refused this. The app needs {scopes} with admin consent (the Microsoft Entra ID page in {brand.productName} shows how)."
+    }
+  ],
+  "limits": [
+    {
+      "id": "groups",
+      "label": "Groups",
+      "help": "Optional: only people in these groups (their object IDs, from Groups in the Microsoft Entra admin center), and only these groups and the groups inside them. Leave empty for everyone, unless administrative units are set.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    {
+      "id": "units",
+      "label": "Administrative units",
+      "help": "Optional: only people and groups in these administrative units (their object IDs). With groups set too, a person or group in either one is allowed. At most 20 groups and units together.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    }
+  ],
+  "verify": {
+    "label": "Microsoft permissions the app has",
+    "check": "permissions",
+    "ifEmpty": "The app has no Microsoft Graph application permissions yet. Add the permissions above and grant admin consent."
+  },
+  "revoke": "Remove User.Read.All, GroupMember.Read.All and LicenseAssignment.Read.All from the app under API permissions (unless another app here needs them). To stop every Microsoft app at once, remove the app registration (see the Microsoft connection)."
+}

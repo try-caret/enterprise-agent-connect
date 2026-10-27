@@ -1,0 +1,21 @@
+{
+  "name": "@enterprise-agent-connect/client",
+  "version": "0.1.0",
+  "description": "Typed client for the Agent Connect admin API (v1), and the pure logic admin pages share",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/try-caret/enterprise-agent-connect.git",
+    "directory": "packages/client"
+  },
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,298 @@
+{
+  "id": "teams",
+  "name": "Microsoft Teams",
+  "description": "Let each agent take part in Teams as its own bot: read where it is added, post, and answer when someone messages it.",
+  "logo": "/brand/microsoft-teams.svg",
+  "identity": "Each agent appears in Teams as its own bot, with its own name and picture, signing in with its own app registration in your tenant. A bot sees only the teams and chats it is added to. With Add to Teams, {brand.microsoft.appName} makes and removes the bots and adds them where you choose, and it can add those bots, with access to their messages, to any team or group chat in your organization (and to any person, if you allow that below), so treat its key like an administrator's.",
+  "signsInAs": "agentBot",
+  "provider": "microsoft",
+  "order": 7,
+  "accountKey": "tenantId",
+  "connectionKind": "guided",
+  "scopes": ["Team.ReadBasic.All", "User.ReadBasic.All"],
+  "setup": [
+    {
+      "title": "Add the Microsoft Graph permissions for adding bots",
+      "body": "{brand.microsoft.appName} adds each agent's bot to Teams for you: it creates the bot's own app registration (it can change only apps it created), adds the bot where you choose, and lists teams and people for you to pick from. Add exactly these application permissions (with setup scripts only, chosen in step 1, just the two read permissions). Know what the others allow together: {brand.microsoft.appName} can add any bot it made to any team or group chat in your organization (and to any person, if you allowed that in step 1), with consent to read the messages there, and it holds those bots' keys. So whoever holds the {brand.microsoft.appName} key could read a team or chat by adding a bot to it; the only trace is the bot appearing there, and in {brand.productName}'s activity log when {brand.productName} does it. {brand.productName} adds a bot only where you pick. Do not add ChannelMessage.Read.All, Chat.Read.All or similar: they open every conversation at once without adding anything.",
+      "click": [
+        "In the Microsoft Entra admin center, go to Entra ID, then App registrations, and open {brand.microsoft.appName}.",
+        "Select API permissions, then Add a permission, then Microsoft Graph, then Application permissions.",
+        "Tick {scopes} and select Add permissions."
+      ],
+      "copy": [
+        "# In Azure Cloud Shell (Bash) you are already signed in.",
+        "az ad app permission add --id {clientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions \"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)=Role\""
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Grant admin consent",
+      "body": "Still under API permissions, grant admin consent. This needs a Global Administrator or Privileged Role Administrator. Each permission should then show Granted. With Commands, a permission that was granted already is answered with \"Permission being assigned already exists\", which is fine.",
+      "click": [
+        "Still under API permissions, select Grant admin consent for your organization, then Yes.",
+        "Each permission should show Granted under Status."
+      ],
+      "copy": [
+        "SP=$(az ad sp show --id {clientId} --query id -o tsv)",
+        "GRAPH=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)",
+        "az rest --method post --url \"https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments\" --body \"{\\\"principalId\\\": \\\"$SP\\\", \\\"resourceId\\\": \\\"$GRAPH\\\", \\\"appRoleId\\\": \\\"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)\\\"}\""
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Let administrators publish bots to your Teams apps",
+      "body": "Microsoft lets an app publish to your organization's Teams apps only on behalf of a signed-in administrator. So when you publish an agent's bot, {brand.productName} sends you to Microsoft's sign-in for {brand.microsoft.appName} and comes back here. Add the delegated permission AppCatalog.ReadWrite.All (with openid, for the sign-in), grant admin consent for it, and add this page's return address to the app. Microsoft still lets only Teams Administrators and Global Administrators publish. If the consent command says a grant already exists, grant consent in the portal instead. The last command adds the return address only if it is not there yet, so running it again changes nothing.",
+      "click": [
+        "In App registrations, open {brand.microsoft.appName} and select API permissions, then Add a permission, then Microsoft Graph, then Delegated permissions.",
+        "Tick openid and AppCatalog.ReadWrite.All, select Add permissions, then Grant admin consent for your organization, then Yes.",
+        "Select Authentication, then Add a platform, then Web. Enter {teamsPublishRedirect} as the redirect URI and select Configure. Leave both token options unticked."
+      ],
+      "copy": [
+        "SCOPE=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"oauth2PermissionScopes[?value=='AppCatalog.ReadWrite.All'].id\" -o tsv)",
+        "OPENID=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"oauth2PermissionScopes[?value=='openid'].id\" -o tsv)",
+        "az ad app permission add --id {clientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions \"$SCOPE=Scope\" \"$OPENID=Scope\"",
+        "SP=$(az ad sp show --id {clientId} --query id -o tsv)",
+        "GRAPH=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)",
+        "az rest --method post --url https://graph.microsoft.com/v1.0/oauth2PermissionGrants --body \"{\\\"clientId\\\": \\\"$SP\\\", \\\"consentType\\\": \\\"AllPrincipals\\\", \\\"resourceId\\\": \\\"$GRAPH\\\", \\\"scope\\\": \\\"openid AppCatalog.ReadWrite.All\\\"}\"",
+        "az ad app show --id {clientId} --query \"web.redirectUris[]\" -o tsv | grep -qxF '{teamsPublishRedirect}' || az ad app update --id {clientId} --web-redirect-uris $(az ad app show --id {clientId} --query \"web.redirectUris[]\" -o tsv) '{teamsPublishRedirect}'"
+      ],
+      "shell": "bash",
+      "confirm": "teams-publish-sign-in",
+      "option": { "field": "add_to_teams", "value": "on" }
+    },
+    {
+      "title": "Choose where the bots' Azure records go",
+      "body": "Each agent's bot is an Azure Bot resource on the free F0 tier, which costs nothing. {brand.productName} makes them in one resource group you choose, and needs no other access to your Azure subscription. Create a resource group that holds only these bots, then enter its subscription ID and name here. Do not use a group with other Azure Bots in it: {brand.microsoft.appName} can change or delete any Azure Bot in this group.",
+      "link": {
+        "label": "Open Resource groups",
+        "href": "https://portal.azure.com/#browse/resourcegroups"
+      },
+      "click": [
+        "In the Azure portal, open Resource groups and select Create.",
+        "Choose the subscription, name the group {brand.teams.resourceGroup}, pick a region and select Review + create, then Create.",
+        "Open the group: its Overview shows the Subscription ID. Enter both below."
+      ],
+      "copy": [
+        "# Replace <region> with your region, e.g. eastus (az account list-locations -o table lists them).",
+        "az group create --name '{brand.teams.resourceGroup}' --location <region>",
+        "az account show --query id -o tsv"
+      ],
+      "shell": "bash",
+      "settings": [
+        {
+          "id": "azureSubscriptionId",
+          "label": "Subscription ID",
+          "placeholder": "00000000-0000-0000-0000-000000000000",
+          "help": "The subscription's ID, from the resource group's Overview.",
+          "pattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        },
+        {
+          "id": "azureResourceGroup",
+          "label": "Resource group",
+          "placeholder": "{brand.teams.resourceGroup}",
+          "help": "Letters, digits, dots, dashes, underscores and parentheses, up to 90.",
+          "pattern": "[A-Za-z0-9._()-]{1,89}[A-Za-z0-9_()-]"
+        }
+      ],
+      "live": "azure-target",
+      "option": { "field": "add_to_teams", "value": "on" }
+    },
+    {
+      "title": "Give {brand.microsoft.appName} a role on that resource group",
+      "body": "A custom role that can only create, change and delete Azure Bots and their channels, given to {brand.microsoft.appName} on that one resource group. Creating it needs Owner or User Access Administrator there. A new role can take a few minutes to apply; this step checks it live.",
+      "click": [
+        "In the Azure portal, open the resource group {azureResourceGroup}, then Access control (IAM), then Add, then Add custom role.",
+        "Name it {brand.microsoft.botRole}. Under Permissions, select Add permissions, search Microsoft.BotService, and tick Read, Write and Delete for both Bot Service and Bot Service channels. Under Assignable scopes, keep only this resource group. Select Review + create, then Create.",
+        "Back in Access control (IAM), select Add, then Add role assignment. Choose {brand.microsoft.botRole}, then Next. Under Members, select Select members, find {brand.microsoft.appName}, select it, then Review + assign."
+      ],
+      "copy": [
+        "az account set --subscription '{azureSubscriptionId}'",
+        "az role definition list --custom-role-only true --name '{brand.microsoft.botRole}' --query '[0].id' -o tsv | grep -q . || az role definition create --role-definition '{\"Name\":\"{brand.microsoft.botRole}\",\"Description\":\"Lets {brand.microsoft.appName} create and remove Azure Bots for its agents in one resource group.\",\"Actions\":[\"Microsoft.BotService/botServices/read\",\"Microsoft.BotService/botServices/write\",\"Microsoft.BotService/botServices/delete\",\"Microsoft.BotService/botServices/channels/read\",\"Microsoft.BotService/botServices/channels/write\",\"Microsoft.BotService/botServices/channels/delete\"],\"AssignableScopes\":[\"/subscriptions/{azureSubscriptionId}/resourceGroups/{azureResourceGroup}\"]}'",
+        "# A new role can take a minute to be usable. If this says the role was not found, run it again.",
+        "az role assignment create --assignee-object-id {servicePrincipalId} --assignee-principal-type ServicePrincipal --role '{brand.microsoft.botRole}' --scope '/subscriptions/{azureSubscriptionId}/resourceGroups/{azureResourceGroup}'"
+      ],
+      "shell": "bash",
+      "live": "azure-role",
+      "option": { "field": "add_to_teams", "value": "on" }
+    },
+    {
+      "title": "Register the Bot Service in the subscription",
+      "body": "Azure makes a resource type usable in a subscription only once it is registered there. Do this once per subscription; it needs Contributor on the subscription. {brand.productName} cannot see the subscription itself, so mark this done. If it was missed, Add to Teams says so.",
+      "link": {
+        "label": "Open Subscriptions",
+        "href": "https://portal.azure.com/#view/Microsoft_Azure_Billing/SubscriptionsBladeV2"
+      },
+      "click": [
+        "In the Azure portal, open Subscriptions and choose {azureSubscriptionId}.",
+        "Under Settings, open Resource providers, find Microsoft.BotService, and select Register if it is not Registered."
+      ],
+      "copy": [
+        "az provider register --namespace Microsoft.BotService --subscription {azureSubscriptionId} --wait",
+        "az provider show --namespace Microsoft.BotService --subscription {azureSubscriptionId} --query registrationState -o tsv"
+      ],
+      "shell": "bash",
+      "confirm": "teams-bot-service",
+      "option": { "field": "add_to_teams", "value": "on" }
+    }
+  ],
+  "afterConnect": [
+    {
+      "title": "Check that your organization allows its own apps",
+      "body": "Each agent's bot is an app made for your organization. Who can use it is decided by the app's own status and availability and, in organizations that still use them, app permission policies.",
+      "link": {
+        "label": "Open Permission policies",
+        "href": "https://admin.teams.microsoft.com/policies/app-permission"
+      },
+      "click": [
+        "In the Teams admin center, go to Teams apps. If you see Permission policies there, open Global (Org-wide default).",
+        "Under Custom apps, if it says Allow all apps, nothing to do. If it says Allow specific apps, select Allow apps, search for each agent's bot by its name once it is published, select Add, then Save. Choosing Allow all apps instead opens every custom app in your organization, not only the agents' bots.",
+        "If there is no Permission policies page, your organization manages access per app instead: nothing to do here."
+      ],
+      "copy": [
+        "# Needs the Microsoft Teams PowerShell module: Install-Module MicrosoftTeams -Scope CurrentUser",
+        "Connect-MicrosoftTeams",
+        "# Shows the org-wide policy. If this finds none, your organization manages access per app instead: nothing to do here.",
+        "Get-CsTeamsAppPermissionPolicy -Identity Global | Select-Object PrivateCatalogAppsType, PrivateCatalogApps",
+        "# If PrivateCatalogAppsType is AllowedAppList, add each agent's bot once it is published. Replace <bot name> with the bot's name.",
+        "$bot = Get-TeamsApp -DisplayName '<bot name>' -DistributionMethod organization",
+        "$policy = Get-CsTeamsAppPermissionPolicy -Identity Global",
+        "Set-CsTeamsAppPermissionPolicy -Identity Global -PrivateCatalogAppsType AllowedAppList -PrivateCatalogApps (@($policy.PrivateCatalogApps) + (New-Object -TypeName Microsoft.Teams.Policy.Administration.Cmdlets.Core.PrivateCatalogApp -Property @{Id = $bot.Id}))",
+        "# Only if you would rather allow every custom app in your organization, not only these bots:",
+        "# Set-CsTeamsAppPermissionPolicy -Identity Global -PrivateCatalogAppsType BlockedAppList -PrivateCatalogApps @()"
+      ],
+      "shell": "powershell",
+      "confirm": "teams-custom-apps"
+    },
+    {
+      "title": "Let teams and chats give a bot their messages",
+      "body": "An agent reads earlier messages in a thread, and hears messages that do not mention it, only where the team or chat that adds it may grant that. Microsoft allows it by default (ManagedByMicrosoft). These commands turn it on only if your organization turned it off, and change nothing otherwise. Microsoft offers this setting only in PowerShell.",
+      "link": {
+        "label": "About these settings",
+        "href": "https://learn.microsoft.com/microsoftteams/platform/graph-api/rsc/grant-resource-specific-consent"
+      },
+      "shell": "powershell",
+      "copy": [
+        "# Needs the Microsoft.Graph.Beta.Teams module: Install-Module Microsoft.Graph.Beta.Teams -Scope CurrentUser",
+        "Connect-MgGraph -Scopes 'TeamworkAppSettings.ReadWrite.All','Policy.ReadWrite.Authorization','Policy.ReadWrite.PermissionGrant','AppCatalog.Read.All'",
+        "if ((Get-MgBetaTeamRscConfiguration).State -eq 'DisabledForAllApps') { Set-MgBetaTeamRscConfiguration -State EnabledForAllApps }",
+        "if ((Get-MgBetaChatRscConfiguration).State -eq 'DisabledForAllApps') { Set-MgBetaChatRscConfiguration -State EnabledForAllApps }",
+        "Get-MgBetaTeamRscConfiguration; Get-MgBetaChatRscConfiguration"
+      ],
+      "confirm": "teams-rsc",
+      "clickUnavailable": true
+    }
+  ],
+  "fields": [
+    {
+      "id": "add_to_teams",
+      "label": "Making and adding bots",
+      "secret": false,
+      "options": [
+        {
+          "value": "on",
+          "label": "{brand.productName} makes and adds them",
+          "description": "Add to Teams makes each agent's bot in your tenant and adds it to the teams and group chats you pick. {brand.microsoft.appName} needs the permissions below for that.",
+          "scopes": [
+            "Application.ReadWrite.OwnedBy",
+            "TeamsAppInstallation.ReadWriteAndConsentForTeam.All",
+            "TeamsAppInstallation.ReadWriteAndConsentForChat.All"
+          ]
+        },
+        {
+          "value": "off",
+          "label": "With each bot's setup script",
+          "description": "You run each agent's setup script, and people add the published bot in Teams themselves. {brand.productName} does not make bots or add them anywhere. If you granted {brand.microsoft.appName} Application.ReadWrite.OwnedBy or the TeamsAppInstallation permissions earlier, remove them in Microsoft Entra: until then its key can still do both."
+        }
+      ]
+    },
+    {
+      "id": "person_installs",
+      "label": "Adding a bot for one person",
+      "secret": false,
+      "requires": { "field": "add_to_teams", "value": "on" },
+      "options": [
+        {
+          "value": "off",
+          "label": "Teams and group chats only",
+          "description": "{brand.productName} can add a bot to a team or a group chat. People can still add a published bot for themselves in Teams."
+        },
+        {
+          "value": "on",
+          "label": "Also for one person",
+          "description": "{brand.productName} can also add a bot for any one person in your organization, which needs one more permission: {brand.microsoft.appName} could then add its bots for anyone.",
+          "scopes": ["TeamsAppInstallation.ReadWriteAndConsentForUser.All"]
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read messages",
+      "description": "See the teams, channels and chats the agent's bot was added to, and read their messages. People who message the agent can ask it to read any of these, so turn this on only when the agent needs it.",
+      "scopes": [],
+      "roles": [],
+      "permissions": [],
+      "tools": [
+        "teams_list_teams",
+        "teams_list_channels",
+        "teams_read_messages",
+        "teams_read_thread"
+      ]
+    },
+    {
+      "id": "post",
+      "label": "Post messages",
+      "description": "Post new messages and replies in the channels and chats the bot was added to.",
+      "scopes": [],
+      "roles": [],
+      "permissions": [],
+      "tools": ["teams_post_message"]
+    },
+    {
+      "id": "approve",
+      "label": "Ask people to approve or reject",
+      "description": "Post a card with Approve and Reject buttons for one named person in the teams, channels and chats the bot was added to, and read their answer. Only that person's click counts. The agent looks the person up by sign-in name in your directory.",
+      "scopes": [],
+      "roles": [],
+      "permissions": [],
+      "tools": [
+        "teams_request_approval",
+        "teams_get_approval"
+      ]
+    },
+    {
+      "id": "respond",
+      "label": "React in real time",
+      "description": "Answer when someone messages the agent in Teams. Each answer uses your organization's Claude API key.",
+      "scopes": [],
+      "roles": [],
+      "permissions": [],
+      "tools": ["teams_reply"],
+      "claudeKey": true
+    }
+  ],
+  "limits": [
+    {
+      "id": "teams",
+      "label": "Teams",
+      "help": "Only these teams (their group ids). Leave empty for every team and chat the bot is added to. When set, chats are left out.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    {
+      "id": "channels",
+      "label": "Channels",
+      "help": "Only these channels. Leave empty for every channel of the allowed teams. When set, chats are left out.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^19:[A-Za-z0-9_.-]+@thread\\.(tacv2|skype)$"
+    }
+  ],
+  "verify": {
+    "label": "Microsoft permissions on the app",
+    "check": "permissions"
+  },
+  "revoke": "Remove an agent's bot from its key under API keys: {brand.productName} deletes what it made in your tenant and gives you the commands for anything left. To stop every bot at once, remove the agents' app registrations in the Microsoft Entra admin center."
+}

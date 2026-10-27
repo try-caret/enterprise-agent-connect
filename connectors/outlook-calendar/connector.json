@@ -1,0 +1,136 @@
+{
+  "id": "outlook-calendar",
+  "name": "Outlook calendar",
+  "description": "Let each agent read and manage the calendar of its own mailbox.",
+  "logo": "/brand/outlook.svg",
+  "identity": "Your Microsoft app registration, through the Microsoft connection. Exchange lets it open only the calendars of mailboxes you choose for agents, and it uses no Microsoft 365 license.",
+  "provider": "microsoft",
+  "order": 2,
+  "accountKey": "tenantId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Make sure the app cannot open every calendar",
+      "body": "Outlook calendar needs no Microsoft Graph permission on the app. Do not add Calendars.Read or Calendars.ReadWrite under API permissions: they open every calendar in your organization.",
+      "click": [
+        "In the Microsoft Entra admin center, go to Entra ID, then App registrations, open {brand.microsoft.appName} and select API permissions.",
+        "Check that no Calendars permission is listed. Remove any that is."
+      ],
+      "copy": ["az ad app permission list --id {clientId} -o table"],
+      "shell": "bash"
+    },
+    {
+      "title": "Create the {brand.microsoft.mailboxGroup} group",
+      "body": "Agents can only reach mailboxes in this mail-enabled security group, the same one Outlook mail uses. If you created it there, it shows as done here.",
+      "link": {
+        "label": "Open the Exchange admin center",
+        "href": "https://admin.exchange.microsoft.com/#/groups"
+      },
+      "click": [
+        "In the Exchange admin center, go to Recipients, then Groups, then Mail-enabled security, and select Add a group.",
+        "Choose Mail-enabled security and select Next. Name it {brand.microsoft.mailboxGroup}, then Next.",
+        "Assign yourself as owner, skip members (you add each agent's mailbox later), then Next.",
+        "On Edit settings, enter a group email address such as {brand.microsoft.mailboxGroupAlias}@your-domain, then Next and Create group."
+      ],
+      "copy": [
+        "# Needs the ExchangeOnlineManagement module: Install-Module ExchangeOnlineManagement -Scope CurrentUser",
+        "Connect-ExchangeOnline",
+        "if (-not (Get-DistributionGroup -Identity '{brand.microsoft.mailboxGroup}' -ErrorAction SilentlyContinue)) { New-DistributionGroup -Name '{brand.microsoft.mailboxGroup}' -Type Security }"
+      ],
+      "shell": "powershell",
+      "confirm": "mailbox-group"
+    },
+    {
+      "title": "Limit the app to the calendars in that group",
+      "body": "This is the only calendar access the app gets. Exchange enforces it, so the app cannot open any other calendar. The role lines follow what you ticked in step 1; if you tick more later, run the matching New-ManagementRoleAssignment line again. Lines for what already exists (from Outlook mail) are skipped. Exchange can take up to 2 hours to apply this before Check access passes.",
+      "link": {
+        "label": "Connect to Exchange Online PowerShell",
+        "href": "https://learn.microsoft.com/powershell/exchange/connect-to-exchange-online-powershell"
+      },
+      "clickUnavailable": true,
+      "copy": [
+        "# Needs the ExchangeOnlineManagement module: Install-Module ExchangeOnlineManagement -Scope CurrentUser",
+        "Connect-ExchangeOnline",
+        "if (-not (Get-ServicePrincipal -Identity {clientId} -ErrorAction SilentlyContinue)) { New-ServicePrincipal -AppId {clientId} -ObjectId {servicePrincipalId} -DisplayName \"{brand.microsoft.appName}\" }",
+        "if (-not (Get-ManagementScope -Identity \"{brand.microsoft.mailboxGroup}\" -ErrorAction SilentlyContinue)) { New-ManagementScope -Name \"{brand.microsoft.mailboxGroup}\" -RecipientRestrictionFilter \"MemberOfGroup -eq '$((Get-DistributionGroup '{brand.microsoft.mailboxGroup}').DistinguishedName)'\" }",
+        "New-ManagementRoleAssignment -Role \"{scope}\" -App {clientId} -CustomResourceScope \"{brand.microsoft.mailboxGroup}\""
+      ],
+      "shell": "powershell",
+      "confirm": "calendar-roles"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read events",
+      "description": "List and read events in the agent's own calendar.",
+      "required": true,
+      "scopes": ["Application Calendars.Read"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["calendar_list_events", "calendar_get_event"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    },
+    {
+      "id": "write",
+      "label": "Create, update and answer events, and send invitations",
+      "description": "Add events to the agent's own calendar, including repeating ones, and change them. Accept, tentatively accept or decline invitations, which can email the organizer. Attendees get an invitation email from the agent's mailbox, and they can be any address.",
+      "scopes": ["Application Calendars.ReadWrite"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["calendar_create_event", "calendar_update_event", "calendar_respond_to_event"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    },
+    {
+      "id": "delete",
+      "label": "Delete events",
+      "description": "Delete events from the agent's own calendar, one occurrence or a whole repeating series. They cannot be brought back from here.",
+      "destructive": true,
+      "scopes": ["Application Calendars.ReadWrite"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["calendar_delete_event"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    }
+  ],
+  "limits": [
+    {
+      "id": "mailbox",
+      "label": "Mailbox",
+      "help": "The agent's own mailbox, a member of {brand.microsoft.mailboxGroup}. The agent can use no other calendar.",
+      "kind": "text",
+      "required": true,
+      "pattern": "^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$"
+    }
+  ],
+  "verify": {
+    "label": "Microsoft Graph permissions on the app (Outlook calendar needs none: Exchange limits it to the {brand.microsoft.mailboxGroup} group)",
+    "check": "permissions"
+  },
+  "revoke": "In Exchange Online PowerShell, remove the app's calendar access with Get-ManagementRoleAssignment -RoleAssignee {clientId} | Where-Object Role -like \"Application Calendars*\" | Remove-ManagementRoleAssignment. To stop every Microsoft app at once, remove the app registration (see the Microsoft connection).",
+  "agentAccess": {
+    "limit": "mailbox",
+    "label": "Exchange lets the app open an agent's calendar",
+    "path": "/v1.0/users/{value}/calendar?$select=id",
+    "granted": "The app can open this calendar.",
+    "notGranted": "Exchange does not let the app open this calendar yet. Check that the mailbox is in {brand.microsoft.mailboxGroup} and that the calendar roles were given. Run Test-ServicePrincipalAuthorization to see which roles apply. Microsoft can take up to about 2 hours to apply a change.",
+    "notFound": "Exchange shows the app no calendar at this address. Either there is none yet (check the address, or wait a few minutes if you just created it), or it is not in {brand.microsoft.mailboxGroup} yet: Exchange answers the same for a mailbox the app may not open. Microsoft can take up to about 2 hours to apply a change.",
+    "probes": {
+      "write": {
+        "method": "PATCH",
+        "path": "/v1.0/users/{value}/calendar",
+        "body": {},
+        "allowed": [200]
+      },
+      "delete": {
+        "method": "PATCH",
+        "path": "/v1.0/users/{value}/calendar",
+        "body": {},
+        "allowed": [200]
+      }
+    },
+    "missing": "The app can open this calendar but Exchange does not let it do this yet: {missing}. Give that role (the step Limit the app to the calendars in that group, on the Outlook calendar page) and check again. Microsoft can take up to about 2 hours to apply a change."
+  }
+}

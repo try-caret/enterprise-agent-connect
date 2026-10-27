@@ -1,0 +1,194 @@
+{
+  "id": "sharepoint-files",
+  "name": "SharePoint",
+  "description": "Let agents work with files and Excel spreadsheets in the SharePoint sites you add, and look up people in your organization. Agents have no OneDrive of their own: a person's OneDrive is a site too, reached only if you add it and give the app access to it.",
+  "logo": "/brand/registry/sharepoint.svg",
+  "identity": "Your Microsoft app registration, through the Microsoft connection. It reaches only the files and spreadsheets in the sites you give it, unless you choose all sites, read-only.",
+  "provider": "microsoft",
+  "order": 3,
+  "accountKey": "tenantId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Add these Microsoft Graph permissions to the app",
+      "body": "In the app, open API permissions, select Add a permission, then Microsoft Graph, then Application permissions, and add exactly these. Sites.Selected reaches only the sites you give the app, one by one. Unless you choose all sites, read-only, do not add Sites.Read.All, Sites.ReadWrite.All or Files.Read.All: they reach every site and file in your organization.",
+      "copy": [
+        "az ad app permission add --id {clientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions \"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)=Role\""
+      ],
+      "click": [
+        "In the Microsoft Entra admin center, go to Entra ID, then App registrations, and open {brand.microsoft.appName}.",
+        "Select API permissions, then Add a permission, then Microsoft Graph, then Application permissions.",
+        "Tick {scopes} and select Add permissions."
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Grant admin consent",
+      "body": "Still under API permissions, select \"Grant admin consent\". This needs a Global Administrator or Privileged Role Administrator, and is needed again whenever you add a permission. Each permission should then show Granted. With Commands, a permission that was granted already is answered with \"Permission being assigned already exists\", which is fine.",
+      "click": [
+        "Still under API permissions, select Grant admin consent for your organization, then Yes.",
+        "Each permission should show Granted under Status."
+      ],
+      "copy": [
+        "SP=$(az ad sp show --id {clientId} --query id -o tsv)",
+        "GRAPH=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)",
+        "az rest --method post --url \"https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignments\" --body \"{\\\"principalId\\\": \\\"$SP\\\", \\\"resourceId\\\": \\\"$GRAPH\\\", \\\"appRoleId\\\": \\\"$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query \"appRoles[?value=='{scope}'].id\" -o tsv)\\\"}\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "access",
+      "label": "Which sites the app can reach",
+      "secret": false,
+      "options": [
+        {
+          "value": "selected",
+          "label": "Only the sites you give it",
+          "description": "Recommended. The app reaches a site only after it is given access to that site."
+        },
+        {
+          "value": "all_read",
+          "label": "All sites, read-only",
+          "description": "The app can read every site and every person's OneDrive in your organization, files and spreadsheets alike, with no grant per site. Each API key still reaches only the sites and folders you choose for it. To let agents add files or edit spreadsheets in a site, give the app write access to that site as well.",
+          "scopes": ["Sites.Read.All"]
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read_files",
+      "label": "Read files",
+      "description": "List and read files in the sites you add, and only those.",
+      "scopes": ["Sites.Selected"],
+      "permissions": [],
+      "fill": {
+        "site_role": "read"
+      },
+      "tools": ["graph_list_sites", "graph_list_files", "graph_read_file"],
+      "forbidden": "Microsoft refused this. An administrator has to give the app read access to this site (the SharePoint page in {brand.productName} shows the command). A new grant can take a few minutes to apply."
+    },
+    {
+      "id": "read_sheets",
+      "label": "Read spreadsheets",
+      "description": "List Excel workbooks, their sheets and tables, and read cells in the sites you add.",
+      "scopes": ["Sites.Selected"],
+      "permissions": [],
+      "fill": {
+        "site_role": "read"
+      },
+      "tools": [
+        "excel_list_workbooks",
+        "excel_list_worksheets",
+        "excel_read_range",
+        "excel_list_tables",
+        "excel_read_table"
+      ],
+      "forbidden": "Microsoft refused this. An administrator has to give the app read access to this site (the SharePoint page in {brand.productName} shows the command). A new grant can take a few minutes to apply."
+    },
+    {
+      "id": "write_files",
+      "label": "Add and change files",
+      "destructive": true,
+      "description": "Add files to those sites and replace existing ones. The app needs write access to each of them, not read.",
+      "scopes": ["Sites.Selected"],
+      "permissions": [],
+      "fill": {
+        "site_role": "write"
+      },
+      "tools": ["graph_upload_file"],
+      "forbidden": "Microsoft refused this. Adding or changing files needs the app to have write access to this site; a site given read access only refuses changes. The SharePoint page in {brand.productName} shows the command. A new grant can take a few minutes to apply."
+    },
+    {
+      "id": "write_sheets",
+      "label": "Edit spreadsheets",
+      "description": "Change cells and add rows to tables in those workbooks. The app needs write access to each of those sites, not read.",
+      "scopes": ["Sites.Selected"],
+      "permissions": [],
+      "fill": {
+        "site_role": "write"
+      },
+      "tools": ["excel_update_range", "excel_add_table_rows"],
+      "forbidden": "Microsoft refused this. Editing spreadsheets needs the app to have write access to this site; a site given read access only refuses changes. The SharePoint page in {brand.productName} shows the command. A new grant can take a few minutes to apply."
+    },
+    {
+      "id": "read_directory",
+      "label": "Read users and groups",
+      "description": "Look up people's names, email addresses and job titles, and list group members.",
+      "note": "Reaches everyone in your organization, not just chosen sites. Read-only. Leave it off unless agents need to look people up.",
+      "scopes": ["User.Read.All", "GroupMember.Read.All"],
+      "permissions": [],
+      "tools": ["graph_list_users"],
+      "forbidden": "Microsoft refused this. The app needs {scopes} with admin consent."
+    }
+  ],
+  "limits": [
+    {
+      "id": "sites",
+      "label": "Sites",
+      "help": "The sites whose files and spreadsheets this key may use, from the sites the app can open. It can use no others.",
+      "kind": "list",
+      "required": true,
+      "pattern": "^https://[A-Za-z0-9-]+\\.sharepoint\\.com(/(sites|teams|personal)/[A-Za-z0-9][A-Za-z0-9._-]*)?/?$"
+    },
+    {
+      "id": "folders",
+      "label": "Folder",
+      "help": "Optional, for each site: the one folder this key may use there, for files and spreadsheets alike, such as Contracts/Signed. Leave it empty for the whole site.",
+      "kind": "map",
+      "keys": "sites",
+      "required": false,
+      "pattern": "^(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\:?#*\"<>|%]+$"
+    }
+  ],
+  "siteAccess": {
+    "grant": [
+      {
+        "title": "With Microsoft Graph PowerShell",
+        "body": "Run by a SharePoint or Global Administrator.",
+        "clickUnavailable": true,
+        "link": {
+          "label": "Install Microsoft Graph PowerShell",
+          "href": "https://learn.microsoft.com/powershell/microsoftgraph/installation"
+        },
+        "copy": [
+          "# Needs Microsoft Graph PowerShell: Install-Module Microsoft.Graph -Scope CurrentUser",
+          "Connect-MgGraph -Scopes \"Sites.FullControl.All\"",
+          "$site = Get-MgSite -SiteId '{siteRef}'",
+          "New-MgSitePermission -SiteId $site.Id -BodyParameter @{ roles = @('{site_role}'); grantedToIdentities = @(@{ application = @{ id = '{clientId}'; displayName = \"{brand.microsoft.appName}\" } }) }"
+        ],
+        "shell": "powershell"
+      },
+      {
+        "title": "Or raise a site the app already reads",
+        "siteRole": "write",
+        "body": "A site given read access refuses changes. To let agents add files or edit spreadsheets there, change that grant to write.",
+        "clickUnavailable": true,
+        "copy": [
+          "# Needs Microsoft Graph PowerShell: Install-Module Microsoft.Graph -Scope CurrentUser",
+          "Connect-MgGraph -Scopes \"Sites.FullControl.All\"",
+          "$site = Get-MgSite -SiteId '{siteRef}'",
+          "$p = Get-MgSitePermission -SiteId $site.Id | Where-Object { $_.GrantedToIdentitiesV2.Application.Id -eq '{clientId}' }",
+          "Update-MgSitePermission -SiteId $site.Id -PermissionId $p.Id -Roles '{site_role}'"
+        ],
+        "shell": "powershell"
+      }
+    ],
+    "request": "Hello, please grant the Microsoft app {brand.microsoft.appName} (application ID {clientId}) {site_role} access to the SharePoint site {site}. It is the app our AI agents use, and it reaches only the sites it is given. A SharePoint or Global Administrator can do it with Microsoft Graph PowerShell:\n\n{grantCommands}\n\nThank you.",
+    "write": ["write_files", "write_sheets"]
+  },
+  "verify": {
+    "label": "Microsoft permissions the app has",
+    "check": "permissions",
+    "ifEmpty": "The app has no Microsoft Graph application permissions yet. Add the permissions above and grant admin consent."
+  },
+  "discover": {
+    "label": "Sites agents can use",
+    "check": "sites",
+    "ifEmpty": "No sites yet. Add the sites agents may use below."
+  },
+  "revoke": "Remove the app's access to each site (Remove-MgSitePermission), or remove its Sites.Selected and Sites.Read.All permissions. To stop every Microsoft app at once, remove the app registration (see the Microsoft connection)."
+}

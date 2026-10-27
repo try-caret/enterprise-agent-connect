@@ -1,0 +1,118 @@
+{
+  "id": "fedex",
+  "name": "FedEx",
+  "description": "Let agents track shipments, compare rates and, if you allow it, create and cancel shipments on the FedEx accounts you choose.",
+  "logo": "/brand/registry/fedex.svg",
+  "identity": "A FedEx Developer Portal project named \"{brand.microsoft.appName}\", using the FedEx account numbers you enter here.",
+  "accountKey": "project",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a FedEx developer project",
+      "body": "Sign in to the FedEx Developer Portal with the FedEx user ID that manages your shipping accounts, open My Projects, and create an API project named \"{brand.microsoft.appName}\".",
+      "link": {
+        "label": "FedEx Developer Portal",
+        "href": "https://developer.fedex.com/api/en-us/home.html"
+      }
+    },
+    {
+      "title": "Choose its APIs",
+      "body": "Select these APIs for the project:",
+      "copy": ["{scope}"]
+    },
+    {
+      "title": "Add your account numbers",
+      "body": "Add the FedEx account numbers agents may rate and ship on to the project. You can narrow each agent to some of them here later."
+    },
+    {
+      "title": "Copy the keys",
+      "body": "Open the project's overview and copy its API key and secret key. Test keys work only with Sandbox; production keys appear once FedEx moves the project to production."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "environment",
+      "label": "Environment",
+      "secret": false,
+      "options": [
+        {
+          "value": "sandbox",
+          "label": "Sandbox",
+          "description": "FedEx's test system, with the project's test keys. Nothing is really shipped or charged."
+        },
+        {
+          "value": "production",
+          "label": "Production",
+          "description": "Real tracking, rates and shipments, with the project's production keys. Shipments are charged to your account."
+        }
+      ]
+    },
+    {
+      "id": "api_key",
+      "label": "API key",
+      "secret": false
+    },
+    {
+      "id": "secret_key",
+      "label": "Secret key",
+      "secret": true
+    },
+    {
+      "id": "account_numbers",
+      "label": "Account numbers",
+      "help": "The FedEx account numbers agents may use, separated by commas. Agents can never rate or ship on another.",
+      "placeholder": "123456789",
+      "secret": false
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "track",
+      "label": "Track shipments",
+      "description": "Look up the status and scan history of shipments by tracking number.",
+      "required": true,
+      "scopes": ["Track API"],
+      "permissions": [],
+      "tools": ["fedex_track_shipments"]
+    },
+    {
+      "id": "rate",
+      "label": "Get rates",
+      "description": "Quote rates and transit times on your account numbers. Nothing is shipped.",
+      "scopes": ["Rates and Transit Times API"],
+      "permissions": [],
+      "tools": ["fedex_get_rates"]
+    },
+    {
+      "id": "ship",
+      "label": "Create and cancel shipments",
+      "description": "Create shipments and their labels, and cancel them. Each shipment is charged to your FedEx account unless it is cancelled.",
+      "destructive": true,
+      "costs": true,
+      "note": "Agents with this can spend money on your FedEx account. Keep each agent to the account numbers it needs.",
+      "scopes": ["Ship API"],
+      "permissions": [],
+      "tools": ["fedex_create_shipment", "fedex_cancel_shipment"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "accounts",
+      "label": "Account numbers",
+      "help": "Leave empty to allow every account number connected here.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9]{9,12}$"
+    }
+  ],
+  "verify": {
+    "label": "Track API reached",
+    "check": "track"
+  },
+  "discover": {
+    "label": "Account numbers",
+    "check": "accounts"
+  },
+  "revoke": "In the FedEx Developer Portal, open My Projects, then {brand.microsoft.appName}, and delete the project or regenerate its secret key."
+}

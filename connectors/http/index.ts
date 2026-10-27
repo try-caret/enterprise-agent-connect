@@ -1,0 +1,270 @@
+import { z } from "zod";
+import {
+  audited,
+  Denied,
+  json,
+  listLimit,
+  VendorFailed,
+  type Toolset,
+} from "../../packages/connector-kit/src/common.js";
+import type {
+  Connector,
+  ConnectorModule,
+  HttpApp,
+} from "../../packages/connector-kit/src/connector.js";
+import { clientCredentials, vendorError } from "../../packages/connector-kit/src/oauth.js";
+import {
+  ConnectError,
+  type Fetch,
+  type Vendor,
+  type VendorConnection,
+  type VendorRequest,
+} from "../../packages/connector-kit/src/types.js";
+
+// The generic module behind every connector.json with an `http` block: an app described as
+// data, e.g. a company's internal REST API. Calls reach only baseUrl's origin under its path.
+
+export const MAX_RESPONSE_BYTES = 1024 * 1024;
+export const MAX_BODY_BYTES = 256 * 1024;
+export const MAX_TARGET_BYTES = 8 * 1024;
+const TIMEOUT_MS = 30_000;
+
+// fetch that reaches only `allowed` origins, follows no redirect, gives up after TIMEOUT_MS and
+// reads at most MAX_RESPONSE_BYTES of JSON or text. Its refusals are ConnectError.
+export function guardedFetch(allowed: string[], fetchImpl: Fetch = fetch): Fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (!allowed.includes(url.origin))
+      throw new ConnectError(`${url.origin} is not this app's address`);
+    const res = await fetchImpl(url, {
+      ...init,
+      redirect: "manual",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (res.status >= 300 && res.status < 400)
+      throw new ConnectError(
+        `The app answered with a redirect (${res.status}), which is not followed`,
+      );
+    const type = res.headers.get("content-type") ?? "";
+    if (
+      res.body &&
+      !/^(application\/([\w.+-]*\+)?json|text\/)/i.test(type) &&
+      res.headers.get("content-length") !== "0"
+    ) {
+      await res.body.cancel();
+      throw new ConnectError(
+        `The app answered ${type || "without a content type"}; only JSON or text is passed on`,
+      );
+    }
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = res.body?.getReader();
+    for (let r = await reader?.read(); r && !r.done; r = await reader!.read()) {
+      size += r.value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader!.cancel();
+        throw new ConnectError(`The app's answer is larger than ${MAX_RESPONSE_BYTES / 1024} KB`);
+      }
+      chunks.push(r.value);
+    }
+    // These statuses may not carry a body, even an empty one.
+    const body = [204, 205, 304].includes(res.status) ? null : Buffer.concat(chunks);
+    return new Response(body, { status: res.status, headers: res.headers });
+  }) as Fetch;
+}
+
+function parse(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vendor {
+  const http = connector.http!;
+  const base = new URL(http.baseUrl);
+  const prefix = base.pathname.replace(/\/+$/, "");
+  const auth = http.auth;
+  const safe = guardedFetch(
+    [base.origin, ...(auth.type === "oauth2" ? [new URL(auth.tokenUrl).origin] : [])],
+    fetchImpl,
+  );
+  const oauth = auth.type === "oauth2" ? clientCredentials(connector.name, safe) : null;
+  const oauthCreds = (c: VendorConnection) =>
+    auth.type === "oauth2"
+      ? {
+          tokenUrl: auth.tokenUrl,
+          clientId: c.config[auth.clientId],
+          clientSecret: c.secret[auth.clientSecret],
+        }
+      : null!;
+
+  function headersFor(c: VendorConnection): Record<string, string> {
+    if (auth.type === "header") return { [auth.header]: c.secret[auth.value] };
+    if (auth.type === "bearer") return { authorization: `Bearer ${c.secret[auth.token]}` };
+    if (auth.type === "basic")
+      return {
+        authorization: `Basic ${Buffer.from(`${c.config[auth.username]}:${c.secret[auth.password]}`).toString("base64")}`,
+      };
+    return {};
+  }
+
+  const call: Vendor["call"] = async (c, request) => {
+    // The path is the tool's, already encoded; it must stay under baseUrl's path.
+    const url = new URL(`${base.origin}${prefix}${request.path}`);
+    if (url.origin !== base.origin || !`${url.pathname}/`.startsWith(`${prefix}/`))
+      throw new ConnectError("The call leaves this app's address");
+    const req: VendorRequest = {
+      method: request.method,
+      path: `${url.pathname}${url.search}`,
+      body: request.body,
+    };
+    if (oauth) return oauth.call(oauthCreds(c), base.origin, req);
+    const res = await safe(`${base.origin}${req.path}`, {
+      method: req.method,
+      headers: {
+        accept: "application/json",
+        ...headersFor(c),
+        ...(req.body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: req.body === undefined ? undefined : JSON.stringify(req.body),
+    });
+    const raw = await res.text();
+    return { status: res.status, data: raw ? parse(raw) : null };
+  };
+
+  return {
+    async connect(fields) {
+      const config: Record<string, string> = { host: base.host };
+      const secret: Record<string, string> = {};
+      for (const f of connector.fields) {
+        const value = fields[f.id]?.trim() ?? "";
+        if (!value) throw new ConnectError(`Enter ${f.label}`);
+        (f.secret ? secret : config)[f.id] = value;
+      }
+      const conn = { config, secret };
+      if (oauth) await oauth.signIn(oauthCreds(conn));
+      return { ...conn, accountLabel: config[connector.accountKey] ?? base.host };
+    },
+    call,
+  };
+}
+
+// Whether every item of the answer (or the answer itself) has `path` among `values`.
+function answerWithin(data: unknown, path: string, values: string[]): boolean {
+  const items = Array.isArray(data) ? data : [data];
+  return items.every((item) => {
+    let v: unknown = item;
+    for (const key of path.split(".")) {
+      if (v === null || typeof v !== "object" || !Object.hasOwn(v, key)) return false;
+      v = (v as Record<string, unknown>)[key];
+    }
+    return (typeof v === "string" || typeof v === "number") && values.includes(String(v));
+  });
+}
+
+const zodType = {
+  string: z.string(),
+  number: z.number(),
+  integer: z.number().int(),
+  boolean: z.boolean(),
+};
+
+export function httpTools(http: HttpApp): Toolset {
+  return {
+    names: http.tools.map((t) => t.name),
+    register(server, ctx, allowed) {
+      for (const tool of http.tools) {
+        if (!allowed.has(tool.name)) continue;
+        const shape = Object.fromEntries(
+          Object.entries(tool.params).map(([name, p]) => {
+            const type = zodType[p.type].describe(p.description);
+            return [name, p.required ? type : type.optional()];
+          }),
+        );
+        const destructive = tool.destructive || tool.method === "DELETE";
+        server.registerTool(
+          tool.name,
+          {
+            description: tool.description,
+            inputSchema: z.object(shape).strict(),
+            annotations: {
+              readOnlyHint: tool.method === "GET",
+              destructiveHint: destructive,
+              openWorldHint: true,
+            },
+          },
+          (args: Record<string, unknown>) =>
+            audited(ctx, tool.name, JSON.stringify(args).slice(0, 300), async (mark) => {
+              for (const [name, p] of Object.entries(tool.params)) {
+                const allowedValues = p.limit ? listLimit(ctx.limits, p.limit) : null;
+                if (!allowedValues) continue;
+                // Left out, an optional param would mean "all of them".
+                if (args[name] === undefined)
+                  throw new Denied(`${name} is required: this agent is limited to some values`);
+                if (!allowedValues.includes(String(args[name])))
+                  throw new Denied(`${name} ${String(args[name])} is outside this agent's limits`);
+              }
+              const path = tool.path.replace(/\{([a-z][a-z0-9_]*)\}/g, (_, name: string) => {
+                const value = String(args[name]);
+                // URLs resolve . and .. segments even when percent-encoded.
+                if (value === "." || value === ".." || value === "")
+                  throw new Denied(`${name} is not a valid value`);
+                return encodeURIComponent(value);
+              });
+              const query = new URLSearchParams();
+              const body: Record<string, unknown> = {};
+              for (const [name, p] of Object.entries(tool.params)) {
+                if (args[name] === undefined) continue;
+                if (p.in === "query") query.set(name, String(args[name]));
+                if (p.in === "body") body[name] = args[name];
+              }
+              const target = query.size ? `${path}?${query}` : path;
+              if (Buffer.byteLength(target) > MAX_TARGET_BYTES)
+                throw new Denied(`The address is longer than ${MAX_TARGET_BYTES / 1024} KB`);
+              const hasBody = Object.values(tool.params).some((p) => p.in === "body");
+              if (hasBody && Buffer.byteLength(JSON.stringify(body)) > MAX_BODY_BYTES)
+                throw new Denied(`The request is larger than ${MAX_BODY_BYTES / 1024} KB`);
+              let res;
+              try {
+                res = await ctx.call({
+                  method: tool.method,
+                  path: target,
+                  ...(hasBody ? { body } : {}),
+                });
+              } catch (error) {
+                if (error instanceof ConnectError) throw new VendorFailed(502, error.message);
+                throw error;
+              }
+              mark(res.status);
+              if (res.status < 200 || res.status >= 300) {
+                const detail = vendorError(res.data);
+                throw new VendorFailed(
+                  res.status,
+                  `The app answered ${res.status}${detail ? `: ${detail}` : ""}`,
+                );
+              }
+              for (const a of tool.answerLimits) {
+                const values = listLimit(ctx.limits, a.limit);
+                if (values && !answerWithin(res.data, a.field, values))
+                  throw new Denied(`The answer's ${a.field} is outside this agent's limits`);
+              }
+              return typeof res.data === "string"
+                ? { content: [{ type: "text", text: res.data }] }
+                : json(res.data);
+            }),
+        );
+      }
+    },
+  };
+}
+
+/** Binds to any connector with an `http` block; createAgentConnect uses it for those. */
+export default {
+  id: "http",
+  create: ({ connector }) => ({
+    vendor: httpVendor(connector),
+    toolset: httpTools(connector.http!),
+  }),
+} satisfies ConnectorModule;

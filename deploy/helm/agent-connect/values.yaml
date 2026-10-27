@@ -1,0 +1,34 @@
+image:
+  # Required: the image built from deploy/docker/Dockerfile.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Must stay 1: Teams run limits are admitted by a single process (and rollouts are Recreate).
+replicaCount: 1
+
+# Required: a Secret holding DATABASE_URL, CONNECT_ENCRYPTION_KEY and AGENT_CONNECT_ADMIN_TOKEN
+# (and CONNECT_ENCRYPTION_KEY_PREVIOUS while rotating). Pending migrations are applied on start.
+existingSecret: ""
+
+# This deployment's public origin, e.g. https://agents.example.com; empty disables Teams bots.
+publicBaseUrl: ""
+# Names shown and created in tenants, e.g. {productName: Acme Agents}. Empty keeps the defaults.
+branding: {}
+# Further environment, e.g. DATABASE_SSL: disable.
+env: {}
+
+service:
+  port: 3000
+
+# Only the public paths (MCP for agents, Teams' messaging endpoint). The admin API is never
+# routed here; the admin app calls the Service directly.
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: []
+
+resources: {}

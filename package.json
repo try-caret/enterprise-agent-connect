@@ -1,0 +1,44 @@
+{
+  "name": "enterprise-agent-connect",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Enterprise Agent Connect server: the service, its migrations and the built-in connectors",
+  "exports": {
+    ".": "./dist/packages/server/src/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/try-caret/enterprise-agent-connect.git"
+  },
+  "scripts": {
+    "dev": "tsx watch packages/server/src/server.ts",
+    "build": "tsc && node -e \"const fs=require('fs');fs.cpSync('packages/server/migrations','dist/packages/server/migrations',{recursive:true});fs.cpSync('connectors','dist/connectors',{recursive:true,filter:(f)=>!f.endsWith('.ts')})\"",
+    "start": "node dist/packages/server/src/server.js",
+    "check": "tsc --noEmit && tsc -p tsconfig.test.json && tsc -p packages/client --noEmit",
+    "test": "node --import tsx --test packages/server/test/*.test.ts packages/client/test/*.test.ts connectors/*/*.test.ts",
+    "openapi": "tsx scripts/openapi.ts && openapi-typescript packages/server/openapi.json -o packages/client/src/schema.ts",
+    "client": "npm run openapi && rm -rf packages/client/lib && tsc -p packages/client"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@hono/node-server": "^2.0.10",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "postgres": "^3.4.9",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^6.0.3",
+    "openapi-typescript": "7.13.0"
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    }
+  },
+  "license": "Apache-2.0"
+}

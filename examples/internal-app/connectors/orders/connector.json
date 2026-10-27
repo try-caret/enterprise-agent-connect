@@ -1,0 +1,103 @@
+{
+  "id": "orders",
+  "name": "Orders",
+  "description": "Let agents look up orders, add notes to them and cancel them in the internal orders system.",
+  "logo": "/brand/registry/orders.svg",
+  "identity": "An API key for the orders system.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API key",
+      "body": "Ask the team that runs the orders system for an API key for agents. Give it only the access the agents need."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [{ "id": "api_key", "label": "API key", "secret": true }],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read orders",
+      "description": "Look up orders and list a customer's orders.",
+      "required": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["orders_list", "orders_get"]
+    },
+    {
+      "id": "notes",
+      "label": "Add notes",
+      "description": "Add a note to an order.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["orders_add_note"]
+    },
+    {
+      "id": "cancel",
+      "label": "Cancel orders",
+      "description": "Delete an order.",
+      "destructive": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["orders_cancel"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "customers",
+      "label": "Customers",
+      "help": "Only these customers' orders. Leave empty for all.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[a-z0-9-]+$"
+    }
+  ],
+  "verify": { "method": "GET", "path": "/health", "label": "Orders answers", "show": "name" },
+  "revoke": "Ask the team that runs the orders system to delete the API key.",
+  "http": {
+    "baseUrl": "http://internal-app:8080/api",
+    "allowInsecureHttp": true,
+    "auth": { "type": "header", "header": "X-Api-Key", "value": "api_key" },
+    "tools": [
+      {
+        "name": "orders_list",
+        "description": "List a customer's orders.",
+        "method": "GET",
+        "path": "/orders",
+        "params": {
+          "customer": {
+            "type": "string",
+            "description": "The customer id",
+            "in": "query",
+            "limit": "customers"
+          }
+        }
+      },
+      {
+        "name": "orders_get",
+        "description": "Read one order by its id.",
+        "method": "GET",
+        "path": "/orders/{id}",
+        "params": { "id": { "type": "string", "description": "The order id", "in": "path" } },
+        "answerLimits": [{ "field": "customer", "limit": "customers" }]
+      },
+      {
+        "name": "orders_add_note",
+        "description": "Add a note to an order.",
+        "method": "POST",
+        "path": "/orders/{id}/notes",
+        "params": {
+          "id": { "type": "string", "description": "The order id", "in": "path" },
+          "text": { "type": "string", "description": "The note", "in": "body" }
+        }
+      },
+      {
+        "name": "orders_cancel",
+        "description": "Cancel (delete) an order.",
+        "method": "DELETE",
+        "path": "/orders/{id}",
+        "params": { "id": { "type": "string", "description": "The order id", "in": "path" } }
+      }
+    ]
+  }
+}

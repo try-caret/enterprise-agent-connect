@@ -1,0 +1,14 @@
+# Adds the example internal app (examples/internal-app) and its connector. See docs/http-connector.md:
+#   docker compose -f docker-compose.yml -f docker-compose.example.yml up --build --wait
+services:
+  internal-app:
+    image: node:22-alpine
+    command: ["node", "/app/server.mjs"]
+    volumes:
+      - ../../examples/internal-app/server.mjs:/app/server.mjs:ro
+
+  agent-connect:
+    environment:
+      CONNECTOR_DIRS: /connectors
+    volumes:
+      - ../../examples/internal-app/connectors:/connectors:ro

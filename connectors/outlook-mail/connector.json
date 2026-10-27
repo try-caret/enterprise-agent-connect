@@ -1,0 +1,154 @@
+{
+  "id": "outlook-mail",
+  "name": "Outlook mail",
+  "description": "Let each agent read and work on mail in its own mailbox.",
+  "logo": "/brand/outlook.svg",
+  "identity": "Your Microsoft app registration, through the Microsoft connection. Exchange lets it open only the mailboxes you choose for agents, and it uses no Microsoft 365 license.",
+  "provider": "microsoft",
+  "order": 1,
+  "accountKey": "tenantId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Make sure the app cannot open every mailbox",
+      "body": "Outlook mail needs no Microsoft Graph permission on the app. Do not add Mail.Read, Mail.Send or Mail.ReadWrite under API permissions: they open every mailbox in your organization.",
+      "click": [
+        "In the Microsoft Entra admin center, go to Entra ID, then App registrations, open {brand.microsoft.appName} and select API permissions.",
+        "Check that no Mail permission is listed. Remove any that is."
+      ],
+      "copy": ["az ad app permission list --id {clientId} -o table"],
+      "shell": "bash"
+    },
+    {
+      "title": "Create the {brand.microsoft.mailboxGroup} group",
+      "body": "Agents can only reach mailboxes in this mail-enabled security group. Outlook calendar uses the same group, so you create it once. Each agent's mailbox is added to it when you make the agent's API key, on the Integrations tab.",
+      "link": {
+        "label": "Open the Exchange admin center",
+        "href": "https://admin.exchange.microsoft.com/#/groups"
+      },
+      "click": [
+        "In the Exchange admin center, go to Recipients, then Groups, then Mail-enabled security, and select Add a group.",
+        "Choose Mail-enabled security and select Next. Name it {brand.microsoft.mailboxGroup}, then Next.",
+        "Assign yourself as owner, skip members (you add each agent's mailbox later), then Next.",
+        "On Edit settings, enter a group email address such as {brand.microsoft.mailboxGroupAlias}@your-domain, then Next and Create group."
+      ],
+      "copy": [
+        "# Needs the ExchangeOnlineManagement module: Install-Module ExchangeOnlineManagement -Scope CurrentUser",
+        "Connect-ExchangeOnline",
+        "if (-not (Get-DistributionGroup -Identity '{brand.microsoft.mailboxGroup}' -ErrorAction SilentlyContinue)) { New-DistributionGroup -Name '{brand.microsoft.mailboxGroup}' -Type Security }"
+      ],
+      "shell": "powershell",
+      "confirm": "mailbox-group"
+    },
+    {
+      "title": "Limit the app to the mailboxes in that group",
+      "body": "This is the only mail access the app gets. Exchange enforces it, so the app cannot open any other mailbox. The role lines follow what you ticked in step 1; if you tick more later, run the matching New-ManagementRoleAssignment line again. Lines for what already exists (from Outlook calendar) are skipped. Exchange can take up to 2 hours to apply this before Check access passes.",
+      "link": {
+        "label": "Connect to Exchange Online PowerShell",
+        "href": "https://learn.microsoft.com/powershell/exchange/connect-to-exchange-online-powershell"
+      },
+      "clickUnavailable": true,
+      "copy": [
+        "# Needs the ExchangeOnlineManagement module: Install-Module ExchangeOnlineManagement -Scope CurrentUser",
+        "Connect-ExchangeOnline",
+        "if (-not (Get-ServicePrincipal -Identity {clientId} -ErrorAction SilentlyContinue)) { New-ServicePrincipal -AppId {clientId} -ObjectId {servicePrincipalId} -DisplayName \"{brand.microsoft.appName}\" }",
+        "if (-not (Get-ManagementScope -Identity \"{brand.microsoft.mailboxGroup}\" -ErrorAction SilentlyContinue)) { New-ManagementScope -Name \"{brand.microsoft.mailboxGroup}\" -RecipientRestrictionFilter \"MemberOfGroup -eq '$((Get-DistributionGroup '{brand.microsoft.mailboxGroup}').DistinguishedName)'\" }",
+        "New-ManagementRoleAssignment -Role \"{scope}\" -App {clientId} -CustomResourceScope \"{brand.microsoft.mailboxGroup}\""
+      ],
+      "shell": "powershell",
+      "confirm": "mail-roles"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read mail",
+      "description": "List and read messages in the agent's own mailbox.",
+      "required": true,
+      "scopes": ["Application Mail.Read"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["mail_list_messages", "mail_get_message"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    },
+    {
+      "id": "send",
+      "label": "Send mail",
+      "description": "Send new messages and reply from the agent's own mailbox.",
+      "scopes": ["Application Mail.Send"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["mail_send", "mail_reply"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    },
+    {
+      "id": "organize",
+      "label": "Organize mail",
+      "description": "Move messages between folders, flag them and mark them read or unread.",
+      "scopes": ["Application Mail.ReadWrite"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["mail_move", "mail_flag", "mail_mark_read"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    },
+    {
+      "id": "delete",
+      "label": "Delete mail",
+      "description": "Delete messages. They go to Deleted Items, where Microsoft 365 removes them after a while.",
+      "destructive": true,
+      "scopes": ["Application Mail.ReadWrite"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["mail_delete"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    }
+  ],
+  "limits": [
+    {
+      "id": "mailbox",
+      "label": "Mailbox",
+      "help": "The agent's own mailbox, a member of {brand.microsoft.mailboxGroup}. The agent can use no other.",
+      "kind": "text",
+      "required": true,
+      "pattern": "^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$"
+    }
+  ],
+  "verify": {
+    "label": "Microsoft Graph permissions on the app (Outlook mail needs none: Exchange limits it to the {brand.microsoft.mailboxGroup} group)",
+    "check": "permissions"
+  },
+  "revoke": "In Exchange Online PowerShell, remove the app's mailbox access with Get-ManagementRoleAssignment -RoleAssignee {clientId} | Remove-ManagementRoleAssignment. To stop every Microsoft app at once, remove the app registration (see the Microsoft connection).",
+  "agentAccess": {
+    "limit": "mailbox",
+    "label": "Exchange lets the app open an agent's mailbox",
+    "path": "/v1.0/users/{value}/mailFolders/inbox?$select=id",
+    "granted": "The app can open this mailbox.",
+    "notGranted": "Exchange does not let the app open this mailbox yet. Check that it is in {brand.microsoft.mailboxGroup}. Also check that the app's mailbox access was given (step 3 on the Outlook mail page), and run Test-ServicePrincipalAuthorization to see which roles apply. Microsoft can take up to about 2 hours to apply a change.",
+    "notFound": "Exchange shows the app no mailbox at this address. Either there is none yet (check the address, or wait a few minutes if you just created it), or it is not in {brand.microsoft.mailboxGroup} yet: Exchange answers the same for a mailbox the app may not open. Microsoft can take up to about 2 hours to apply a change.",
+    "probes": {
+      "send": {
+        "method": "POST",
+        "path": "/v1.0/users/{value}/sendMail",
+        "body": {
+          "message": {}
+        },
+        "allowed": [400]
+      },
+      "organize": {
+        "method": "PATCH",
+        "path": "/v1.0/users/{value}/mailFolders/inbox",
+        "body": {},
+        "allowed": [200]
+      },
+      "delete": {
+        "method": "PATCH",
+        "path": "/v1.0/users/{value}/mailFolders/inbox",
+        "body": {},
+        "allowed": [200]
+      }
+    },
+    "missing": "The app can open this mailbox but Exchange does not let it do this yet: {missing}. Give that role (the step Limit the app to the mailboxes in that group, on the Outlook mail page) and check again. Microsoft can take up to about 2 hours to apply a change."
+  }
+}

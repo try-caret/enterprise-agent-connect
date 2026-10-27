@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "rootDir": ".",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "sourceMap": true
+  },
+  "include": [
+    "packages/server/src/**/*.ts",
+    "packages/connector-kit/src/**/*.ts",
+    "connectors/**/*.ts"
+  ],
+  "exclude": ["connectors/**/*.test.ts"]
+}
