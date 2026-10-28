@@ -219,7 +219,8 @@ the example internal app, `docker-compose.sql-example.yml` the example orders da
 image moves the optional database drivers, peers of the npm package, into its dependencies
 before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (one replica, Service, optional
 Ingress with only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`; `existingSecret` holds
-`DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`). One replica only: Teams
+`DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`; `caBundle` mounts a
+ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). One replica only: Teams
 and app event run limits (concurrent runs, runs per hour, daily spend) and polls are counted,
 admitted and run by one process,
 so a rollout recreates rather than overlaps. The admin API is never public: it refuses any
@@ -381,6 +382,9 @@ connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for fil
                       # (Graph's $skiptoken, or mail's and calendar's $skip as `s<n>` / token as `t<token>`,
                       # returned as `next`); shortcuts to other sites are never listed nor read by id
 docs/teams.md         # Teams design (a bot per agent, real-time responses)
+docs/inside-your-network.md # internal certificate authorities (NODE_EXTRA_CA_CERTS, the chart's
+                      # caBundle) and reaching the admin API behind a proxy (in process, the
+                      # private network, or a second private listener)
 docs/triggers.md      # app events that start agents: how it works, Jira webhook and poll, how a
                       # connector declares `events`, security
 packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window, paths, kept

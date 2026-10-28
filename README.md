@@ -24,7 +24,8 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
   your own admin pages.
 
 How it is secured: [docs/security.md](docs/security.md). Adding apps:
-[docs/connectors.md](docs/connectors.md).
+[docs/connectors.md](docs/connectors.md). Running it next to internal systems (your own
+certificate authority, a proxy in front): [docs/inside-your-network.md](docs/inside-your-network.md).
 
 ## Quick start (about 10 minutes)
 
@@ -142,7 +143,8 @@ serve({ fetch: eac.fetch, port: 3000 });
 ```
 
 **The typed admin client.** The admin API refuses requests that came through a load balancer
-(`X-Forwarded-For`), so call it from your server, over the network or in the same process:
+(`X-Forwarded-For`), so call it from your server, over the network or in the same process
+(behind a proxy: [docs/inside-your-network.md](docs/inside-your-network.md)):
 
 ```ts
 import { createClient } from "@arbium/enterprise-agent-connect-client";
@@ -231,7 +233,9 @@ built-in app is offered. Apps you add with `CONNECTOR_DIRS` are always offered.
 `deploy/helm/agent-connect` is a small chart: one replica (Teams and app event run limits are
 counted in one process), a Service, and an optional Ingress with only the public paths. It needs the image
 (`image.repository`, `image.tag`; releases are `ghcr.io/try-caret/enterprise-agent-connect:<version>`) and a Secret with `DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`
-and `AGENT_CONNECT_ADMIN_TOKEN` (`existingSecret`).
+and `AGENT_CONNECT_ADMIN_TOKEN` (`existingSecret`). For apps whose certificates your own
+authority signed, name a ConfigMap or Secret holding its bundle in `caBundle`
+([docs/inside-your-network.md](docs/inside-your-network.md)).
 
 ## Layout
 
