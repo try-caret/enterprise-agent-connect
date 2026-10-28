@@ -218,6 +218,10 @@ const inventory: ConnectorModule = {
 
 ## Kubernetes
 
+To offer only some built-in apps, set `BUILTIN_APPS` to their ids, comma-separated (for example
+`jira,servicenow,sap-s4hana`; `GET /agent-connect/admin/v1/connectors` lists every id). Unset, every
+built-in app is offered. Apps you add with `CONNECTOR_DIRS` are always offered.
+
 `deploy/helm/agent-connect` is a small chart: one replica (Teams run limits are counted in one
 process), a Service, and an optional Ingress with only the public paths. It needs the image
 (`image.repository`, `image.tag`; releases are `ghcr.io/try-caret/enterprise-agent-connect:<version>`) and a Secret with `DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`

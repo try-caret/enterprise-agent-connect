@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { createAgentConnect } from "./index.js";
+import { builtinConnectors, createAgentConnect } from "./index.js";
 import { migrate } from "./migrate.js";
 import { assertSchemaName, connectDatabase } from "./store.js";
 
@@ -44,6 +44,18 @@ const sharedAppSetting = (name: string, old: string) => {
   return value;
 };
 
+// Which built-in apps this deployment offers (comma-separated ids); unset offers every one.
+// Apps from CONNECTOR_DIRS are always offered.
+function builtinApps() {
+  const ids = (process.env.BUILTIN_APPS ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (!ids.length) return undefined;
+  const known = builtinConnectors.map((m) => m.id);
+  const unknown = ids.filter((id) => !known.includes(id));
+  if (unknown.length)
+    throw new Error(`BUILTIN_APPS: no built-in app ${unknown.join(", ")} (known: ${known.join(", ")})`);
+  return builtinConnectors.filter((m) => ids.includes(m.id));
+}
+
 const service = await createAgentConnect({
   database: { url: required("DATABASE_URL") },
   schema,
@@ -53,6 +65,7 @@ const service = await createAgentConnect({
   adminToken: required("AGENT_CONNECT_ADMIN_TOKEN"),
   publicBaseUrl: renamed("PUBLIC_BASE_URL", "SELF_HOST_PUBLIC_BASE_URL") ?? null,
   branding: process.env.BRANDING?.trim() ? JSON.parse(process.env.BRANDING) : undefined,
+  connectors: builtinApps(),
   extraConnectorDirs: (process.env.CONNECTOR_DIRS ?? "").split(":").filter(Boolean),
   microsoftSharedApp:
     sharedApp === "enabled"

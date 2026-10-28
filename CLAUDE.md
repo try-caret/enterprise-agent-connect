@@ -108,7 +108,7 @@ own step), `CONNECT_ENCRYPTION_KEY` (32 bytes,
 base64), `AGENT_CONNECT_ADMIN_TOKEN` (≥32 chars), `PORT` (3000), `PUBLIC_BASE_URL` (the
 deployment's origin, the service under `/agent-connect`; where Teams reaches the bots; without it
 the bot setup script and package say to set `global.publicBaseUrl`), `BRANDING` (JSON, see
-Branding), `CONNECTOR_DIRS` (`:`-separated folders laid out like `connectors/`, `<id>/connector.json` each; one with an
+Branding), `BUILTIN_APPS` (comma-separated built-in app ids this deployment offers; unset offers every one, an unknown id stops startup), `CONNECTOR_DIRS` (`:`-separated folders laid out like `connectors/`, `<id>/connector.json` each; one with an
 `http` block runs on the generic module `connectors/http`, docs/http-connector.md; any other needs a
 `ConnectorModule` passed to `createAgentConnect`).
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
