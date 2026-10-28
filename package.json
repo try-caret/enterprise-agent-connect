@@ -4,7 +4,14 @@
   "type": "module",
   "description": "Enterprise Agent Connect server: the service, its migrations and the built-in connectors",
   "exports": {
-    ".": "./dist/packages/server/src/index.js"
+    ".": {
+      "types": "./dist/packages/server/src/index.d.ts",
+      "default": "./dist/packages/server/src/index.js"
+    },
+    "./kit": {
+      "types": "./dist/packages/connector-kit/src/index.d.ts",
+      "default": "./dist/packages/connector-kit/src/index.js"
+    }
   },
   "files": [
     "dist"

@@ -81,11 +81,136 @@ delete the database too).
 **Going further:** connect a real app from `GET /agent-connect/admin/v1/connectors` (each one
 lists its setup steps, as click paths and as commands), add your own app
 ([docs/http-connector.md](docs/http-connector.md)), or embed the service in your own Node app
-with `createAgentConnect({...})` from the server package (`npm install
-@arbium/enterprise-agent-connect`; the typed admin client is `@arbium/enterprise-agent-connect-client`).
+(below).
 
 Only `/agent-connect/mcp` and `/agent-connect/teams` may be public. The admin API refuses any
 request that carries `X-Forwarded-For`, so never route it through a public load balancer.
+
+## Use it in your code
+
+```sh
+npm install @arbium/enterprise-agent-connect @arbium/enterprise-agent-connect-client
+```
+
+Both packages ship TypeScript types. Every snippet here is run by `scripts/consumer-test.sh`
+(full files: `scripts/consumer/`) against the packed packages, in CI.
+
+**Embed the service.** One instance per process, in a module of its own:
+
+```ts
+import { builtinConnectors, createAgentConnect } from "@arbium/enterprise-agent-connect";
+
+export const eac = await createAgentConnect({
+  database: { url: process.env.DATABASE_URL! }, // or a postgres.js instance
+  encryptionKey: process.env.CONNECT_ENCRYPTION_KEY!,
+  adminToken: process.env.AGENT_CONNECT_ADMIN_TOKEN!,
+  connectors: [...builtinConnectors, orders, inventory], // default: every built-in app
+});
+eac.start(); // the Teams worker; await eac.stop() on shutdown
+```
+
+`connectors` is the list of apps this deployment offers. Leave it out for every built-in app;
+pass `builtinConnectors.filter((c) => ["jira", "fedex"].includes(c.id))` for only some.
+
+`eac.fetch` is a plain `(Request) => Promise<Response>` serving `/agent-connect/*`. Mount it at
+that path, before any body parser (Express and plain Node use `@hono/node-server`):
+
+```ts
+// Hono
+app.all("/agent-connect/*", (c) => eac.fetch(c.req.raw));
+
+// Express 5
+import { getRequestListener } from "@hono/node-server";
+app.all("/agent-connect/*splat", getRequestListener(eac.fetch));
+
+// Next.js: app/agent-connect/[...path]/route.ts (Node runtime)
+const handler = (req: Request) => eac.fetch(req);
+export { handler as GET, handler as POST, handler as PUT, handler as PATCH, handler as DELETE };
+
+// Plain Node
+import { serve } from "@hono/node-server";
+serve({ fetch: eac.fetch, port: 3000 });
+```
+
+**The typed admin client.** The admin API refuses requests that came through a load balancer
+(`X-Forwarded-For`), so call it from your server, over the network or in the same process:
+
+```ts
+import { createClient } from "@arbium/enterprise-agent-connect-client";
+
+const admin = createClient({ baseUrl: "http://localhost:3000", token: process.env.AGENT_CONNECT_ADMIN_TOKEN! });
+// In the same process as eac, with no network hop:
+// createClient({ baseUrl: "http://agent-connect", token, fetch: (input, init) => eac.fetch(new Request(input, init)) })
+
+const org = await admin.organizations.create("Example Org");
+await admin.connect(org.id, "orders", {
+  capabilities: ["read"],
+  fields: { api_key: "example-key" },
+  connectedBy: "Example Admin",
+});
+const { agent, key } = await admin.createAgent(org.id, { name: "demo", createdBy: "Example Admin" });
+await admin.setGrant(org.id, agent.id, "orders", ["read"], { customers: ["acme"] }, "Example Admin");
+const rows = await admin.audit(org.id, { agent: agent.id });
+```
+
+**Your own app, no code.** Pass a connector definition with an `http` block
+([docs/http-connector.md](docs/http-connector.md)) straight into `connectors`. It is checked like
+a `connector.json`; the type is `ConnectorJson`:
+
+```ts
+import type { ConnectorJson } from "@arbium/enterprise-agent-connect";
+
+const orders: ConnectorJson = {
+  id: "orders",
+  name: "Orders",
+  // ...setup steps, fields, capabilities, limits and verify, as in a connector.json
+  http: {
+    baseUrl: "https://orders.internal.example.com/api",
+    auth: { type: "header", header: "X-Api-Key", value: "api_key" },
+    tools: [{ name: "orders_get", description: "Read one order by its id.", method: "GET", path: "/orders/{id}",
+      params: { id: { type: "string", description: "The order id", in: "path" } } }],
+  },
+};
+```
+
+**Your own app, as code.** Build a `ConnectorModule` on the connector kit and give it its
+definition as `connector` ([docs/connectors.md](docs/connectors.md)):
+
+```ts
+import { z } from "zod";
+import { audited, Denied, json, listLimit, type ConnectorModule } from "@arbium/enterprise-agent-connect/kit";
+
+const inventory: ConnectorModule = {
+  id: "inventory",
+  connector: { id: "inventory", /* ...the rest of its connector.json */ },
+  create: () => ({
+    vendor: { connect: async (fields) => ({ ... }), call: async (connection, request) => ({ ... }) },
+    toolset: {
+      names: ["inventory_get_stock"],
+      register(server, ctx, allowed) {
+        if (allowed.has("inventory_get_stock"))
+          server.registerTool("inventory_get_stock",
+            { description: "How many of one item are in stock.", inputSchema: z.object({ sku: z.string() }) },
+            ({ sku }) => audited(ctx, "inventory_get_stock", sku, async (mark) => {
+              const skus = listLimit(ctx.limits, "skus");
+              if (skus && !skus.includes(sku)) throw new Denied(`This agent may not read ${sku}`);
+              const res = await ctx.call({ method: "GET", path: `/stock/${encodeURIComponent(sku)}` });
+              mark(res.status);
+              return json(res.data);
+            }));
+      },
+    },
+  }),
+};
+```
+
+**Connect an agent.** Each agent uses its own key (`key` above) on one MCP endpoint,
+`<your origin>/agent-connect/mcp`:
+
+- Claude Code: `claude mcp add --transport http agent-connect https://agents.example.com/agent-connect/mcp --header "Authorization: Bearer $KEY"`
+- The Claude API's MCP connector (beta `mcp-client-2025-11-20`): `mcp_servers: [{ type: "url", url: "https://agents.example.com/agent-connect/mcp", name: "agent-connect", authorization_token: key }]` with `tools: [{ type: "mcp_toolset", mcp_server_name: "agent-connect" }]`. The endpoint must be reachable from the internet.
+- Claude Managed Agents: a vault `static_bearer` credential holding the key, keyed on the same URL.
+- Any MCP client over Streamable HTTP: `Authorization: Bearer <key>`; the quick start's `curl` shows the raw call.
 
 ## Kubernetes
 

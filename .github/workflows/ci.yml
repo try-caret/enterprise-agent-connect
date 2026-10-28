@@ -4,12 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  # release.yml runs this before publishing.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -64,3 +66,27 @@ jobs:
         run: |
           helm lint deploy/helm/agent-connect --set image.repository=x,image.tag=x,existingSecret=x
           helm template t deploy/helm/agent-connect --set image.repository=x,image.tag=x,existingSecret=x >/dev/null
+
+  # The packed packages installed into a fresh project: their public imports type-check and
+  # the README's embedding, client, own-app and MCP snippets run.
+  consumer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: scripts/consumer-test.sh
+        env:
+          DATABASE_URL: postgres://postgres@localhost:5432/postgres

@@ -103,7 +103,8 @@ export type TeamsRuntimeDeps = {
   bots: BotClient;
   // By id: what answers each trigger.
   runners: Map<string, TriggerRunner>;
-  connector: Connector;
+  // Null when the deployment leaves Teams out: then no organization can connect it.
+  connector: Connector | null;
   // This service's public address (see createTeamsAdmin); the trigger's agent must use it.
   publicUrl: string | null;
 };
@@ -383,7 +384,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         ? await runner.unready(bot.organizationId)
         : `runner ${trigger.runner} is not offered by this deployment`;
     const capabilities =
-      state?.grant && state.connection?.status === "connected"
+      deps.connector && state?.grant && state.connection?.status === "connected"
         ? effectiveCapabilities(
             deps.connector,
             state.grant.capabilities,

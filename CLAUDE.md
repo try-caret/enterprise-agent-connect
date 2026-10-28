@@ -206,7 +206,9 @@ request carrying `X-Forwarded-For`. Give the service a database role that owns o
 
 ```
 package.json          # one npm package for the server, kit and connectors (one lockfile);
-                      # tsconfig.json builds all three into dist/ with their paths kept
+                      # tsconfig.json builds all three into dist/ with their paths kept, with
+                      # declarations; `exports` "." (packages/server/src/index.ts) and "./kit"
+                      # (packages/connector-kit/src/index.ts), each with its types
 connectors/<id>/      # one folder per app: connector.json, index.ts (its ConnectorModule:
                       # vendor client + toolset), tools.ts (MCP tools), vendor.ts (auth + HTTP)
                       # and any helpers of its own. Loaded by folder; the id is the folder name
@@ -258,13 +260,17 @@ packages/connector-kit/src/ # what a connector builds on: connector.ts (connecto
                       # audited: the audit row for every call), types.ts (Vendor, ConnectError),
                       # oauth.ts (client credentials with a cached token, vendor error text),
                       # branding.ts, certificate.ts. It still imports types from the server
-                      # (Limits, TeamsAccess); untangling that is phase 3
+                      # (Limits, TeamsAccess); untangling that is phase 3. index.ts: the public
+                      # `@arbium/enterprise-agent-connect/kit`, only what a connector author needs
 packages/connector-kit/src/certificate.ts # RSA key pair + self-signed X.509 (DER written by hand; Node only parses
                       # X.509), SHA-1 thumbprint for display, PS256 (RSA-PSS) client assertion
                       # (x5t#S256), as Microsoft documents for certificate credentials
 packages/server/src/index.ts # createAgentConnect(options): checks and wires everything (connectors and
                       # their modules, providers, branding, runners, migrations), returns
-                      # {fetch, start, stop}; what an embedder imports
+                      # {fetch, start, stop}; what an embedder imports. `connectors`: modules
+                      # (a built-in folder's app is offered only while its module is passed;
+                      # a module may carry its connector.json inline as `connector`) and
+                      # http-only definitions; checked like a folder's. Teams may be left out
 packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<id>/index.ts)
 packages/connector-kit/src/branding.ts # names shown and created in tenants (BRANDING), {brand.*} placeholders
 packages/server/src/server.ts # the container's entry: env (old names for one release) → createAgentConnect, listen
@@ -288,6 +294,9 @@ packages/server/migrations/ # 0001_tables.sql ... (plain SQL, unqualified names,
 packages/server/src/secrets.ts # AES-256-GCM credential sealing (AAD = org + app, or org + provider:<id>; key
                       # id per row), agent keys
 scripts/test-databases.sh # makes an empty ac_test on a scratch Postgres, for the DB-backed tests
+scripts/consumer-test.sh # packs both packages, installs them in a temp project, type-checks and runs
+                      # scripts/consumer/ (the README's "Use it in your code" snippets) on Postgres
+RELEASING.md          # cutting a release or a dev build; switching npm to trusted publishing
 packages/server/src/consent.ts # signed approval state (org, app, capability ceiling, return address, tenant once
                       # approved, nonce, 15 min expiry)
 connectors/jira/jql.ts # confines agent JQL to granted projects
@@ -314,10 +323,12 @@ deploy/docker/        # Dockerfile (context: the repository root),
 deploy/helm/agent-connect/ # small standalone chart (Deployment, Service, optional Ingress with
                       # only the public paths)
 README.md             # quick start
-.github/workflows/ci.yml # check, tests on Postgres 17, generated files current, package, image and chart build
-.github/workflows/release.yml # v* tag: publishes the server and client to npmjs as
-                      # @arbium/enterprise-agent-connect(-client) and the image to
-                      # ghcr.io/try-caret/enterprise-agent-connect
+.github/workflows/ci.yml # check, tests on Postgres 17, generated files current, package, image and chart
+                      # build, consumer test; also called by release.yml
+.github/workflows/release.yml # v* tag (newer than npm's newest, else refused): CI, then the server and
+                      # client to npmjs as @arbium/enterprise-agent-connect(-client) (latest, or next
+                      # for a prerelease), the image to ghcr.io/try-caret/enterprise-agent-connect and
+                      # a GitHub Release. Run by hand on a branch: <next patch>-dev.<sha>, dist-tag dev
 packages/server/src/teams/ # Teams: approval.ts (approval cards: token, card before and after,
                       # invoke answers), jwt.ts (inbound token checks), bot.ts (the bot's certificate
                       # sign-in, Bot Connector + Graph calls), activity.ts (places, the decision

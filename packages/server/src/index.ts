@@ -7,7 +7,13 @@ import {
 } from "../../connector-kit/src/branding.js";
 import { builtinConnectors, type ConnectorModule } from "./builtin.js";
 import httpConnector from "../../../connectors/http/index.js";
-import { loadConnectors, loadProviders } from "../../connector-kit/src/connector.js";
+import {
+  loadConnectors,
+  loadProviders,
+  parseConnector,
+  type Connector,
+  type ConnectorJson,
+} from "../../connector-kit/src/connector.js";
 import { migrate as runMigrations } from "./migrate.js";
 import { CredentialKey } from "./secrets.js";
 import { assertToolsImplemented, createService, type App, type ProviderApp } from "./service.js";
@@ -24,6 +30,7 @@ import { microsoftClient } from "../../../connectors/microsoft/client.js";
 
 export type { BrandingInput } from "../../connector-kit/src/branding.js";
 export type { ConnectorModule } from "./builtin.js";
+export type { ConnectorJson } from "../../connector-kit/src/connector.js";
 export { builtinConnectors } from "./builtin.js";
 export type { RunInput, RunnerFactory, TriggerRunner } from "./teams/runner.js";
 export { claudeManagedAgents, signature, signedWebhook } from "./teams/runner.js";
@@ -42,9 +49,13 @@ export type AgentConnectOptions = {
   // Teams bots cannot be set up.
   publicBaseUrl?: string | null;
   branding?: BrandingInput;
-  // The code behind each connector JSON (default: the built-in ones).
-  connectors?: ConnectorModule[];
-  // Folders laid out like connectors/ (<id>/connector.json), loaded after it; each needs a module.
+  // The apps this deployment offers (default: every built-in one). A built-in app is offered
+  // only while its module is here, so a subset of builtinConnectors offers only those. Your own
+  // apps: a ConnectorModule carrying its definition as `connector`, or a definition with an
+  // `http` block alone (no code).
+  connectors?: (ConnectorModule | ConnectorJson)[];
+  // Folders laid out like connectors/ (<id>/connector.json), loaded after it; each needs a module
+  // in `connectors` unless it has an `http` block.
   extraConnectorDirs?: string[];
   // Approving the deployment's own multi-tenant Microsoft app instead of registering one: only
   // for a deployment that runs it, since every holder of its secret could reach every tenant
@@ -64,15 +75,36 @@ export async function createAgentConnect(options: AgentConnectOptions) {
   assertSchemaName(schema);
 
   const microsoft = microsoftClient({ sharedApp: options.microsoftSharedApp ?? null });
-  const modules = new Map((options.connectors ?? builtinConnectors).map((m) => [m.id, m]));
+  const modules = new Map<string, ConnectorModule>();
+  const inline: Connector[] = [];
+  for (const entry of options.connectors ?? builtinConnectors) {
+    if (!("create" in entry)) {
+      inline.push(parseConnector(entry, `Connector ${entry.id}`));
+      continue;
+    }
+    if (modules.has(entry.id)) throw new Error(`Two connector modules have the id ${entry.id}`);
+    modules.set(entry.id, entry);
+    if (!entry.connector) continue;
+    const connector = parseConnector(entry.connector, `Connector ${entry.id}`);
+    if (connector.id !== entry.id)
+      throw new Error(`Connector module ${entry.id} carries the definition of ${connector.id}`);
+    inline.push(connector);
+  }
+  const builtin = loadConnectors();
   const connectors = [
-    ...loadConnectors(),
+    ...builtin.filter((c) => modules.has(c.id)),
+    ...inline,
     ...(options.extraConnectorDirs ?? []).flatMap((dir) => {
       const found = loadConnectors(pathToFileURL(`${dir.replace(/\/+$/, "")}/`));
       if (!found.length) throw new Error(`No connector.json in a subfolder of ${dir}`);
       return found;
     }),
   ];
+  for (const id of modules.keys())
+    if (!connectors.some((c) => c.id === id))
+      throw new Error(
+        `Connector module ${id} has no definition: give it as its connector, or its folder in extraConnectorDirs`,
+      );
   const apps: App[] = connectors.map((connector) => {
     if (connectors.filter((c) => c.id === connector.id).length > 1)
       throw new Error(`Two connectors have the id ${connector.id}`);
@@ -81,6 +113,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
     if (!module) throw new Error(`Connector ${connector.id} has no code (ConnectorModule)`);
     return { connector, ...module.create({ microsoft, connector }) };
   });
+  if (!apps.length) throw new Error("No connectors: pass at least one app in connectors");
   assertToolsImplemented(apps);
   // Every `live` step check a connector names is one the Teams admin runs.
   for (const { connector } of apps)
@@ -88,13 +121,19 @@ export async function createAgentConnect(options: AgentConnectOptions) {
       if (step.live && !(LIVE_CHECKS as readonly string[]).includes(step.live))
         throw new Error(`Connector ${connector.id}: no live check ${step.live}`);
   const providerClients: Record<string, ProviderApp["client"]> = { microsoft: microsoft.provider };
+  // A built-in app left out drops out of its provider's add-agent steps.
+  const left = new Set(
+    builtin.map((c) => c.id).filter((id) => !apps.some((a) => a.connector.id === id)),
+  );
   const providers: ProviderApp[] = loadProviders().map((provider) => {
     const client = providerClients[provider.id];
     if (!client) throw new Error(`connectors/${provider.id}/provider.json has no client`);
-    return { provider, client };
+    const addAgent = provider.addAgent
+      .map((step) => ({ ...step, apps: step.apps.filter((id) => !left.has(id)) }))
+      .filter((step) => step.apps.length);
+    return { provider: { ...provider, addAgent }, client };
   });
-  const teamsConnector = apps.find((a) => a.connector.id === "teams")?.connector;
-  if (!teamsConnector) throw new Error("The teams connector is missing");
+  const teamsConnector = apps.find((a) => a.connector.id === "teams")?.connector ?? null;
 
   const ownsSql = !("unsafe" in options.database);
   const sql =
