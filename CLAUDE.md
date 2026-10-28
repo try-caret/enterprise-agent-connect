@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, SAP S/4HANA, ServiceNow, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -319,7 +319,8 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # cached token re-minted once on a 401; a string body is sent as is, under
                       # the request's own content-type: Jamf's Classic API takes XML); slack: a bot
                       # token, ok:false and 429 handling; okta: an API service app,
-                      # private_key_jwt, a token per scope)
+                      # private_key_jwt, a token per scope;
+                      # workday: an API client for integrations' refresh token)
 connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for files and excel.ts
                       # for spreadsheets, joined by the kit's `toolsets`; entra and intune reuse
                       # its Graph paging, outlook-calendar outlook-mail's). Folder, mail, calendar and people listings page with `cursor`
@@ -872,6 +873,35 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   0009, 0164, 0057 and 0303 (the last two from SAP's SDK docs and a support note) and the
   OData field names come from SAP's API reference as remembered and searched on October 27,
   2026; tested only against a fake SAP, never a real system.
+- Workday (`workday`): an API client for integrations signing in as an Integration System User
+  with a non-expiring refresh token (refresh token grant at `/ccx/oauth2/<tenant>/token`, client
+  id and secret as Basic). The connect form takes the REST API endpoint from View API Clients
+  (host and tenant read from it; the host must end myworkday.com or workday.com), and `account`
+  (`<host>/<tenant>`) is the `accountKey`. Workday's token answer may carry no lifetime: a token
+  is then reused 10 minutes; any is re-minted once on a 401. REST services: staffing v7 (workers,
+  supervisory organizations, org chart), common v1 (direct reports, a worker's organizations,
+  an organization's workers), absenceManagement v5 (balances, timeOffDetails,
+  eligibleAbsenceTypes, requestTimeOff with Workday's submit action). Paths are Workday's REST
+  directory (`developer.workday.com/.../services_oas3.json`, public); the spec files need a
+  Workday sign-in, so answer fields follow CData's Workday tables generated from them (read
+  October 27, 2026). No REST service lists job requisitions; they come through reports.
+  Reports (Reports-as-a-Service): the admin pastes each custom report's JSON link (`reports`,
+  at most 30, on the connected host and tenant, kept as `config.reports` JSON); its query names
+  are the prompts, a date example making a date prompt. `workday_run_report` sends only known
+  prompts, `format=json`, and returns `Report_Entry` rows (values cut to 500 characters, at most
+  200 rows). Capabilities: workers (required: search, get, direct reports, management chain,
+  organization, organization's workers), time_off (balances, entries), request_time_off
+  (types and submitting; not destructive, the request goes through the customer's approvals),
+  reports. No pay, personal or national id data in any REST answer; a report shows whatever
+  columns the admin built into it. Limits: `organizations` (Workday IDs) and `reports`. A worker
+  is in scope when its primary supervisory organization, or one above it (org chart
+  `superior`, at most 12 levels), is in the limit, or any of its organizations
+  (`/workers/{id}/organizations`, e.g. its company) is. Every worker read by id is checked on
+  the answer (an unknown id gets the same refusal as one outside), listings are filtered, the
+  management chain stops at the limit, balances whose `worker` is another are refused. Under
+  the limit, reports need `report_org_column` (`config.reportOrgColumn`): rows whose column is
+  not in scope are left out; without it reports are refused. Tested only against a fake Workday,
+  never a real tenant.
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under

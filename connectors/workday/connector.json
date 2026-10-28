@@ -1,0 +1,186 @@
+{
+  "id": "workday",
+  "name": "Workday",
+  "description": "Let agents look up workers, managers and organizations, read time off, and run the Workday reports you choose. Pay and personal data stay out unless a report you add includes them.",
+  "logo": "/brand/registry/workday.svg",
+  "identity": "An integration system user named \"{brand.microsoft.appName}\" in a security group of its own, signing in through an API client for integrations.",
+  "accountKey": "account",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an integration system user",
+      "body": "In Workday, create an integration system user named \"{brand.microsoft.appName}\" that cannot sign in to the Workday website. Give it a long random password; it is never typed again. Then exempt it from password expiry, so the connection does not stop when the password would expire.",
+      "click": [
+        "Search: Create Integration System User > User Name: {brand.microsoft.appName} > Session Timeout Minutes: 0 > Do Not Allow UI Sessions: on > OK",
+        "Search: Maintain Password Rules > System Users exempt from password expiration > add {brand.microsoft.appName} > OK"
+      ]
+    },
+    {
+      "title": "Put it in a security group of its own",
+      "body": "Create an integration system security group and add the user to it. Choose Constrained if Workday itself should also keep the account to some organizations; Unconstrained reaches every worker your domain permissions allow, and you can still narrow each agent to organizations here.",
+      "click": [
+        "Search: Create Security Group > Type: Integration System Security Group (Unconstrained) or (Constrained) > Name: {brand.microsoft.appName} > OK",
+        "Integration System Users: {brand.microsoft.appName} > OK"
+      ]
+    },
+    {
+      "title": "Give the group these domain permissions",
+      "body": "Give the security group View (Get) on the domains below, or Modify (Put) where it says so, then activate the pending security policy changes. Without them Workday answers with empty lists or refuses the call.",
+      "click": [
+        "Search: Maintain Permissions for Security Group > {brand.microsoft.appName} > Domain Security Policy Permissions > add each domain below",
+        "Search: Activate Pending Security Policy Changes > Comment: {brand.microsoft.appName} > OK > Confirm > OK"
+      ],
+      "permissions": true
+    },
+    {
+      "title": "Register an API client for integrations",
+      "body": "Register an API client for integrations named \"{brand.microsoft.appName}\" with non-expiring refresh tokens and these functional area scopes. Copy the client ID and secret: Workday shows the secret only once.",
+      "click": [
+        "Search: Register API Client for Integrations > Client Name: {brand.microsoft.appName} > Non-Expiring Refresh Tokens: on > Scope (Functional Areas): the areas below > OK"
+      ],
+      "copy": ["{scope}"]
+    },
+    {
+      "title": "Make its refresh token",
+      "body": "Make a refresh token that signs the API client in as the integration system user, and copy it. Also copy the Workday REST API Endpoint shown at the top of View API Clients; it names your tenant.",
+      "click": [
+        "Search: View API Clients > API Clients for Integrations > {brand.microsoft.appName} > Related Actions > API Client > Manage Refresh Tokens for Integrations",
+        "Workday Account: {brand.microsoft.appName} > Generate New Refresh Token: on > OK > copy the refresh token"
+      ]
+    },
+    {
+      "title": "Add reports (optional)",
+      "body": "Most companies keep their own data, such as open job requisitions, headcount or cost centers, in custom reports. For each report agents may run: make it an advanced report enabled as a web service, share it with the integration system user, and copy its JSON link. Any prompts the report has become filters agents can set. Agents see every column the report has, so leave out pay, national IDs and anything else they should not read.",
+      "click": [
+        "The report > Related Actions > Custom Report > Edit > Advanced > Enable As Web Service: on",
+        "Share > Share with specific authorized groups and users: {brand.microsoft.appName} > OK",
+        "The report > Related Actions > Web Service > View URLs > JSON > copy the link"
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "endpoint",
+      "label": "Workday REST API endpoint",
+      "help": "Shown at the top of View API Clients in Workday.",
+      "placeholder": "https://wd5-services1.myworkday.com/ccx/api/v1/acme",
+      "secret": false
+    },
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret",
+      "secret": true
+    },
+    {
+      "id": "refresh_token",
+      "label": "Refresh token",
+      "secret": true
+    },
+    {
+      "id": "reports",
+      "label": "Reports",
+      "help": "Optional. Each report's JSON link from Workday, separated by spaces or new lines. Leave empty for none.",
+      "placeholder": "https://wd5-services1.myworkday.com/ccx/service/customreport2/acme/jsmith/Open_Requisitions?format=json",
+      "secret": false
+    },
+    {
+      "id": "report_org_column",
+      "label": "Organization column in reports",
+      "help": "Optional. The column holding each row's organization Workday ID, in every report above. Agents narrowed to some organizations see only their rows, and cannot run reports while this is empty.",
+      "placeholder": "Supervisory_Organization_ID",
+      "secret": false
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "workers",
+      "label": "Look up workers",
+      "description": "Find workers and read their title, organization, location, work email, manager chain and direct reports, and read supervisory organizations. No pay or personal data.",
+      "required": true,
+      "scopes": ["Staffing", "Organizations and Roles"],
+      "permissions": [
+        "Worker Data: Public Worker Reports (View)",
+        "Reports: Organization (View)",
+        "Reports: Manager (View)"
+      ],
+      "forbidden": "The integration system user's security group needs View on Worker Data: Public Worker Reports, Reports: Organization and Reports: Manager, and the API client the Staffing and Organizations and Roles scopes.",
+      "tools": [
+        "workday_search_workers",
+        "workday_get_worker",
+        "workday_list_direct_reports",
+        "workday_get_management_chain",
+        "workday_get_organization",
+        "workday_list_organization_workers"
+      ]
+    },
+    {
+      "id": "time_off",
+      "label": "Read time off",
+      "description": "Read workers' time off balances and their requested, approved and taken time off.",
+      "scopes": ["Time Off and Leave"],
+      "permissions": [
+        "Worker Data: Time Off (Time Off) (View)",
+        "Worker Data: Time Off (Time Off Balances) (View)"
+      ],
+      "forbidden": "The integration system user's security group needs View on Worker Data: Time Off (Time Off) and Worker Data: Time Off (Time Off Balances), and the API client the Time Off and Leave scope.",
+      "tools": ["workday_get_time_off_balances", "workday_list_time_off"]
+    },
+    {
+      "id": "request_time_off",
+      "label": "Request time off",
+      "description": "Submit time off requests for workers. Each request goes through your Request Time Off approvals as if the worker had asked.",
+      "note": "Agents with this can submit requests in any allowed worker's name. Keep each agent to the organizations it needs.",
+      "scopes": ["Time Off and Leave"],
+      "permissions": [
+        "Request Time Off (REST Service) (Modify)",
+        "Request Time Off business process: let the security group initiate it"
+      ],
+      "forbidden": "The integration system user's security group needs Modify on Request Time Off (REST Service) and may need to be allowed to initiate the Request Time Off business process.",
+      "tools": ["workday_list_time_off_types", "workday_request_time_off"]
+    },
+    {
+      "id": "reports",
+      "label": "Run reports",
+      "description": "Run the reports added to this connection, filtered by their prompts.",
+      "scopes": [],
+      "permissions": [
+        "Each report shared with the integration system user, and View on the domains securing its data"
+      ],
+      "forbidden": "Share the report with the integration system user, enable it as a web service, and give its security group View on the domains securing the report's data.",
+      "tools": ["workday_list_reports", "workday_run_report"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "organizations",
+      "label": "Organizations",
+      "help": "Workday IDs of supervisory organizations (their sub-organizations included) or companies. The agent reaches only workers in them. Find an ID on the organization: Related Actions > Integration IDs > View Reference IDs (the Workday ID). Leave empty to allow every worker the account can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    {
+      "id": "reports",
+      "label": "Reports",
+      "help": "Leave empty to allow every report added to this connection.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_.-]{1,200}$"
+    }
+  ],
+  "verify": {
+    "label": "Workday tenant reached",
+    "check": "tenant"
+  },
+  "discover": {
+    "label": "Reports agents can run",
+    "check": "reports"
+  },
+  "revoke": "In Workday, open View API Clients, then API Clients for Integrations, then {brand.microsoft.appName}, and revoke its refresh token under Manage Refresh Tokens for Integrations, or inactivate the integration system user."
+}

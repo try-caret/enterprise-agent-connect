@@ -12,8 +12,8 @@
   ceiling (the most any agent may get from it). Tools outside that are never listed, and a call
   to one is refused and audited.
 - **Limits** narrow a capability to values: mailboxes, SharePoint sites and folders, Jira
-  projects, Okta groups, Salesforce objects, ServiceNow assignment groups and companies, account
-  numbers, or any list an `http` connector declares. They are checked on every call, including
+  projects, Okta groups, Salesforce objects, ServiceNow assignment groups and companies, Workday
+  organizations and reports, account numbers, or any list an `http` connector declares. They are checked on every call, including
   against ids the agent passes in and, for `http` connectors, against fields of the answer.
 - **Destructive capabilities** (anything that deletes or overwrites) are off unless the admin
   confirms a warning, and every tool that deletes must sit in one. The service refuses to start
