@@ -451,6 +451,8 @@ export const connectorSchema = z
   );
 
 export type Connector = z.infer<typeof connectorSchema>;
+/** A connector.json as written, before defaults and {brand.*} placeholders are filled. */
+export type ConnectorJson = z.input<typeof connectorSchema>;
 export type Capability = Connector["capabilities"][number];
 
 // One sign-in shared by several apps, e.g. a customer's Microsoft Entra app used by mail and
@@ -481,9 +483,11 @@ export const providerSchema = z
 
 export type Provider = z.infer<typeof providerSchema>;
 
-/** The code behind one connector folder: its vendor client and its tools. */
+/** The code behind one connector: its vendor client and its tools. */
 export type ConnectorModule = {
   id: string;
+  // Its connector.json inline, for a module that has no folder of its own.
+  connector?: ConnectorJson;
   create(ctx: { microsoft: MicrosoftClient; connector: Connector }): {
     vendor: Vendor;
     toolset: Toolset;
@@ -493,6 +497,22 @@ export type ConnectorModule = {
 /** The repo's connectors/ folder, beside packages/ (and so beside dist/packages/ once built). */
 export const CONNECTORS_DIR = new URL("../../../connectors/", import.meta.url);
 
+function parse<T>(raw: unknown, where: string, schema: z.ZodType<T>): T {
+  let filled: unknown;
+  try {
+    filled = fillBrandDeep(raw);
+  } catch (error) {
+    throw new Error(`${where}: ${(error as Error).message}`);
+  }
+  const parsed = schema.safeParse(filled);
+  if (!parsed.success) throw new Error(`${where}: ${z.prettifyError(parsed.error)}`);
+  return parsed.data;
+}
+
+/** A definition given inline rather than in a folder, checked as loadConnectors checks one. */
+export const parseConnector = (raw: unknown, where: string): Connector =>
+  parse(raw, where, connectorSchema);
+
 // Each subfolder of dir holding `file` is one definition, whose id is the folder's name.
 // Subfolders may be links: Kubernetes mounts ConfigMap and Secret folders that way.
 function loadDir<T>(dir: URL, file: string, schema: z.ZodType<T & { id: string }>): T[] {
@@ -501,17 +521,9 @@ function loadDir<T>(dir: URL, file: string, schema: z.ZodType<T & { id: string }
     .sort()
     .map((name) => {
       const where = `${name}/${file}`;
-      const raw = JSON.parse(readFileSync(new URL(where, dir), "utf8"));
-      let filled: unknown;
-      try {
-        filled = fillBrandDeep(raw);
-      } catch (error) {
-        throw new Error(`${where}: ${(error as Error).message}`);
-      }
-      const parsed = schema.safeParse(filled);
-      if (!parsed.success) throw new Error(`${where}: ${z.prettifyError(parsed.error)}`);
-      if (parsed.data.id !== name) throw new Error(`${where}: id must match the folder name`);
-      return parsed.data;
+      const data = parse(JSON.parse(readFileSync(new URL(where, dir), "utf8")), where, schema);
+      if (data.id !== name) throw new Error(`${where}: id must match the folder name`);
+      return data;
     });
 }
 

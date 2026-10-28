@@ -25,7 +25,12 @@ delete), write a `ConnectorModule` next to the JSON:
 - `index.ts`: `export default { id, create }`.
 
 Then either add it to `packages/server/src/builtin.ts` (to contribute it here) or pass it to
-`createAgentConnect({ connectors: [...builtinConnectors, myApp] })` in your own Node app.
+`createAgentConnect({ connectors: [...builtinConnectors, myApp] })` in your own Node app. Outside
+this repo, import the same helpers and types from `@arbium/enterprise-agent-connect/kit`, and give
+the module its definition inline (`connector: { ...its connector.json }`) instead of a folder in
+`extraConnectorDirs`. A definition with an `http` block can go into `connectors` alone, with no
+module. A built-in app is offered only while its module is in `connectors`. Example: the
+README's "Use it in your code".
 
 At startup the service checks that every tool a capability names exists, that each tool is in
 at least one capability, and that every tool marked destructive sits in a destructive
