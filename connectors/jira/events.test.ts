@@ -92,11 +92,16 @@ test("a poll asks Jira for what changed since the cursor, in the subscription's 
     filter: poll.filter!.replace("{value}", "project = KAN"),
   }) as { body: { jql: string } };
   assert.equal(request.body.jql, "(project = KAN) AND updated >= -6m ORDER BY updated ASC");
-  const found = { key: "KAN-7", fields: { created: "t1", updated: "t1" } };
+  // Jira stamps a new issue's update just after its creation: created is what makes it new.
+  const found = {
+    key: "KAN-7",
+    fields: { created: "2026-10-28T08:58:46.211+0200", updated: "2026-10-28T08:58:46.437+0200" },
+  };
   const item = { [poll.wrap!]: found };
-  assert.equal(valueAt(item, poll.types[0].same![0]), valueAt(item, poll.types[0].same![1]));
+  assert.deepEqual(poll.types[0], { type: "jira:issue_created", since: "issue.fields.created" });
+  assert.equal(valueAt(item, poll.types[0].since!), found.fields.created);
   assert.deepEqual(
     poll.deliveryId.map((p) => valueAt(item, p)),
-    ["KAN-7", "t1"],
+    ["KAN-7", found.fields.updated],
   );
 });

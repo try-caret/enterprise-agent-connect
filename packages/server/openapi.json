@@ -10062,21 +10062,9 @@
                           "type": "string",
                           "pattern": "^[A-Za-z0-9_.:-]{1,100}$"
                         },
-                        "same": {
-                          "type": "array",
-                          "prefixItems": [
-                            {
-                              "type": "string",
-                              "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
-                            },
-                            {
-                              "type": "string",
-                              "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
-                            }
-                          ],
-                          "items": false,
-                          "minItems": 2,
-                          "maxItems": 2
+                        "since": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
                         }
                       },
                       "required": [

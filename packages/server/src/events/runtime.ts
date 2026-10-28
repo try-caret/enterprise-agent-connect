@@ -375,9 +375,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       let newest = cursor;
       for (const item of Array.isArray(items) ? items : []) {
         const body = p.wrap ? { [p.wrap]: item } : item;
-        const same = (a: string, b: string) =>
-          JSON.stringify(valueAt(body, a)) === JSON.stringify(valueAt(body, b));
-        const type = p.types.find((t) => !t.same || same(...t.same))?.type ?? null;
+        const after = (path: string) => {
+          const at = valueAt(body, path);
+          return typeof at === "string" && Date.parse(at) > since;
+        };
+        const type = p.types.find((t) => !t.since || after(t.since))?.type ?? null;
         const deliveryId = p.deliveryId.map((path) => String(valueAt(body, path) ?? "")).join("@");
         const at = valueAt(body, p.cursor);
         if (typeof at === "string" && Date.parse(at) > Date.parse(newest)) newest = at;

@@ -822,7 +822,9 @@ const eventsSchema = z
     // the cursor, rounded up, plus one) {cursor} and {filter} (the subscription's filter put
     // into `filter`'s {value}, or nothing); `items` the list in the answer, each kept under
     // `wrap` so the webhook's paths fit; `cursor` the item's change time; `deliveryId` the
-    // paths joined into an id; `types` the first whose `same` paths are equal (or that has none).
+    // paths joined into an id; `types` the first whose `since` time is after the cursor the poll
+    // started from (or that has none): a record created since the last poll is new, whatever
+    // its change time says (Jira stamps an issue's update just after its creation).
     poll: z
       .object({
         request: eventRequest,
@@ -833,7 +835,7 @@ const eventsSchema = z
         deliveryId: z.array(eventPath).min(1),
         types: z
           .array(
-            z.object({ type: eventId, same: z.tuple([eventPath, eventPath]).optional() }).strict(),
+            z.object({ type: eventId, since: eventPath.optional() }).strict(),
           )
           .min(1),
       })

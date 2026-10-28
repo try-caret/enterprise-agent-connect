@@ -261,7 +261,7 @@
       "types": [
         {
           "type": "jira:issue_created",
-          "same": ["issue.fields.created", "issue.fields.updated"]
+          "since": "issue.fields.created"
         },
         {
           "type": "jira:issue_updated"

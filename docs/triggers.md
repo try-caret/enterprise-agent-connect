@@ -87,9 +87,9 @@ POST /agent-connect/admin/v1/orgs/{org}/event-subscriptions
 
 Every interval the service searches `(<filter>) AND updated >= -<minutes>m ORDER BY updated ASC`
 with the connection's own service account, minutes counted from the cursor (the newest `updated`
-seen, starting when the subscription was made). An issue whose `created` equals its `updated` is
-`jira:issue_created`, any other `jira:issue_updated`; its id is `<key>@<updated>`, so the
-overlap between polls starts nothing twice. A poll cannot see deleted issues or comments, and
+seen, starting when the subscription was made). An issue created after the cursor is
+`jira:issue_created` (even if it was also changed since), any other `jira:issue_updated`; its id
+is `<key>@<updated>`, so the overlap between polls starts nothing twice. A poll cannot see deleted issues or comments, and
 cannot tell who made a change, so the own-change guard does not apply: when the agent may also
 change issues, give its trigger a condition that its own change no longer meets (for example
 `{"field": "status", "in": ["To Do"]}` when the agent moves the issue on) and keep its caps low.
@@ -151,7 +151,7 @@ adds them the same way. Paths are `a.b`, or `a[].b` for every item of a list.
     "request": {"method": "GET", "path": "/tickets?changed_since_minutes={minutes}{filter}"},
     "filter": "&q={value}",
     "items": "tickets", "cursor": "changed_at", "deliveryId": ["id", "changed_at"],
-    "types": [{"type": "ticket.created", "same": ["created_at", "changed_at"]},
+    "types": [{"type": "ticket.created", "since": "created_at"},
               {"type": "ticket.updated"}]
   }
 }
