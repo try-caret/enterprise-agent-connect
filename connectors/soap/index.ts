@@ -106,7 +106,7 @@ function failure(status: number, data: unknown): string {
 export function soapVendor(connector: Connector, fetchImpl: Fetch = fetch): Vendor {
   const soap = connector.soap!;
   const endpoint = new URL(soap.endpoint);
-  const safe = guardedFetch([endpoint.origin], fetchImpl, XML_TYPES);
+  const safe = guardedFetch([endpoint.origin], fetchImpl, XML_TYPES, "XML, JSON or text");
   const ns = Object.entries(soap.namespaces)
     .map(([prefix, uri]) => ` xmlns:${prefix}="${escapeXml(uri)}"`)
     .join("");

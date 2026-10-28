@@ -374,7 +374,7 @@ test("answers with a DTD, unknown entities or no envelope are refused", async ()
   respond = xml(employee("IT"), 200, "application/octet-stream");
   assert.match(
     (await run(hr(), "hr_get_employee", { employee_id: "E1" })).text,
-    /only JSON or text/,
+    /application\/octet-stream; only XML, JSON or text is passed on/,
   );
 });
 

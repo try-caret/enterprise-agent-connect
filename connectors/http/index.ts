@@ -42,6 +42,8 @@ export function guardedFetch(
   allowed: string[],
   fetchImpl: Fetch = fetch,
   types = /^(application\/([\w.+-]*\+)?json|text\/)/i,
+  // What `types` lets through, for the refusal.
+  passed = "JSON or text",
 ): Fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -60,7 +62,7 @@ export function guardedFetch(
     if (res.body && !types.test(type) && res.headers.get("content-length") !== "0") {
       await res.body.cancel();
       throw new ConnectError(
-        `The app answered ${type || "without a content type"}; only JSON or text is passed on`,
+        `The app answered ${type || "without a content type"}; only ${passed} is passed on`,
       );
     }
     const chunks: Uint8Array[] = [];
