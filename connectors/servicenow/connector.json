@@ -1,0 +1,228 @@
+{
+  "id": "servicenow",
+  "name": "ServiceNow",
+  "description": "Let agents work on incidents, look up changes, devices and knowledge articles, and order from the service catalog in your ServiceNow instance.",
+  "logo": "/brand/registry/servicenow.svg",
+  "identity": "A ServiceNow integration user named \"{brand.microsoft.appName}\" with web service access only. Agents never see more than its roles allow.",
+  "accountKey": "instance",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an integration user",
+      "body": "Create a user named \"{brand.microsoft.appName}\" and select Web service access only, so it can call the API but never sign in to the ServiceNow interface.",
+      "click": [
+        "All > User Administration > Users > New",
+        "User ID: {brand.microsoft.appName}, First name: {brand.microsoft.appName}",
+        "Select Web service access only > Submit"
+      ]
+    },
+    {
+      "title": "Give it the roles agents need",
+      "body": "Add these roles to the integration user. Each one matches something you allow below, so leave out any that agents will not use. Knowledge articles are read with the integration user's own access: it must be allowed to read the knowledge bases agents should search.",
+      "click": [
+        "All > User Administration > Users > {brand.microsoft.appName}",
+        "Roles tab > Edit > add each role below > Save"
+      ],
+      "permissions": true
+    },
+    {
+      "title": "Set its password",
+      "body": "Open the integration user, select Set Password, and copy the password it makes. You enter it below.",
+      "click": [
+        "All > User Administration > Users > {brand.microsoft.appName}",
+        "Set Password > Generate > Save Password"
+      ],
+      "option": { "field": "auth", "value": "basic" }
+    },
+    {
+      "title": "Turn on the client credentials sign-in",
+      "body": "ServiceNow turns this sign-in off by default. Create the system property glide.oauth.inbound.client.credential.grant_type.enabled, of type true | false, with the value true. You need the oauth_admin role (or admin).",
+      "click": [
+        "In the navigator filter, type sys_properties.list and press Enter > New",
+        "Name: glide.oauth.inbound.client.credential.grant_type.enabled",
+        "Type: true | false, Value: true > Submit"
+      ],
+      "link": {
+        "label": "About client credentials in ServiceNow",
+        "href": "https://docs.servicenow.com/bundle/xanadu-platform-security/page/integrate/authentication/concept/client-credentials.html"
+      },
+      "option": { "field": "auth", "value": "oauth" }
+    },
+    {
+      "title": "Create an OAuth application registry entry",
+      "body": "Create an OAuth API endpoint for external clients named \"{brand.microsoft.appName}\", and set its OAuth Application User to the integration user, so every call runs as that user. If the form does not show OAuth Application User, add it with Configure > Form Layout. Then copy the client ID and the client secret (select the lock icon to see it).",
+      "click": [
+        "All > System OAuth > Application Registry > New > Create an OAuth API endpoint for external clients",
+        "Name: {brand.microsoft.appName} > Submit, then open the new entry",
+        "Form menu > Configure > Form Layout > move OAuth Application User to Selected > Save",
+        "OAuth Application User: {brand.microsoft.appName} > Update"
+      ],
+      "option": { "field": "auth", "value": "oauth" }
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "instance",
+      "label": "Instance address",
+      "help": "The address you open ServiceNow at.",
+      "placeholder": "https://your-company.service-now.com",
+      "secret": false
+    },
+    {
+      "id": "auth",
+      "label": "Sign-in",
+      "secret": false,
+      "options": [
+        {
+          "value": "oauth",
+          "label": "OAuth application (recommended)",
+          "description": "An application registry entry that runs as the integration user. Its secret can be replaced without touching the user."
+        },
+        {
+          "value": "basic",
+          "label": "User name and password",
+          "description": "The integration user's own password. Use this when your instance cannot turn on client credentials."
+        }
+      ]
+    },
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false,
+      "requires": { "field": "auth", "value": "oauth" }
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret",
+      "secret": true,
+      "requires": { "field": "auth", "value": "oauth" }
+    },
+    {
+      "id": "username",
+      "label": "User ID",
+      "help": "The integration user's User ID.",
+      "secret": false,
+      "requires": { "field": "auth", "value": "basic" }
+    },
+    {
+      "id": "password",
+      "label": "Password",
+      "secret": true,
+      "requires": { "field": "auth", "value": "basic" }
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read_incidents",
+      "label": "Read incidents",
+      "description": "Search and read incidents, with their comments and work notes.",
+      "scopes": [],
+      "permissions": ["sn_incident_read"],
+      "forbidden": "Give the integration user the sn_incident_read role.",
+      "tools": ["servicenow_search_incidents", "servicenow_get_incident"]
+    },
+    {
+      "id": "create_incidents",
+      "label": "Open incidents",
+      "description": "Open new incidents.",
+      "scopes": [],
+      "permissions": ["sn_incident_write"],
+      "forbidden": "Give the integration user the sn_incident_write role.",
+      "tools": ["servicenow_create_incident"]
+    },
+    {
+      "id": "update_incidents",
+      "label": "Work on incidents",
+      "description": "Change and reassign incidents, add work notes and customer comments, and resolve incidents. A customer comment is usually emailed to the caller.",
+      "scopes": [],
+      "permissions": ["sn_incident_write"],
+      "forbidden": "Give the integration user the sn_incident_write role.",
+      "tools": [
+        "servicenow_update_incident",
+        "servicenow_add_incident_note",
+        "servicenow_resolve_incident"
+      ]
+    },
+    {
+      "id": "read_changes",
+      "label": "Read change requests",
+      "description": "Search and read change requests and their plans.",
+      "scopes": [],
+      "permissions": ["sn_change_read"],
+      "forbidden": "Give the integration user the sn_change_read role.",
+      "tools": ["servicenow_search_changes", "servicenow_get_change"]
+    },
+    {
+      "id": "read_cmdb",
+      "label": "Look up devices and systems",
+      "description": "Find configuration items in the CMDB by name or serial number.",
+      "scopes": [],
+      "permissions": ["cmdb_read"],
+      "forbidden": "Give the integration user the cmdb_read role.",
+      "tools": ["servicenow_find_configuration_items"]
+    },
+    {
+      "id": "read_knowledge",
+      "label": "Read knowledge articles",
+      "description": "Search and read published knowledge articles, as text.",
+      "scopes": [],
+      "permissions": [],
+      "forbidden": "Let the integration user read the knowledge bases agents should search (each knowledge base's Can Read user criteria).",
+      "tools": ["servicenow_search_knowledge", "servicenow_get_article"]
+    },
+    {
+      "id": "requests",
+      "label": "Browse the catalog and track requests",
+      "description": "Search the service catalog and follow requested items. Without the itil role agents see only the requests they placed.",
+      "scopes": [],
+      "permissions": ["itil"],
+      "forbidden": "Give the integration user the itil role.",
+      "tools": [
+        "servicenow_search_catalog_items",
+        "servicenow_get_catalog_item",
+        "servicenow_search_requests"
+      ]
+    },
+    {
+      "id": "order",
+      "label": "Order from the catalog",
+      "description": "Order catalog items for people. Each order starts the item's approvals and fulfillment.",
+      "note": "Orders go through the approvals your catalog items already have. An item with no approval is fulfilled as ordered.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["servicenow_order_catalog_item"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "groups",
+      "label": "Assignment groups",
+      "help": "Group names, each unique in your instance. Incidents and change requests of other groups are hidden and cannot be changed, and new incidents must go to one of these. Leave empty to allow every group.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[^\\^\\r\\n]{1,100}$"
+    },
+    {
+      "id": "companies",
+      "label": "Companies",
+      "help": "Company names. Incidents, change requests, configuration items and requested items of other companies are hidden and cannot be changed, and agents may open incidents and order only for people of these companies. Knowledge articles and the catalog are not narrowed. Leave empty to allow every company.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[^\\^\\r\\n]{1,100}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/api/now/table/sys_user?sysparm_query=sys_id%3Djavascript%3Ags.getUserID()&sysparm_fields=user_name&sysparm_limit=1",
+    "label": "Signed in as",
+    "show": "result[].user_name"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/api/now/table/sys_user_group?sysparm_query=active%3Dtrue%5EORDERBYname&sysparm_fields=name&sysparm_limit=500",
+    "label": "Assignment groups",
+    "show": "result[].name"
+  },
+  "revoke": "In ServiceNow, open System OAuth, then Application Registry, and set the {brand.microsoft.appName} entry to inactive, or open User Administration, then Users, and set the {brand.microsoft.appName} user to inactive."
+}
