@@ -4,6 +4,7 @@ import fedex from "../../../connectors/fedex/index.js";
 import intune from "../../../connectors/intune/index.js";
 import jamf from "../../../connectors/jamf/index.js";
 import jira from "../../../connectors/jira/index.js";
+import netsuite from "../../../connectors/netsuite/index.js";
 import okta from "../../../connectors/okta/index.js";
 import outlookCalendar from "../../../connectors/outlook-calendar/index.js";
 import outlookMail from "../../../connectors/outlook-mail/index.js";
@@ -36,4 +37,5 @@ export const builtinConnectors: ConnectorModule[] = [
   jamf,
   sapS4hana,
   workday,
+  netsuite,
 ];
