@@ -1700,10 +1700,7 @@ export interface components {
                     deliveryId: string[];
                     types: {
                         type: string;
-                        same?: [
-                            string,
-                            string
-                        ];
+                        since?: string;
                     }[];
                 };
             };

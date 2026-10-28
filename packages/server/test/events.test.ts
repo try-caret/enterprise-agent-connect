@@ -71,7 +71,7 @@ const tracker = parseConnector(
         wrap: "item",
         cursor: "item.updated",
         deliveryId: ["item.key", "item.updated"],
-        types: [{ type: "created", same: ["item.created", "item.updated"] }, { type: "updated" }],
+        types: [{ type: "created", since: "item.created" }, { type: "updated" }],
       },
     },
   },
@@ -362,8 +362,10 @@ test(
     assert.equal(subscription.url, null);
     await t.trigger({ eventTypes: ["created", "updated"] });
     const later = (s: number) => new Date(Date.now() + s * 1000).toISOString();
-    const a = { key: "KAN-1", project: "KAN", created: later(1), updated: later(1) };
-    const b = { key: "KAN-2", project: "KAN", created: later(0), updated: later(2) };
+    // KAN-1 is new: created after the subscription, its update stamped just after (as Jira
+    // does). KAN-2 was made before and changed since.
+    const a = { key: "KAN-1", project: "KAN", created: later(1), updated: later(1.2) };
+    const b = { key: "KAN-2", project: "KAN", created: later(-3600), updated: later(2) };
     t.answers.set("/search", { status: 200, data: { items: [a, b] } });
 
     const sub = async () => (await t.events.subscription(subscription.id))!;
