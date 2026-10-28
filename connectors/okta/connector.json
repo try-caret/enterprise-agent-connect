@@ -1,0 +1,193 @@
+{
+  "id": "okta",
+  "name": "Okta",
+  "description": "Let agents look up people, groups, apps and sign-in activity in Okta and, if you allow it, help people back in: unlock accounts, send password reset emails, reset MFA, change group membership, suspend or deactivate.",
+  "logo": "/brand/registry/okta.svg",
+  "identity": "An Okta API service app named \"{brand.microsoft.appName}\". It signs in with a key pair, has only the Okta API scopes you grant it, and can act only within the admin role you assign it. Each API key can be kept to the members of chosen groups.",
+  "accountKey": "org",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API service app",
+      "body": "In the Okta Admin Console, create an API Services app named \"{brand.microsoft.appName}\". You need a Super Administrator for this and the steps below. Keep its Client ID for the form below.",
+      "link": {
+        "label": "Okta: service app for the Okta API",
+        "href": "https://developer.okta.com/docs/guides/implement-oauth-for-okta-serviceapp/main/"
+      },
+      "click": [
+        "In the Okta Admin Console, go to Applications, then Applications, and select Create App Integration.",
+        "Choose API Services and select Next.",
+        "Name it {brand.microsoft.appName} and select Save.",
+        "On the General tab, copy the Client ID."
+      ]
+    },
+    {
+      "title": "Give it a key pair",
+      "body": "The app signs in with a private key instead of a secret. Okta generates the key and shows the private key only once. Clear the proof-of-possession (DPoP) requirement: the app does not send it.",
+      "click": [
+        "On the app's General tab, under Client Credentials, select Edit.",
+        "For Client authentication choose Public key / Private key, and clear Require Demonstrating Proof of Possession (DPoP) header in token requests.",
+        "Under Public keys select Add key, then Generate new key. Copy the private key (PEM), then select Done.",
+        "Select Save. Copy the KID shown beside the key."
+      ]
+    },
+    {
+      "title": "Grant these Okta API scopes",
+      "body": "On the app's Okta API Scopes tab, grant exactly these and nothing else. The app can do nothing a scope does not cover. With Commands, use an Okta API token of a Super Administrator (Security, then API, then Tokens) and the app's Client ID.",
+      "click": [
+        "Open the app's Okta API Scopes tab.",
+        "Select Grant beside each of {scopes}."
+      ],
+      "copy": [
+        "OKTA=https://your-company.okta.com",
+        "CLIENT_ID=the-client-id",
+        "curl -s -X POST \"$OKTA/api/v1/apps/$CLIENT_ID/grants\" -H \"Authorization: SSWS $OKTA_API_TOKEN\" -H \"Content-Type: application/json\" -d \"{\\\"scopeId\\\": \\\"{scope}\\\", \\\"issuer\\\": \\\"$OKTA\\\"}\""
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Assign it an admin role",
+      "body": "Okta also checks the app's admin role on every call, so a scope alone is not enough. Create a custom admin role with the permissions below and a resource set holding the groups agents may work with, then assign both to the app. Okta then refuses anything outside them, whatever an agent asks.",
+      "permissions": true,
+      "click": [
+        "Go to Security, then Administrators, then Roles, and select Create new role. Name it {brand.microsoft.appName}, tick the permissions below and select Save role.",
+        "Under Resources, select Create new resource set, add the groups agents may work with, and save it.",
+        "Open the app's Admin roles tab and select Edit assignments, then Add assignment.",
+        "Choose the role and the resource set you made, and select Save changes."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "org",
+      "label": "Okta address",
+      "help": "Your Okta organization's address, without -admin.",
+      "placeholder": "your-company.okta.com",
+      "secret": false
+    },
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "help": "On the app's General tab.",
+      "secret": false
+    },
+    {
+      "id": "key_id",
+      "label": "Key ID (KID)",
+      "help": "Shown beside the key under Public keys.",
+      "secret": false
+    },
+    {
+      "id": "private_key",
+      "label": "Private key",
+      "help": "The private key Okta showed when it generated the key, PEM or JSON.",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Look up people and groups",
+      "description": "Find people and read their username, email, title, department, account status, last sign-in, groups and enrolled MFA factors. Find groups and list their members.",
+      "required": true,
+      "note": "Reaches everyone in your Okta organization unless you keep a key to chosen groups under API keys. Read-only.",
+      "scopes": ["okta.users.read", "okta.groups.read"],
+      "permissions": ["View users and their details", "View groups and their details"],
+      "tools": [
+        "okta_get_user",
+        "okta_search_users",
+        "okta_list_factors",
+        "okta_search_groups",
+        "okta_list_group_members"
+      ],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it (the Okta page in {brand.productName} shows how)."
+    },
+    {
+      "id": "read_apps",
+      "label": "Look up apps",
+      "description": "List the apps in Okta and the apps assigned to a person.",
+      "scopes": ["okta.apps.read"],
+      "permissions": ["View applications and their details"],
+      "tools": ["okta_list_apps"],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it."
+    },
+    {
+      "id": "read_activity",
+      "label": "Read sign-in activity",
+      "description": "Read a person's recent sign-ins, MFA challenges, lockouts and account changes from the System Log, with IP address, place and browser.",
+      "scopes": ["okta.logs.read"],
+      "permissions": ["View the System Log"],
+      "tools": ["okta_get_user_activity"],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it."
+    },
+    {
+      "id": "manage_groups",
+      "label": "Change group membership",
+      "description": "Add people to groups and remove them. Membership can give people apps and access.",
+      "note": "With a key kept to chosen groups, agents can only add or remove those groups' members, and only to and from those groups.",
+      "scopes": ["okta.groups.manage"],
+      "permissions": ["Manage group membership"],
+      "tools": ["okta_add_group_member", "okta_remove_group_member"],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it."
+    },
+    {
+      "id": "helpdesk",
+      "label": "Unlock accounts and send password resets",
+      "description": "Unlock people who are locked out, and email people a link to set a new password.",
+      "scopes": ["okta.users.manage"],
+      "permissions": ["Unlock users", "Reset users' passwords"],
+      "tools": ["okta_unlock_user", "okta_send_password_reset"],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it."
+    },
+    {
+      "id": "reset_mfa",
+      "label": "Reset MFA",
+      "description": "Remove a person's enrolled MFA factor, e.g. after a lost phone. They set it up again at their next sign-in.",
+      "destructive": true,
+      "note": "Until they set it up again, the person signs in without that factor. Okta cannot bring a removed factor back.",
+      "scopes": ["okta.users.manage"],
+      "permissions": ["Reset users' authenticators"],
+      "tools": ["okta_reset_factor"],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it."
+    },
+    {
+      "id": "suspend",
+      "label": "Suspend people and sign them out",
+      "description": "Suspend and unsuspend people, and sign people out of every session.",
+      "destructive": true,
+      "note": "A suspended or signed-out person cannot work until someone lets them back in.",
+      "scopes": ["okta.users.manage"],
+      "permissions": ["Suspend users", "Unsuspend users", "Clear users' sessions"],
+      "tools": ["okta_suspend_user", "okta_unsuspend_user", "okta_clear_sessions"],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it."
+    },
+    {
+      "id": "deactivate",
+      "label": "Deactivate people",
+      "description": "Deactivate people: they can no longer sign in, and apps set up for it remove their accounts.",
+      "destructive": true,
+      "note": "Deactivating can remove a person's accounts in other apps. Only an administrator can reactivate them, and removed app accounts may not come back.",
+      "scopes": ["okta.users.manage"],
+      "permissions": ["Deactivate users"],
+      "tools": ["okta_deactivate_user"],
+      "forbidden": "Okta refused this. The app needs {scopes} granted and an admin role that allows it."
+    }
+  ],
+  "limits": [
+    {
+      "id": "groups",
+      "label": "Groups",
+      "help": "Optional: only people in these groups (their ids, 00g..., from the group's address in the Okta Admin Console), and only these groups. Leave empty for everyone.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^00g[A-Za-z0-9]{17}$"
+    }
+  ],
+  "verify": {
+    "label": "Okta API scopes the app has",
+    "check": "scopes",
+    "ifEmpty": "The app has none of the Okta API scopes needed yet. Grant them on its Okta API Scopes tab."
+  },
+  "revoke": "In the Okta Admin Console, open Applications, then {brand.microsoft.appName}, and deactivate it, or remove its key or its Okta API scopes. Agents lose access to Okta at once."
+}

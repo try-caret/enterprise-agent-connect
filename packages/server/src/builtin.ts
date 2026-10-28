@@ -3,6 +3,7 @@ import entra from "../../../connectors/entra/index.js";
 import fedex from "../../../connectors/fedex/index.js";
 import intune from "../../../connectors/intune/index.js";
 import jira from "../../../connectors/jira/index.js";
+import okta from "../../../connectors/okta/index.js";
 import outlookCalendar from "../../../connectors/outlook-calendar/index.js";
 import outlookMail from "../../../connectors/outlook-mail/index.js";
 import salesforce from "../../../connectors/salesforce/index.js";
@@ -26,4 +27,5 @@ export const builtinConnectors: ConnectorModule[] = [
   entra,
   intune,
   slack,
+  okta,
 ];
