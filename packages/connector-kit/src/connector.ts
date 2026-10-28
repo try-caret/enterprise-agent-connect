@@ -153,9 +153,18 @@ export type Probe = z.infer<typeof probeSchema>;
 
 // An app described entirely here, e.g. a company's internal REST API: the generic http module
 // (connectors/http) runs it, so it needs no code. Auth values are the ids of connect form fields.
+const headerName = z.string().regex(/^[A-Za-z0-9-]+$/);
+// Printable ASCII only: a header value can never carry a line break into the request.
+const headerValue = z.string().regex(/^[\x20-\x7E]*$/);
 const httpAuthSchema = z.discriminatedUnion("type", [
   z
-    .object({ type: z.literal("header"), header: z.string().regex(/^[A-Za-z0-9-]+$/), value: slug })
+    .object({
+      type: z.literal("header"),
+      header: headerName,
+      value: slug,
+      // Written before the value, e.g. "SSWS " (Okta) or "Token token=" (PagerDuty).
+      prefix: headerValue.optional(),
+    })
     .strict(),
   z.object({ type: z.literal("bearer"), token: slug }).strict(),
   z.object({ type: z.literal("basic"), username: slug, password: slug }).strict(),
@@ -167,19 +176,88 @@ const httpAuthSchema = z.discriminatedUnion("type", [
       clientSecret: slug,
     })
     .strict(),
+  // Added to every call's query string, e.g. ?api_key=…
+  z
+    .object({
+      type: z.literal("query"),
+      param: z.string().regex(/^[A-Za-z0-9_.-]+$/),
+      value: slug,
+    })
+    .strict(),
 ]);
+
+const scalarType = z.enum(["string", "number", "integer", "boolean"]);
+const scalar = z.union([z.string(), z.number(), z.boolean()]);
+const fitsType = (type: string, v: unknown) =>
+  type === "integer"
+    ? Number.isInteger(v)
+    : type === "number" || type === "string" || type === "boolean"
+      ? typeof v === type
+      : false;
 
 const httpParamSchema = z
   .object({
-    type: z.enum(["string", "number", "integer", "boolean"]),
+    type: z.enum(["string", "number", "integer", "boolean", "array"]),
     description: text,
     // Where it goes; a {name} in the path template is always "path".
     in: z.enum(["path", "query", "body"]),
+    // The name the app knows it by, when it is not this param's own (e.g. pageToken).
+    name: z
+      .string()
+      .regex(/^[A-Za-z0-9_.\-[\]]+$/)
+      .optional(),
     required: z.boolean().default(true),
+    // Sent when the agent leaves the param out; such a param is never required.
+    default: z.union([scalar, z.array(scalar)]).optional(),
+    // The only values the agent may send (each item's, for an array).
+    enum: z.array(scalar).min(1).optional(),
+    // An array's item type.
+    items: scalarType.optional(),
+    // An array in the query: one `name=` per item, unless joined with this, e.g. ",".
+    join: z.string().min(1).max(3).optional(),
     // The value must be one of the agent's values of this list limit, while it has any.
     limit: slug.optional(),
   })
-  .strict();
+  .strict()
+  .refine((p) => (p.type === "array") === Boolean(p.items), {
+    message: "An array param names its item type (items), and only an array param",
+  })
+  .refine((p) => !p.join || (p.type === "array" && p.in === "query"), {
+    message: "join is for array params in the query",
+  })
+  .refine(
+    (p) => {
+      const itemType = p.items ?? p.type;
+      const fits = (v: unknown) =>
+        fitsType(itemType, v) && (!p.enum || p.enum.some((e) => e === v));
+      return (
+        (p.enum ?? []).every((v) => fitsType(itemType, v)) &&
+        (p.default === undefined ||
+          (p.type === "array"
+            ? Array.isArray(p.default) && p.default.every(fits)
+            : fits(p.default)))
+      );
+    },
+    { message: "A param's enum and default match its type, and the default is one of its enum" },
+  );
+
+// Picks what the agent sees of a successful answer. `items`: a dot path to the list in the
+// answer, e.g. "data.results". `fields`: dot paths kept of each item (of the answer itself,
+// without `items`); a path through a list keeps that field of each of its items.
+const dotPath = z.string().regex(/^[A-Za-z0-9_$@-]+(\.[A-Za-z0-9_$@-]+)*$/);
+const httpResultSchema = z
+  .object({ items: dotPath.optional(), fields: z.array(dotPath).min(1).optional() })
+  .strict()
+  .refine((r) => r.items || r.fields, { message: "A result names items, fields or both" });
+
+// One page per call: `param` takes the cursor in, and the answer gives the next one from a
+// dot path in its body, a header, or the rel="next" address of its Link header (the value of
+// `param` there). The agent gets {items, next}.
+const httpPagingSchema = z.union([
+  z.object({ param: slug, body: dotPath }).strict(),
+  z.object({ param: slug, header: headerName }).strict(),
+  z.object({ param: slug, link: z.literal(true) }).strict(),
+]);
 
 const httpToolSchema = z
   .object({
@@ -194,13 +272,9 @@ const httpToolSchema = z
     // Checked in the answer, for calls whose params cannot be limited (e.g. an order by id):
     // while the agent has values of `limit`, the answer's `field` (a dot path; every item of a
     // list) must be one of them, else nothing is returned. A missing field is refused.
-    answerLimits: z
-      .array(
-        z
-          .object({ field: z.string().regex(/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/), limit: slug })
-          .strict(),
-      )
-      .default([]),
+    answerLimits: z.array(z.object({ field: dotPath, limit: slug }).strict()).default([]),
+    result: httpResultSchema.optional(),
+    paging: httpPagingSchema.optional(),
   })
   .strict()
   .refine(
@@ -208,11 +282,19 @@ const httpToolSchema = z
       const inPath = [...t.path.matchAll(/\{([a-z][a-z0-9_]*)\}/g)].map((m) => m[1]);
       const declared = Object.entries(t.params).filter(([, p]) => p.in === "path");
       return (
-        inPath.every((n) => t.params[n]?.in === "path" && t.params[n].required) &&
-        declared.every(([n]) => inPath.includes(n))
+        inPath.every(
+          (n) =>
+            t.params[n]?.in === "path" &&
+            t.params[n].required &&
+            t.params[n].default === undefined &&
+            t.params[n].type !== "array",
+        ) && declared.every(([n]) => inPath.includes(n))
       );
     },
-    { message: "Each {param} in a tool's path is a required path param, and only those" },
+    {
+      message:
+        "Each {param} in a tool's path is a required path param with one value and no default, and only those",
+    },
   )
   .refine((t) => !Object.values(t.params).some((p) => p.in === "body") || t.method !== "GET", {
     message: "A GET tool has no body params",
@@ -220,13 +302,43 @@ const httpToolSchema = z
   // Checked after the call, so only for reads: a write would already have happened.
   .refine((t) => !t.answerLimits.length || t.method === "GET", {
     message: "answerLimits are for GET tools only",
-  });
+  })
+  .refine(
+    (t) => {
+      const p = t.paging && t.params[t.paging.param];
+      return !t.paging || (p && p.in !== "path" && p.type !== "array" && p.type !== "boolean");
+    },
+    { message: "paging.param is one of the tool's query or body params, a string or number" },
+  )
+  .refine(
+    (t) => {
+      const wire = Object.entries(t.params).map(([k, p]) => `${p.in}:${p.name ?? k}`);
+      return new Set(wire).size === wire.length;
+    },
+    { message: "Two params of a tool are sent under the same name" },
+  );
+
+// Headers no `headers` entry may set: credentials go through `auth` (secret fields), and the
+// rest the service sets itself.
+const RESERVED_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "host",
+  "content-type",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+]);
+const CREDENTIAL_LIKE = /auth|token|secret|key|password|session|cookie/i;
 
 const httpSchema = z
   .object({
     // Every call goes to this origin, under this path, and nowhere else: redirects are refused.
     baseUrl: z.url({ protocol: /^https?$/ }).refine((u) => !/[?#]/.test(u), "No query or fragment"),
     auth: httpAuthSchema,
+    // Sent with every call, e.g. an API version or Accept. Not secret: never credentials.
+    headers: z.record(headerName, headerValue).default({}),
     tools: z.array(httpToolSchema).min(1),
     // Plain http for baseUrl and the token URL, e.g. an app inside the cluster. Off by default.
     allowInsecureHttp: z.boolean().default(false),
@@ -239,6 +351,29 @@ const httpSchema = z
         u.startsWith("https://"),
       ),
     { message: "baseUrl and tokenUrl must be https unless allowInsecureHttp is true" },
+  )
+  .refine(
+    (h) =>
+      Object.keys(h.headers).every(
+        (name) =>
+          !RESERVED_HEADERS.has(name.toLowerCase()) &&
+          !CREDENTIAL_LIKE.test(name) &&
+          !(h.auth.type === "header" && h.auth.header.toLowerCase() === name.toLowerCase()),
+      ),
+    {
+      message:
+        "headers are not secret, so they cannot carry credentials (use auth) or headers the service sets",
+    },
+  )
+  .refine(
+    (h) =>
+      h.auth.type !== "query" ||
+      h.tools.every((t) =>
+        Object.entries(t.params).every(
+          ([k, p]) => p.in !== "query" || (p.name ?? k) !== (h.auth as { param: string }).param,
+        ),
+      ),
+    { message: "No tool param may be sent as the query auth param" },
   );
 export type HttpApp = z.infer<typeof httpSchema>;
 
@@ -378,7 +513,9 @@ export const connectorSchema = z
             ? field(a.token, true)
             : a.type === "basic"
               ? field(a.username, false) && field(a.password, true)
-              : field(a.clientId, false) && field(a.clientSecret, true);
+              : a.type === "query"
+                ? field(a.value, true)
+                : field(a.clientId, false) && field(a.clientSecret, true);
       const lists = new Set(c.limits.filter((l) => l.kind === "list").map((l) => l.id));
       return (
         secretsOk &&

@@ -7259,6 +7259,10 @@
                       "value": {
                         "type": "string",
                         "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "prefix": {
+                        "type": "string",
+                        "pattern": "^[\\x20-\\x7E]*$"
                       }
                     },
                     "required": [
@@ -7336,8 +7340,43 @@
                       "clientSecret"
                     ],
                     "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "query"
+                      },
+                      "param": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.-]+$"
+                      },
+                      "value": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "param",
+                      "value"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
+              },
+              "headers": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9-]+$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[\\x20-\\x7E]*$"
+                }
               },
               "tools": {
                 "minItems": 1,
@@ -7383,7 +7422,8 @@
                               "string",
                               "number",
                               "integer",
-                              "boolean"
+                              "boolean",
+                              "array"
                             ]
                           },
                           "description": {
@@ -7398,9 +7438,59 @@
                               "body"
                             ]
                           },
+                          "name": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_.\\-[\\]]+$"
+                          },
                           "required": {
                             "default": true,
                             "type": "boolean"
+                          },
+                          "default": {
+                            "anyOf": [
+                              {
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": [
+                                    "string",
+                                    "number",
+                                    "boolean"
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          "enum": {
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            }
+                          },
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "number",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "join": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 3
                           },
                           "limit": {
                             "type": "string",
@@ -7428,7 +7518,7 @@
                         "properties": {
                           "field": {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$"
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
                           },
                           "limit": {
                             "type": "string",
@@ -7441,6 +7531,82 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                        },
+                        "fields": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "paging": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "param": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "body": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "body"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "param": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "header": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9-]+$"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "header"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "param": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "link": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "link"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -7463,6 +7629,7 @@
             "required": [
               "baseUrl",
               "auth",
+              "headers",
               "tools",
               "allowInsecureHttp"
             ],

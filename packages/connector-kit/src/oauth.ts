@@ -75,7 +75,11 @@ export function clientCredentials(name: string, fetchImpl: Fetch) {
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
     });
     const raw = await res.text();
-    return { status: res.status, data: raw ? parse(raw) : null };
+    return {
+      status: res.status,
+      data: raw ? parse(raw) : null,
+      headers: Object.fromEntries(res.headers),
+    };
   }
 
   return {

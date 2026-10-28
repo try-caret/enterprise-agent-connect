@@ -1,0 +1,130 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Tracker", "version": "1.0", "description": "A small issue tracker." },
+  "servers": [{ "url": "https://{host}/api/v2", "variables": { "host": { "default": "tracker.example.com" } } }],
+  "security": [{ "apiKey": [] }],
+  "tags": [{ "name": "issues" }, { "name": "admin" }],
+  "paths": {
+    "/issues": {
+      "get": {
+        "operationId": "listIssues",
+        "tags": ["issues"],
+        "summary": "List issues.",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["open", "closed"], "default": "open" }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "explode": false,
+            "description": "Only issues with all these labels",
+            "schema": { "type": "array", "items": { "type": "string" } }
+          },
+          { "$ref": "#/components/parameters/PageToken" },
+          { "name": "X-Request-Id", "in": "header", "schema": { "type": "string" } },
+          { "name": "filter", "in": "query", "schema": { "type": "object" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of issues",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issues": { "type": "array", "items": { "$ref": "#/components/schemas/Issue" } },
+                    "nextPageToken": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIssue",
+        "tags": ["issues"],
+        "summary": "Create an issue.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  { "$ref": "#/components/schemas/IssueFields" },
+                  {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": { "assignee": { "type": "object" } }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/issues/{issueId}": {
+      "parameters": [
+        { "name": "issueId", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "getIssue",
+        "tags": ["issues"],
+        "summary": "Read one issue.",
+        "responses": {
+          "200": {
+            "description": "The issue",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Issue" } }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteIssue",
+        "tags": ["admin"],
+        "summary": "Delete an issue.",
+        "responses": { "204": { "description": "Deleted" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": { "apiKey": { "type": "apiKey", "in": "header", "name": "X-Tracker-Key" } },
+    "parameters": {
+      "PageToken": {
+        "name": "pageToken",
+        "in": "query",
+        "description": "The nextPageToken of the previous page",
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+      "IssueFields": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "A short title" },
+          "body": { "type": "string" },
+          "priority": { "type": "integer", "enum": [1, 2, 3], "default": 2 },
+          "labels": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Issue": {
+        "allOf": [
+          { "$ref": "#/components/schemas/IssueFields" },
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "readOnly": true },
+              "state": { "type": ["string", "null"] },
+              "author": { "type": "object", "properties": { "login": { "type": "string" } } }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
