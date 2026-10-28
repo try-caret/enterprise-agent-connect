@@ -2,6 +2,7 @@ import dellTechdirect from "../../../connectors/dell-techdirect/index.js";
 import dynamics365 from "../../../connectors/dynamics-365/index.js";
 import entra from "../../../connectors/entra/index.js";
 import fedex from "../../../connectors/fedex/index.js";
+import gong from "../../../connectors/gong/index.js";
 import intune from "../../../connectors/intune/index.js";
 import jamf from "../../../connectors/jamf/index.js";
 import jira from "../../../connectors/jira/index.js";
@@ -40,4 +41,5 @@ export const builtinConnectors: ConnectorModule[] = [
   workday,
   netsuite,
   dynamics365,
+  gong,
 ];
