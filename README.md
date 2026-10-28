@@ -5,7 +5,7 @@ grant it. Agents reach the apps through one MCP endpoint; every call is checked 
 agent's grants and written to an audit log. Agents never hold the apps' credentials.
 
 - **Built-in apps:** Jira, Microsoft 365 (Outlook mail and calendar, SharePoint files and Excel,
-  Teams, Entra ID, Intune), Okta, Slack, Salesforce, FedEx, Dell TechDirect.
+  Teams, Entra ID, Intune), Okta, Slack, Salesforce, ServiceNow, FedEx, Dell TechDirect.
 - **Your own apps without code:** describe an internal REST API or a SaaS app's in one
   `connector.json`, or draft one from its OpenAPI spec
   ([docs/http-connector.md](docs/http-connector.md)).

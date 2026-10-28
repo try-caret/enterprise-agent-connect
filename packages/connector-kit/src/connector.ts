@@ -102,7 +102,8 @@ const fieldSchema = z
     placeholder: text.optional(),
     secret: z.boolean(),
     options: z.array(optionSchema).min(2).optional(),
-    // Asked only while an earlier choice is this option; otherwise its first option holds.
+    // Asked only while an earlier choice is this option; otherwise a choice's first option
+    // holds and a text field is not asked (e.g. a password only for that sign-in method).
     requires: chosenSchema.optional(),
   })
   .strict();
@@ -570,7 +571,7 @@ export const connectorSchema = z
       return (
         [...c.setup, ...c.afterConnect].every((s) => !s.option || isOption(s.option, c.fields)) &&
         c.fields.every(
-          (f, i) => !f.requires || (f.options && isOption(f.requires, c.fields.slice(0, i))),
+          (f, i) => !f.requires || isOption(f.requires, c.fields.slice(0, i)),
         )
       );
     },

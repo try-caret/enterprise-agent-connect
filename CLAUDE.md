@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Okta, Slack, Salesforce, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Okta, Slack, Salesforce, ServiceNow, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -221,7 +221,8 @@ connectors/<id>/connector.json # one per app: logo (admin /brand path), setup st
                       # default; an option's `scopes` add to the token roles expected, and the
                       # admin page asks such a choice in step 1, before the steps naming
                       # {scopes}; `requires` {field, value}: asked only while an earlier choice
-                      # is that option, else its first option holds). Limits
+                      # is that option, else a choice's first option holds; a text field with
+                      # it is not asked at all, e.g. ServiceNow's password only for basic). Limits
                       # are list, text or map (`keys`: one value per chosen value of an earlier
                       # list limit, e.g. a folder per site). zod-validated at startup (connector-kit/src/connector.ts)
                       # Steps may carry `click` (the same step in the vendor's admin portals;
@@ -312,6 +313,7 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # only the app's own choice fields, from its connector.json; microsoftApp()
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
+                      # servicenow: OAuth client credentials or basic, on the instance;
                       # fedex, dell-techdirect on the kit's oauth.ts (client credentials, a
                       # cached token re-minted once on a 401); slack: a bot token, ok:false and
                       # 429 handling; okta: an API service app,
@@ -773,6 +775,34 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   read October 27, 2026, both taking JSON or form arguments; the other methods, rate limits and
   manifests from Slack's same reference, not re-read). Tested only against a fake Slack, never a
   real workspace.
+- ServiceNow (`servicenow`): an integration user (web service access only) on
+  its instance: a bare name is `<name>.service-now.com`; any other https address (a company's
+  own domain, a port) is taken as the admin entered it, the admin being trusted to name their
+  instance (no IP literal check, as for the `http` connector). Every call goes to that origin:
+  paths must start with a single `/`, the token URL is built on it, and a redirect is refused
+  (`noRedirects`), never followed. Sign-in choice `auth`: `oauth` (default; an application
+  registry entry "OAuth API endpoint for external clients" whose OAuth Application User is the
+  integration user, client credentials at `/oauth_token.do`, which ServiceNow only allows once
+  the system property `glide.oauth.inbound.client.credential.grant_type.enabled` is true; the
+  kit's `clientCredentials`) or `basic` (user ID and password). `accountKey` is the instance.
+  Table API with `sysparm_display_value=all` (references and choices read by display value,
+  times by value, UTC) and `sysparm_fields`; Service Catalog API for items and `order_now`.
+  Agents never send an encoded query: tools build it from their parameters and the key's
+  limits, and refuse any value with `^` (a new condition, or `^NQ` a new query), a line break
+  or `javascript:` (evaluated by ServiceNow in query values). Limits `groups` (assignment
+  group names) and `companies` (company names) are ANDed into every incident and change query
+  (`assignment_group.name=a^ORassignment_group.name=b`; companies alone for CIs and requested
+  items, on `company` and `requested_for.company`) and checked again on every record answered
+  (case-insensitive, as ServiceNow compares); a record by number outside them is answered as
+  not found. Writes read the incident within the limits first and change it by sys_id;
+  groups, callers and people ordered for are resolved to exactly one active record (under
+  `companies`, only people of those companies). Knowledge and the catalog are not limited.
+  Roles per capability: `sn_incident_read`, `sn_incident_write` (create and work),
+  `sn_change_read`, `cmdb_read`, `itil` (requests placed by others), knowledge by the
+  knowledge bases' user criteria; nothing deletes. Tests: `connectors/servicenow/tools.test.ts`
+  against a fake instance. Not yet run against a real instance (client credentials, the
+  `gs.getUserID()` verify probe, `123TEXTQUERY321` knowledge search and `sysparm_requested_for`
+  on `order_now` are from ServiceNow's docs and community, read October 27, 2026).
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under
