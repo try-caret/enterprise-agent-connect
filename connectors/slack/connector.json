@@ -1,0 +1,148 @@
+{
+  "id": "slack",
+  "name": "Slack",
+  "description": "Let agents read and post in the Slack channels you add them to.",
+  "logo": "/brand/slack.svg",
+  "identity": "A Slack app named \"{brand.microsoft.appName}\" in your workspace. It reads and posts only in channels someone adds it to, never in direct messages.",
+  "accountKey": "teamId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create the Slack app from a manifest",
+      "body": "Open Slack's app settings, select Create New App, then From a manifest, and choose your workspace. On the YAML tab, replace the example with this manifest, then select Next and Create. It asks only for the permissions the abilities you chose need.",
+      "link": {
+        "label": "Open Slack app settings",
+        "href": "https://api.slack.com/apps"
+      },
+      "copy": [
+        "display_information:",
+        "  name: \"{brand.microsoft.appName}\"",
+        "features:",
+        "  bot_user:",
+        "    display_name: \"{brand.microsoft.appName}\"",
+        "    always_online: false",
+        "oauth_config:",
+        "  scopes:",
+        "    bot:",
+        "      - {scope}",
+        "settings:",
+        "  org_deploy_enabled: false",
+        "  socket_mode_enabled: false",
+        "  token_rotation_enabled: false"
+      ]
+    },
+    {
+      "title": "Install it and copy its token",
+      "body": "Install the app to your workspace, then copy its Bot User OAuth Token, which starts with xoxb-. If your workspace needs approval for new apps, a Slack admin approves it first.",
+      "click": [
+        "api.slack.com/apps > {brand.microsoft.appName} > Install App > Install to your workspace > Allow",
+        "Install App > Bot User OAuth Token > Copy"
+      ]
+    },
+    {
+      "title": "Add it to the channels agents may use",
+      "body": "The app sees only the channels it is a member of. In each channel agents should use, type /invite @{brand.microsoft.appName} and send it. You can narrow each agent to some of these channels here later.",
+      "click": [
+        "The channel > the channel's name at the top > Integrations > Add an App > {brand.microsoft.appName} > Add"
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "bot_token",
+      "label": "Bot User OAuth Token",
+      "placeholder": "xoxb-...",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read channels",
+      "description": "List the channels the app was added to and read their messages and threads. Anyone who can post in those channels can write what the agent reads.",
+      "required": true,
+      "scopes": [
+        "channels:read",
+        "groups:read",
+        "channels:history",
+        "groups:history",
+        "users:read"
+      ],
+      "permissions": [],
+      "forbidden": "Add the bot scopes {scopes} to the Slack app under OAuth & Permissions, then reinstall it to the workspace.",
+      "tools": [
+        "slack_list_channels",
+        "slack_read_channel",
+        "slack_read_thread",
+        "slack_get_permalink"
+      ]
+    },
+    {
+      "id": "post",
+      "label": "Post messages",
+      "description": "Post messages and thread replies as the app in its channels.",
+      "scopes": ["chat:write"],
+      "permissions": [],
+      "forbidden": "Add the bot scope chat:write to the Slack app under OAuth & Permissions, then reinstall it to the workspace.",
+      "tools": ["slack_post_message"]
+    },
+    {
+      "id": "react",
+      "label": "Add reactions",
+      "description": "Add emoji reactions to messages as the app.",
+      "scopes": ["reactions:write"],
+      "permissions": [],
+      "forbidden": "Add the bot scope reactions:write to the Slack app under OAuth & Permissions, then reinstall it to the workspace.",
+      "tools": ["slack_add_reaction"]
+    },
+    {
+      "id": "upload",
+      "label": "Share text files",
+      "description": "Share text files, such as reports, as the app in its channels.",
+      "scopes": ["files:write"],
+      "permissions": [],
+      "forbidden": "Add the bot scope files:write to the Slack app under OAuth & Permissions, then reinstall it to the workspace.",
+      "tools": ["slack_upload_text_file"]
+    },
+    {
+      "id": "people",
+      "label": "Find people by email",
+      "description": "Look up anyone in the workspace by email address: their Slack name, title and time zone.",
+      "scopes": ["users:read", "users:read.email"],
+      "permissions": [],
+      "forbidden": "Add the bot scopes users:read and users:read.email to the Slack app under OAuth & Permissions, then reinstall it to the workspace.",
+      "tools": ["slack_find_user_by_email"]
+    },
+    {
+      "id": "delete",
+      "label": "Delete its own messages",
+      "description": "Delete messages the app posted. Slack cannot bring them back. The app can never delete anyone else's message.",
+      "destructive": true,
+      "scopes": ["chat:write"],
+      "permissions": [],
+      "forbidden": "Add the bot scope chat:write to the Slack app under OAuth & Permissions, then reinstall it to the workspace.",
+      "tools": ["slack_delete_message"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "channels",
+      "label": "Channels",
+      "help": "Leave empty to allow every channel the app is a member of.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[CG][A-Z0-9]{2,20}$"
+    }
+  ],
+  "verify": {
+    "label": "Connected Slack workspace",
+    "check": "workspace"
+  },
+  "discover": {
+    "label": "Channels the app is in",
+    "check": "channels",
+    "ifEmpty": "The app is not in any channel yet, so agents will find nothing. Add it to a channel with /invite, then check again."
+  },
+  "revoke": "In Slack's app settings, open {brand.microsoft.appName}, then Install App, and revoke its token, or remove the app from the workspace under Settings > Manage apps."
+}
