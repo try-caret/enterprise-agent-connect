@@ -33,6 +33,7 @@ import {
   type ProviderClient,
   type Vendor,
   type VendorConnection,
+  type VendorRequest,
 } from "../../connector-kit/src/types.js";
 
 export type App = { connector: Connector; vendor: Vendor; toolset: Toolset };
@@ -1062,6 +1063,16 @@ export function createService(deps: {
         return null;
       }
       return { capabilities: caps, limits: checked };
+    },
+
+    /** A call with the organization's own connection, no agent's (an event poll or a webhook
+     *  registration). Null when the app is not connected. */
+    async appCall(org: string, connectorId: string, request: VendorRequest) {
+      const target = app(connectorId);
+      const row = await store.getConnection(org, connectorId);
+      if (!row || row.status !== "connected") return null;
+      const providerRows = row.providerId ? await store.listProviders(org) : [];
+      return target.vendor.call(resolve(row, providerRows), request);
     },
 
     // Resolves an agent key to the tools that agent may call right now.

@@ -227,7 +227,7 @@ test(
      where contype = 'f' and confrelid in ('public.organizations'::regclass,
                                            'agent_connect.organizations'::regclass)
      group by 1`;
-    assert.deepEqual([...fks], [{ target: "agent_connect.organizations", n: 6 }]);
+    assert.deepEqual([...fks], [{ target: "agent_connect.organizations", n: 7 }]);
 
     // The same key opens what was sealed before, the agent's key still finds it, and the audit
     // log keeps counting.

@@ -37,6 +37,10 @@ const TABLES = [
   "teams_runs",
   "teams_spend",
   "approvals",
+  "event_subscriptions",
+  "app_events",
+  "event_triggers",
+  "event_runs",
 ] as const;
 
 export type Tables = Record<(typeof TABLES)[number], postgres.Helper<string, []>>;

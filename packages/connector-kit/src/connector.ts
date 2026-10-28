@@ -84,7 +84,8 @@ const clickRule = [
     !s.clickUnavailable || (!s.click && Boolean(s.copy)),
   { message: "A step with clickUnavailable has commands (copy) and no click" },
 ] as const;
-const step = stepSchema.refine(...clickRule);
+export const setupStep = stepSchema.refine(...clickRule);
+const step = setupStep;
 const agentStep = agentStepSchema.refine(...clickRule);
 
 // A field with `options` is a choice (the first is the default), stored in the app's config
@@ -724,6 +725,115 @@ const sqlSchema = z
   .strict();
 export type SqlApp = z.infer<typeof sqlSchema>;
 
+// Events the app can send (or a poll can read) that start agents (packages/server/src/events,
+// docs/triggers.md). A path is `a.b`, or `a[].b` for every item of a list.
+const eventPath = z.string().regex(/^[A-Za-z0-9_$@-]+(\[\])?(\.[A-Za-z0-9_$@-]+(\[\])?)*$/);
+const eventId = z.string().regex(/^[A-Za-z0-9_.:-]{1,100}$/);
+// Where a value is in a delivery: a path in its JSON body, or a request header.
+const locator = z.union([
+  z.object({ field: eventPath }).strict(),
+  z.object({ header: headerName }).strict(),
+]);
+const eventRequest = z
+  .object({
+    method: z.enum(["GET", "POST", "PUT"]),
+    path: z.string().startsWith("/"),
+    body: z.unknown().optional(),
+  })
+  .strict();
+const eventsSchema = z
+  .object({
+    types: z.array(z.object({ id: eventId, label: text }).strict()).min(1),
+    // What an agent is given of each event, and what conditions and limits read: name → path.
+    fields: z.record(slug, eventPath),
+    // A limit's id → the field holding the event's value for it. An agent with that limit set
+    // is started only by events whose value is within it.
+    limits: z.record(slug, slug).default({}),
+    webhook: z
+      .object({
+        // How a delivery proves it came from the app, with the subscription's secret: an
+        // HMAC-SHA256 of the body (hex, after `prefix`), the secret itself in a header, or
+        // nothing at all, only with allowInsecure.
+        verify: z.discriminatedUnion("type", [
+          z
+            .object({
+              type: z.literal("hmac-sha256"),
+              header: headerName,
+              prefix: z.string().max(20).default(""),
+            })
+            .strict(),
+          z.object({ type: z.literal("token"), header: headerName }).strict(),
+          z.object({ type: z.literal("none") }).strict(),
+        ]),
+        allowInsecure: z.boolean().default(false),
+        type: locator,
+        // Same for every retry of one delivery; without one, the body's hash is used.
+        deliveryId: locator.optional(),
+        // When the app stamps deliveries: older (or newer) than the tolerance is refused.
+        timestamp: z
+          .object({
+            at: locator,
+            unit: z.enum(["s", "ms", "iso"]),
+            toleranceSeconds: z
+              .number()
+              .int()
+              .min(60)
+              .max(7 * 86400)
+              .default(300),
+          })
+          .strict()
+          .optional(),
+        // Where the admin pastes the address ({url}) and the secret.
+        setup: z.array(step).min(1),
+        // Registers the webhook through the app's API with the connection's credentials, filled
+        // with {name} {url} {secret} {events} {filter}. `location`: where the answer gives the
+        // webhook's own address.
+        register: eventRequest.extend({ location: dotPath }).strict().optional(),
+      })
+      .strict()
+      .refine((w) => w.verify.type !== "none" || w.allowInsecure, {
+        message: "A webhook verified by nothing needs allowInsecure",
+      })
+      .optional(),
+    // The account the app's connection acts as, so its own changes (an agent's comment) never
+    // start agents again: `request` answers its id at `id`; `fields` hold who made the change.
+    self: z
+      .object({ request: eventRequest, id: dotPath, fields: z.array(slug).min(1) })
+      .strict()
+      .optional(),
+    // For apps without webhooks: `request` read every interval, filled with {minutes} (since
+    // the cursor, rounded up, plus one) {cursor} and {filter} (the subscription's filter put
+    // into `filter`'s {value}, or nothing); `items` the list in the answer, each kept under
+    // `wrap` so the webhook's paths fit; `cursor` the item's change time; `deliveryId` the
+    // paths joined into an id; `types` the first whose `same` paths are equal (or that has none).
+    poll: z
+      .object({
+        request: eventRequest,
+        filter: z.string().includes("{value}").optional(),
+        items: dotPath,
+        wrap: slug.optional(),
+        cursor: eventPath,
+        deliveryId: z.array(eventPath).min(1),
+        types: z
+          .array(
+            z.object({ type: eventId, same: z.tuple([eventPath, eventPath]).optional() }).strict(),
+          )
+          .min(1),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine((e) => e.webhook || e.poll, { message: "Events come from a webhook, a poll or both" })
+  .refine(
+    (e) =>
+      Object.values(e.limits).every((f) => f in e.fields) &&
+      (e.self?.fields ?? []).every((f) => f in e.fields) &&
+      (e.poll?.types ?? []).every((t) => e.types.some((x) => x.id === t.type)),
+    { message: "Event limits and self name fields, and a poll's types are declared types" },
+  );
+export type ConnectorEvents = z.infer<typeof eventsSchema>;
+
 export const connectorSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
@@ -848,6 +958,7 @@ export const connectorSchema = z
     soap: soapSchema.optional(),
     odata: odataSchema.optional(),
     sql: sqlSchema.optional(),
+    events: eventsSchema.optional(),
   })
   .strict()
   .refine((c) => [c.http, c.soap, c.odata, c.sql].filter(Boolean).length <= 1, {
@@ -895,6 +1006,13 @@ export const connectorSchema = z
       ) &&
       (!Object.keys(c.agentAccess?.probes ?? {}).length || c.agentAccess?.missing !== undefined),
     { message: "agentAccess probes and siteAccess.write name capabilities; probes need missing" },
+  )
+  .refine(
+    (c) =>
+      Object.keys(c.events?.limits ?? {}).every((id) =>
+        c.limits.some((l) => l.id === id && l.kind !== "map"),
+      ),
+    { message: "Event limits name the connector's list or text limits" },
   )
   .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, {
     message: "Field ids must be unique",

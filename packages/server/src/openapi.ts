@@ -81,7 +81,7 @@ export function openapi(): Json {
     (paths[spec.path] ??= {})[spec.method.toLowerCase()] = {
       operationId,
       summary: spec.summary,
-      ...(spec.teams ? { tags: ["teams"] } : {}),
+      ...(spec.teams ? { tags: ["teams"] } : spec.events ? { tags: ["events"] } : {}),
       ...(parameters.length ? { parameters } : {}),
       ...(spec.body
         ? {
@@ -102,7 +102,7 @@ export function openapi(): Json {
       description:
         "Server to server only: a bearer token (AGENT_CONNECT_ADMIN_TOKEN), and requests " +
         "carrying X-Forwarded-For are refused. Routes tagged teams are served only where " +
-        "Teams is set up.",
+        "Teams is set up, routes tagged events only where app events are.",
     },
     servers: [{ url: ADMIN_V1 }],
     security: [{ bearer: [] }],

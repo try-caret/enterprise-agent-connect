@@ -50,10 +50,16 @@
   is marked untrusted for the agent.
 - Microsoft Teams messages to agent bots are accepted only with a valid Bot Framework token for
   that bot.
+- App events (`/agent-connect/events/<subscription id>`) are accepted only with the
+  subscription's secret (an HMAC of the body or the secret in a header, compared in constant
+  time, before the body is parsed), once per delivery id, and within the app's replay window.
+  An event starts only agents granted on that app and within their limits, and its content is
+  passed to the agent as untrusted data ([triggers.md](triggers.md)).
 
 ## Audit
 
-Every tool call (allowed, denied or failed) and every admin change writes an audit row: who,
+Every tool call (allowed, denied or failed), every app event delivery and trigger decision, and
+every admin change writes an audit row: who,
 which agent, which app and tool, a shortened target, the decision and the app's status.
 `GET /orgs/{org}/audit` reads it.
 
@@ -61,5 +67,5 @@ which agent, which app and tool, a shortened target, the decision and the app's 
 
 - Give the service a database role that owns only its schema.
 - Keep `CONNECT_ENCRYPTION_KEY` and `AGENT_CONNECT_ADMIN_TOKEN` in a secrets manager.
-- Expose only `/agent-connect/mcp` and `/agent-connect/teams`.
+- Expose only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`.
 - Report vulnerabilities privately: see [SECURITY.md](../SECURITY.md).

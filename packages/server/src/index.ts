@@ -21,6 +21,9 @@ import { migrate as runMigrations } from "./migrate.js";
 import { CredentialKey } from "./secrets.js";
 import { assertToolsImplemented, createService, type App, type ProviderApp } from "./service.js";
 import { assertSchemaName, connectDatabase, createStore, type Sql } from "./store.js";
+import { createEventsAdmin, resealEventSecrets } from "./events/admin.js";
+import { createEventsRuntime } from "./events/runtime.js";
+import { createEventsStore } from "./events/store.js";
 import { createTeamsAdmin, resealTeamsCredentials } from "./teams/admin.js";
 import { botClient } from "./teams/bot.js";
 import { claudeClient } from "./teams/claude.js";
@@ -35,7 +38,7 @@ export type { BrandingInput } from "../../connector-kit/src/branding.js";
 export type { ConnectorModule } from "./builtin.js";
 export type { ConnectorJson } from "../../connector-kit/src/connector.js";
 export { builtinConnectors } from "./builtin.js";
-export type { RunInput, RunnerFactory, TriggerRunner } from "./teams/runner.js";
+export type { EventRunInput, RunInput, RunnerFactory, TriggerRunner } from "./teams/runner.js";
 export { claudeManagedAgents, signature, signedWebhook } from "./teams/runner.js";
 
 export type AgentConnectOptions = {
@@ -64,13 +67,14 @@ export type AgentConnectOptions = {
   // for a deployment that runs it, since every holder of its secret could reach every tenant
   // that approved it.
   microsoftSharedApp?: { clientId: string; clientSecret: string } | null;
-  // What answers Teams triggers (default: Claude Managed Agents and the signed webhook).
+  // What answers Teams triggers and app events (default: Claude Managed Agents and the signed
+  // webhook).
   runners?: RunnerFactory[];
   log?: Pick<Console, "log" | "error">;
 };
 
 /** The whole service, checked and wired: fetch serves /agent-connect/*, start runs the Teams
- *  queue worker and watcher. Throws on anything misconfigured. */
+ *  and app events queue workers, watchers and polls. Throws on anything misconfigured. */
 export async function createAgentConnect(options: AgentConnectOptions) {
   const log = options.log ?? console;
   setBranding(parseBranding(options.branding));
@@ -180,10 +184,24 @@ export async function createAgentConnect(options: AgentConnectOptions) {
     key,
     bots: { botForAgent: teamsStore.botForAgent, access: runtime.access },
   });
+  const eventsStore = createEventsStore(sql, schema);
+  const eventApps = new Map(
+    apps.filter((a) => a.connector.events).map((a) => [a.connector.id, a.connector]),
+  );
+  const eventDeps = {
+    store,
+    events: eventsStore,
+    key,
+    connectors: eventApps,
+    appCall: service.appCall,
+    runners,
+  };
+  const events = createEventsRuntime(eventDeps);
   const app = createApp({
     service,
     store,
     adminToken: options.adminToken,
+    events: { runtime: events, admin: createEventsAdmin({ ...eventDeps, publicUrl }) },
     teams: {
       runtime,
       admin: createTeamsAdmin({
@@ -204,6 +222,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
     connectors: apps.map((a) => a.connector.id),
     start() {
       runtime.start();
+      events.start();
       // While rotating the key, move what Teams sealed onto the new one.
       if (options.previousEncryptionKey)
         resealTeamsCredentials(teamsStore, key).then(
@@ -213,9 +232,14 @@ export async function createAgentConnect(options: AgentConnectOptions) {
             ),
           (error) => log.error("[agent-connect] re-sealing Teams credentials failed", error),
         );
+      if (options.previousEncryptionKey)
+        resealEventSecrets(eventsStore, key).then(
+          (n) => log.log(`[agent-connect] re-sealed ${n} app event secrets`),
+          (error) => log.error("[agent-connect] re-sealing app event secrets failed", error),
+        );
     },
     async stop() {
-      await runtime.stop();
+      await Promise.all([runtime.stop(), events.stop()]);
       if (ownsSql) await sql.end();
     },
   };
