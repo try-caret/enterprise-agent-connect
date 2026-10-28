@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import type { MicrosoftClient } from "../../../connectors/microsoft/client.js";
 import { fillBrandDeep } from "./branding.js";
 import type { Toolset } from "./common.js";
 import type { Vendor } from "./types.js";
@@ -1170,15 +1169,16 @@ export const providerSchema = z
 
 export type Provider = z.infer<typeof providerSchema>;
 
+/** What a module's `create` is given: its connector.json, parsed and with the branding
+ *  filled in. Built-in apps get more (BuiltinContext, in the server). */
+export type ConnectorContext = { connector: Connector };
+
 /** The code behind one connector: its vendor client and its tools. */
-export type ConnectorModule = {
+export type ConnectorModule<Context extends ConnectorContext = ConnectorContext> = {
   id: string;
   // Its connector.json inline, for a module that has no folder of its own.
   connector?: ConnectorJson;
-  create(ctx: { microsoft: MicrosoftClient; connector: Connector }): {
-    vendor: Vendor;
-    toolset: Toolset;
-  };
+  create(ctx: Context): { vendor: Vendor; toolset: Toolset };
 };
 
 /** The repo's connectors/ folder, beside packages/ (and so beside dist/packages/ once built). */
@@ -1202,9 +1202,14 @@ export const parseConnector = (raw: unknown, where: string): Connector =>
 
 // Each subfolder of dir holding `file` is one definition, whose id is the folder's name.
 // Subfolders may be links: Kubernetes mounts ConfigMap and Secret folders that way.
-function loadDir<T>(dir: URL, file: string, schema: z.ZodType<T & { id: string }>): T[] {
+function loadDir<T>(
+  dir: URL,
+  file: string,
+  schema: z.ZodType<T & { id: string }>,
+  only: (id: string) => boolean = () => true,
+): T[] {
   return readdirSync(dir)
-    .filter((name) => existsSync(new URL(`${name}/${file}`, dir)))
+    .filter((name) => only(name) && existsSync(new URL(`${name}/${file}`, dir)))
     .sort()
     .map((name) => {
       const where = `${name}/${file}`;
@@ -1214,8 +1219,9 @@ function loadDir<T>(dir: URL, file: string, schema: z.ZodType<T & { id: string }
     });
 }
 
-export function loadConnectors(dir = CONNECTORS_DIR): Connector[] {
-  return loadDir(dir, "connector.json", connectorSchema);
+/** `only`: the folder ids to read, so an app not offered is never parsed. */
+export function loadConnectors(dir = CONNECTORS_DIR, only?: (id: string) => boolean): Connector[] {
+  return loadDir(dir, "connector.json", connectorSchema, only);
 }
 
 export function loadProviders(dir = CONNECTORS_DIR): Provider[] {

@@ -36,7 +36,9 @@ delete), write a `ConnectorModule` next to the JSON:
   answer's headers in `VendorResponse.headers`.
 - `tools.ts`: the MCP tools, each wrapped in `audited(...)` from `connector-kit/src/common.ts`,
   enforcing the grant's limits with `listLimit`, `mapLimit` and friends.
-- `index.ts`: `export default { id, create }`.
+- `index.ts`: `export default { id, create }`. `create` gets a `ConnectorContext`, `{ connector }`
+  (its connector.json, parsed), and returns `{ vendor, toolset }`. The built-in Microsoft apps get
+  the deployment's Microsoft client too (`BuiltinContext`); a connector of your own does not need it.
 
 Then either add it to `packages/server/src/builtin.ts` (to contribute it here) or pass it to
 `createAgentConnect({ connectors: [...builtinConnectors, myApp] })` in your own Node app. Outside

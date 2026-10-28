@@ -17,11 +17,11 @@ import { clientCredentials, vendorError } from "../../packages/connector-kit/src
 import {
   ConnectError,
   type Fetch,
+  type Limits,
   type Vendor,
   type VendorConnection,
   type VendorRequest,
 } from "../../packages/connector-kit/src/types.js";
-import type { Limits } from "../../packages/server/src/store.js";
 import {
   answerWithin,
   authHeaders,

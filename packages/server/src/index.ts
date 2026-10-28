@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createApp } from "./app.js";
 import {
@@ -5,12 +6,13 @@ import {
   setBranding,
   type BrandingInput,
 } from "../../connector-kit/src/branding.js";
-import { builtinConnectors, type ConnectorModule } from "./builtin.js";
+import { builtinConnectors, type BuiltinModule, type ConnectorModule } from "./builtin.js";
 import httpConnector from "../../../connectors/http/index.js";
 import odataConnector from "../../../connectors/odata/index.js";
 import soapConnector from "../../../connectors/soap/index.js";
 import sqlConnector from "../../../connectors/sql/index.js";
 import {
+  CONNECTORS_DIR,
   loadConnectors,
   loadProviders,
   parseConnector,
@@ -35,7 +37,7 @@ import { createTeamsStore } from "./teams/store.js";
 import { microsoftClient } from "../../../connectors/microsoft/client.js";
 
 export type { BrandingInput } from "../../connector-kit/src/branding.js";
-export type { ConnectorModule } from "./builtin.js";
+export type { ConnectorContext, ConnectorModule } from "./builtin.js";
 export type { ConnectorJson } from "../../connector-kit/src/connector.js";
 export { builtinConnectors } from "./builtin.js";
 export type { EventRunInput, RunInput, RunnerFactory, TriggerRunner } from "./teams/runner.js";
@@ -59,7 +61,7 @@ export type AgentConnectOptions = {
   // only while its module is here, so a subset of builtinConnectors offers only those. Your own
   // apps: a ConnectorModule carrying its definition as `connector`, or a definition with an
   // `http`, `soap`, `odata` or `sql` block alone (no code).
-  connectors?: (ConnectorModule | ConnectorJson)[];
+  connectors?: (ConnectorModule | BuiltinModule | ConnectorJson)[];
   // Folders laid out like connectors/ (<id>/connector.json), loaded after it; each needs a module
   // in `connectors` unless it has an `http`, `soap`, `odata` or `sql` block.
   extraConnectorDirs?: string[];
@@ -82,7 +84,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
   assertSchemaName(schema);
 
   const microsoft = microsoftClient({ sharedApp: options.microsoftSharedApp ?? null });
-  const modules = new Map<string, ConnectorModule>();
+  const modules = new Map<string, BuiltinModule>();
   const inline: Connector[] = [];
   for (const entry of options.connectors ?? builtinConnectors) {
     if (!("create" in entry)) {
@@ -97,9 +99,9 @@ export async function createAgentConnect(options: AgentConnectOptions) {
       throw new Error(`Connector module ${entry.id} carries the definition of ${connector.id}`);
     inline.push(connector);
   }
-  const builtin = loadConnectors();
+  const builtin = loadConnectors(CONNECTORS_DIR, (id) => modules.has(id));
   const connectors = [
-    ...builtin.filter((c) => modules.has(c.id)),
+    ...builtin,
     ...inline,
     ...(options.extraConnectorDirs ?? []).flatMap((dir) => {
       const found = loadConnectors(pathToFileURL(`${dir.replace(/\/+$/, "")}/`));
@@ -116,7 +118,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
     if (connectors.filter((c) => c.id === connector.id).length > 1)
       throw new Error(`Two connectors have the id ${connector.id}`);
     // An app described entirely in its connector.json runs on a generic module.
-    const module =
+    const module: BuiltinModule | undefined =
       modules.get(connector.id) ??
       (connector.http
         ? httpConnector
@@ -140,7 +142,9 @@ export async function createAgentConnect(options: AgentConnectOptions) {
   const providerClients: Record<string, ProviderApp["client"]> = { microsoft: microsoft.provider };
   // A built-in app left out drops out of its provider's add-agent steps.
   const left = new Set(
-    builtin.map((c) => c.id).filter((id) => !apps.some((a) => a.connector.id === id)),
+    readdirSync(CONNECTORS_DIR).filter(
+      (id) => existsSync(new URL(`${id}/connector.json`, CONNECTORS_DIR)) && !modules.has(id),
+    ),
   );
   const providers: ProviderApp[] = loadProviders().map((provider) => {
     const client = providerClients[provider.id];

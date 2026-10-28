@@ -27,6 +27,7 @@ import type {
 } from "./store.js";
 import { argumentsTarget, type ToolContext, type Toolset } from "../../connector-kit/src/common.js";
 import type { TeamsAccess } from "./teams/runtime.js";
+import type { TeamsToolContext } from "../../../connectors/teams/tools.js";
 import type { BotRow } from "./teams/store.js";
 import {
   type AgentAccess,
@@ -1150,7 +1151,7 @@ export function createService(deps: {
       const asBot = target.connector.signsInAs === "agentBot";
       if (asBot && (bot?.status !== "connected" || !bot.botAppId)) return [];
       let conn: VendorConnection | null = null;
-      const ctx: ToolContext = {
+      const ctx: TeamsToolContext = {
         limits: grant.limits,
         config: provider ? { ...provider.config, ...row.config } : row.config,
         call: (request) => {

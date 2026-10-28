@@ -17,12 +17,13 @@ import sharepointFiles from "../../../connectors/sharepoint-files/index.js";
 import slack from "../../../connectors/slack/index.js";
 import teams from "../../../connectors/teams/index.js";
 import workday from "../../../connectors/workday/index.js";
-import type { ConnectorModule } from "../../connector-kit/src/connector.js";
+import type { BuiltinModule } from "../../../connectors/microsoft/client.js";
 
-export type { ConnectorModule };
+export type { BuiltinContext, BuiltinModule } from "../../../connectors/microsoft/client.js";
+export type { ConnectorContext, ConnectorModule } from "../../connector-kit/src/connector.js";
 
 /** The code behind each connector folder in connectors/ (index.ts beside its connector.json). */
-export const builtinConnectors: ConnectorModule[] = [
+export const builtinConnectors: BuiltinModule[] = [
   jira,
   outlookMail,
   outlookCalendar,

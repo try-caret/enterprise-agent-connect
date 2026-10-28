@@ -2,6 +2,9 @@
 
 export type Fetch = typeof fetch;
 
+// A grant's value limits by limit id: a list, a text or a map (e.g. a folder per site).
+export type Limits = Record<string, string[] | string | Record<string, string>>;
+
 export type VendorConnection = {
   config: Record<string, string>;
   secret: Record<string, string>;

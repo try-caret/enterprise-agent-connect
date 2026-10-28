@@ -186,7 +186,8 @@ const orders: ConnectorJson = {
 ```
 
 **Your own app, as code.** Build a `ConnectorModule` on the connector kit and give it its
-definition as `connector` ([docs/connectors.md](docs/connectors.md)):
+definition as `connector` ([docs/connectors.md](docs/connectors.md)). `create` gets a
+`ConnectorContext`, `{ connector }`: the definition parsed, with the branding filled in.
 
 ```ts
 import { z } from "zod";

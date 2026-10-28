@@ -48,14 +48,16 @@ test("loaded connectors carry the branding's names and no placeholder", () => {
   assert.match(text, /Acme Mailboxes/);
 });
 
-// The service is not Arbium's: only stored values and names kept for compatibility, each
-// documented where it is, may name it.
+// The service is not Arbium's: only the npm scope it is published under, and stored values and
+// names kept for compatibility, each documented where it is, may name it.
 test("the source and connectors name Arbium only where compatibility needs it", () => {
   const allowed = [
     /export const SHARED_APP_AUTH = "arbium_app";/,
     /\? \{ \.\.\.out, madeByArbium: out\.madeByService \}/,
     /"ARBIUM_MICROSOFT_CLIENT_(ID|SECRET)"/,
   ];
+  const namesBrand = (line: string) =>
+    /arbium/i.test(line.replaceAll("@arbium/", "")) && !allowed.some((a) => a.test(line));
   const files = (dir: string): string[] =>
     readdirSync(dir).flatMap((f) => {
       const p = join(dir, f);
@@ -68,8 +70,10 @@ test("the source and connectors name Arbium only where compatibility needs it", 
     .flatMap((f) =>
       readFileSync(f, "utf8")
         .split("\n")
-        .filter((line) => /arbium/i.test(line) && !allowed.some((a) => a.test(line)))
+        .filter(namesBrand)
         .map((line) => `${f}: ${line.trim()}`),
     );
   assert.deepEqual(hits, []);
+  assert.equal(namesBrand('import { json } from "@arbium/enterprise-agent-connect/kit";'), false);
+  assert.equal(namesBrand("// @arbium/enterprise-agent-connect, by Arbium"), true);
 });

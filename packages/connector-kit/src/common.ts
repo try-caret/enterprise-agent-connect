@@ -1,7 +1,5 @@
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server";
-import type { Limits } from "../../server/src/store.js";
-import type { TeamsAccess } from "../../server/src/teams/runtime.js";
-import { ConnectError, type VendorRequest, type VendorResponse } from "./types.js";
+import { ConnectError, type Limits, type VendorRequest, type VendorResponse } from "./types.js";
 
 // What a tool sees of the calling agent: its value limits, the app connection to call
 // through, and the audit log. Its capabilities are applied before registration: a tool
@@ -13,8 +11,6 @@ export type ToolContext = {
   call(request: VendorRequest): Promise<VendorResponse>;
   /** Per tool: what to add to a 403 from the app (its capability's `forbidden`). */
   forbidden?: Record<string, string>;
-  /** Teams only: the agent's own bot. */
-  teams?: TeamsAccess;
   audit(entry: {
     tool: string;
     target: string | null;

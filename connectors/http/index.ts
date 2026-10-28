@@ -20,12 +20,12 @@ import { clientCredentials, vendorError } from "../../packages/connector-kit/src
 import {
   ConnectError,
   type Fetch,
+  type Limits,
   type Vendor,
   type VendorConnection,
   type VendorRequest,
   type VendorResponse,
 } from "../../packages/connector-kit/src/types.js";
-import type { Limits } from "../../packages/server/src/store.js";
 
 // The generic module behind every connector.json with an `http` block: an app described as
 // data, e.g. a company's internal REST API. Calls reach only baseUrl's origin under its path.

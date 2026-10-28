@@ -1,4 +1,4 @@
-import type { ConnectorModule } from "../../packages/connector-kit/src/connector.js";
+import type { BuiltinModule } from "../microsoft/client.js";
 import { dynamicsTools } from "./tools.js";
 import { dynamicsVendor } from "./vendor.js";
 
@@ -8,4 +8,4 @@ export default {
     vendor: dynamicsVendor(microsoft),
     toolset: dynamicsTools,
   }),
-} satisfies ConnectorModule;
+} satisfies BuiltinModule;

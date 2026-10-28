@@ -35,9 +35,13 @@ const CHAT = /^(19:[A-Za-z0-9_.-]+@(thread\.v2|unq\.gbl\.spaces)|a:[A-Za-z0-9_.-
 const MESSAGE = /^\d{1,20}$/;
 const MAX_TEXT = 20_000;
 
+/** The service gives Teams tools the agent's own bot beside the usual context. */
+export type TeamsToolContext = ToolContext & { teams?: TeamsAccess };
+
 function access(ctx: ToolContext): TeamsAccess {
-  if (!ctx.teams) throw new Error("Teams tools need the agent's bot");
-  return ctx.teams;
+  const { teams } = ctx as TeamsToolContext;
+  if (!teams) throw new Error("Teams tools need the agent's bot");
+  return teams;
 }
 
 const teamsLimit = (ctx: ToolContext) => listLimit(ctx.limits, "teams");
