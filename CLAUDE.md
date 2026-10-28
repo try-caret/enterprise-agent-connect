@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Salesforce, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Slack, Salesforce, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -301,7 +301,8 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
                       # fedex, dell-techdirect on the kit's oauth.ts (client credentials, a
-                      # cached token re-minted once on a 401))
+                      # cached token re-minted once on a 401); slack: a bot token, ok:false and
+                      # 429 handling)
 connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for files and excel.ts
                       # for spreadsheets, joined by the kit's `toolsets`; entra and intune reuse
                       # its Graph paging, outlook-calendar outlook-mail's). Folder, mail, calendar and people listings page with `cursor`
@@ -700,6 +701,36 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   only after approval. `dell_warranty_lookup` returns model, ship date and each entitlement
   with an `active` flag; an answer that is not a list fails loudly. Asset components (parts)
   are left out: a separate API not confirmed under the same key. No limits.
+- Slack (`slack`): a Slack app made from the manifest in the first setup step (YAML: a JSON
+  manifest cannot take the `{scope}` line repeat without a trailing comma), installed to one
+  workspace; the connect form takes its Bot User OAuth Token (`xoxb-`). `auth.test` proves it
+  (`teamId` is the `accountKey`); the `workspace` check compares Slack's `x-oauth-scopes`
+  header with the ceiling's scopes and warns about missing ones, and `channels` (discover)
+  lists the channels the bot is in (`users.conversations`, 5 pages of 200 at most) as the
+  `channels` limit's choices. Reads are GET with query arguments, writes POST JSON, all on
+  `https://slack.com/api`. Slack answers most failures 200 `{ok: false, error}`: the vendor turns
+  them into statuses (auth errors 401, missing_scope and the like 403, not found 404,
+  ratelimited 429, any other 400) so probes and VendorFailed work as for other apps, and
+  `slackError` puts common codes in words. A 429 is waited out (Retry-After, at most 10 s, twice:
+  Slack did not run the call, so even a post is safe to resend); longer, the agent is told when
+  to retry. The bot reaches only channels it is a member of (Slack refuses the rest with
+  not_in_channel; no `chat:write.public`), and no im or mpim scope is asked, so no direct
+  messages. Every tool takes a channel id (`C`/`G`), checked against the key's `channels` limit
+  before any call; `slack_list_channels` filters to it. Capabilities: read (required: list
+  channels, read a channel, read a thread, permalink), post (also thread replies), react
+  (`already_reacted` answers success), upload (text up to 1 MB through
+  files.getUploadURLExternal, the bytes POSTed to its `upload_url` only on `files.slack.com` with
+  no token, then files.completeUploadExternal), people (users.lookupByEmail; no email in the
+  answer), delete (destructive, chat.delete: a bot token deletes only the bot's own messages).
+  Messages come trimmed: ts and its ISO time, author id and name (users.info, at most 20 a call;
+  a failed lookup keeps the id), text with mentions, channel links and links made plain,
+  thread_ts, reply_count, reactions, file titles. Search is left out: search.messages takes only
+  a user token, which reads everything that person can (direct messages included), so a key's
+  channel limit could only filter answers after the person's whole reach was searched. Sources:
+  docs.slack.dev/reference/methods (files.getUploadURLExternal and files.completeUploadExternal
+  read October 27, 2026, both taking JSON or form arguments; the other methods, rate limits and
+  manifests from Slack's same reference, not re-read). Tested only against a fake Slack, never a
+  real workspace.
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under

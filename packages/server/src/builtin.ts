@@ -7,6 +7,7 @@ import outlookCalendar from "../../../connectors/outlook-calendar/index.js";
 import outlookMail from "../../../connectors/outlook-mail/index.js";
 import salesforce from "../../../connectors/salesforce/index.js";
 import sharepointFiles from "../../../connectors/sharepoint-files/index.js";
+import slack from "../../../connectors/slack/index.js";
 import teams from "../../../connectors/teams/index.js";
 import type { ConnectorModule } from "../../connector-kit/src/connector.js";
 
@@ -24,4 +25,5 @@ export const builtinConnectors: ConnectorModule[] = [
   teams,
   entra,
   intune,
+  slack,
 ];
