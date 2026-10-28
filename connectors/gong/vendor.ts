@@ -1,3 +1,4 @@
+import { retryAfter, vendorFetch } from "../../packages/connector-kit/src/fetch.js";
 import {
   ConnectError,
   type Fetch,
@@ -9,14 +10,13 @@ import {
 
 // A Gong API access key and secret, sent as Basic auth to the company's own API address
 // (https://<id>.api.gong.io, or the shared https://api.gong.io). Gong allows 3 calls a second
-// and 10,000 a day per company and answers 429 with Retry-After past either; short waits are
-// retried here, longer ones go back to the agent. Errors come as {requestId, errors: [...]}.
+// and 10,000 a day per company and answers 429 with Retry-After past either; the kit's
+// vendorFetch retries short waits, longer ones go back to the agent. Errors come as
+// {requestId, errors: [...]}.
 // Sources: help.gong.io "Receive access to the API" and gong.app.gong.io/settings/api/
 // documentation (read October 27, 2026).
 
 const HOST = /^([a-z0-9][a-z0-9-]*\.)?api\.gong\.io$/;
-const MAX_WAIT_SECONDS = 10;
-const RETRIES = 2;
 
 export function normalizeBaseUrl(input: string): string {
   const raw = input.trim().toLowerCase();
@@ -47,38 +47,33 @@ export function gongError(res: VendorResponse): string {
   return `Gong answered ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`;
 }
 
-const sleep = (seconds: number) => new Promise((r) => setTimeout(r, seconds * 1000));
+export function gongVendor(
+  unguarded: Fetch = fetch,
+  wait?: (seconds: number) => Promise<void>,
+): Vendor {
+  const fetchImpl = vendorFetch("Gong", unguarded, wait);
 
-export function gongVendor(fetchImpl: Fetch = fetch, wait = sleep): Vendor {
   async function send(host: string, secret: Record<string, string>, request: VendorRequest) {
     if (!HOST.test(host)) throw new Error("Gong connection has no API address");
     const auth = Buffer.from(`${secret.access_key}:${secret.access_key_secret}`).toString("base64");
-    // A 429 means Gong did not run the call, so it is safe to send again.
-    for (let attempt = 0; ; attempt++) {
-      const res = await fetchImpl(`https://${host}${request.path}`, {
-        method: request.method,
-        redirect: "error",
-        headers: {
-          authorization: `Basic ${auth}`,
-          accept: "application/json",
-          ...(request.body === undefined ? {} : { "content-type": "application/json" }),
-        },
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
-      });
-      const raw = await res.text();
-      if (res.status === 429) {
-        const after = Number(res.headers.get("retry-after") ?? "1");
-        if (attempt < RETRIES && Number.isFinite(after) && after <= MAX_WAIT_SECONDS) {
-          await wait(Math.max(after, 1));
-          continue;
-        }
-        return {
-          status: 429,
-          data: { retryAfter: Number.isFinite(after) ? after : null },
-        };
-      }
-      return { status: res.status, data: raw ? parse(raw) : null };
-    }
+    const res = await fetchImpl(`https://${host}${request.path}`, {
+      method: request.method,
+      headers: {
+        authorization: `Basic ${auth}`,
+        accept: "application/json",
+        ...(request.body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: request.body === undefined ? undefined : JSON.stringify(request.body),
+    });
+    const raw = await res.text();
+    const headers = Object.fromEntries(res.headers);
+    if (res.status === 429)
+      return {
+        status: 429,
+        data: { retryAfter: retryAfter(res.headers.get("retry-after")) },
+        headers,
+      };
+    return { status: res.status, data: raw ? parse(raw) : null, headers };
   }
 
   return {

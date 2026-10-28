@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { vendorFetch, vendorUrl } from "./fetch.js";
 import {
   ConnectError,
   TokenCache,
@@ -32,7 +33,8 @@ export function vendorError(data: unknown): string {
   return typeof text === "string" ? text.split(/\r?\n/)[0].slice(0, 300) : "";
 }
 
-export function clientCredentials(name: string, fetchImpl: Fetch) {
+export function clientCredentials(name: string, unguarded: Fetch) {
+  const fetchImpl = vendorFetch(name, unguarded);
   const tokens = new TokenCache();
   const key = (c: Credentials) =>
     createHash("sha256")
@@ -70,7 +72,7 @@ export function clientCredentials(name: string, fetchImpl: Fetch) {
     // A string body (e.g. Jamf's Classic API XML) goes as is, under the request's own
     // content-type; anything else is JSON.
     const asIs = typeof request.body === "string";
-    const res = await fetchImpl(`${base}${request.path}`, {
+    const res = await fetchImpl(vendorUrl(base, request.path), {
       method: request.method,
       headers: {
         authorization: `Bearer ${access}`,

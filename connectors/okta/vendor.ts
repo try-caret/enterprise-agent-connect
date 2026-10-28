@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey, randomUUID, sign, type KeyObject } from "node:crypto";
+import { vendorFetch, vendorUrl } from "../../packages/connector-kit/src/fetch.js";
 import { vendorError } from "../../packages/connector-kit/src/oauth.js";
 import {
   ConnectError,
@@ -101,7 +102,8 @@ function safeJson(raw: string): unknown {
 
 class ScopeRefused extends ConnectError {}
 
-export function oktaVendor(fetchImpl: Fetch = fetch): Vendor {
+export function oktaVendor(unguarded: Fetch = fetch): Vendor {
+  const fetchImpl = vendorFetch("Okta", unguarded);
   const tokens = new TokenCache();
 
   function host(c: VendorConnection) {
@@ -115,7 +117,6 @@ export function oktaVendor(fetchImpl: Fetch = fetch): Vendor {
     const res = await fetchImpl(tokenUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-      redirect: "error",
       body: new URLSearchParams({
         grant_type: "client_credentials",
         scope,
@@ -155,7 +156,7 @@ export function oktaVendor(fetchImpl: Fetch = fetch): Vendor {
       .digest("hex");
 
   async function send(c: VendorConnection, token: string, request: VendorRequest) {
-    const res = await fetchImpl(`${host(c)}${request.path}`, {
+    const res = await fetchImpl(vendorUrl(host(c), request.path), {
       method: request.method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -164,12 +165,12 @@ export function oktaVendor(fetchImpl: Fetch = fetch): Vendor {
         ...(request.body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
-      redirect: "error",
     });
     const raw = await res.text();
     const data = raw ? safeJson(raw) : null;
     return {
       status: res.status,
+      headers: Object.fromEntries(res.headers),
       data: Array.isArray(data) ? { items: data, after: nextAfter(res.headers.get("link")) } : data,
     };
   }

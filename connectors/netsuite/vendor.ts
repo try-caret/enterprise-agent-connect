@@ -7,6 +7,7 @@ import {
   randomUUID,
   sign,
 } from "node:crypto";
+import { vendorFetch, vendorUrl } from "../../packages/connector-kit/src/fetch.js";
 import {
   ConnectError,
   TokenCache,
@@ -167,14 +168,14 @@ const parse = (raw: string): unknown => {
   }
 };
 
-export function netsuiteVendor(fetchImpl: Fetch = fetch): Vendor {
+export function netsuiteVendor(unguarded: Fetch = fetch): Vendor {
+  const fetchImpl = vendorFetch("NetSuite", unguarded);
   const tokens = new TokenCache();
 
   async function mint(c: VendorConnection, scope: string) {
     const tokenUrl = `${host(c.config.accountId, "suitetalk")}${TOKEN_PATH}`;
     const res = await fetchImpl(tokenUrl, {
       method: "POST",
-      redirect: "error",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: new URLSearchParams({
         grant_type: "client_credentials",
@@ -214,7 +215,10 @@ export function netsuiteVendor(fetchImpl: Fetch = fetch): Vendor {
 
   async function send(c: VendorConnection, request: VendorRequest, fresh = false) {
     const restlet = request.path.startsWith(RESTLET_PATH);
-    const url = `${host(c.config.accountId, restlet ? "restlets" : "suitetalk")}${request.path}`;
+    const url = vendorUrl(
+      host(c.config.accountId, restlet ? "restlets" : "suitetalk"),
+      request.path,
+    );
     const scope = restlet ? "restlets" : "rest_webservices";
     let authorization: string;
     if (c.config.auth === "tba")
@@ -233,7 +237,6 @@ export function netsuiteVendor(fetchImpl: Fetch = fetch): Vendor {
     }
     const res = await fetchImpl(url, {
       method: request.method,
-      redirect: "error",
       headers: {
         authorization,
         accept: "application/json",
@@ -246,11 +249,10 @@ export function netsuiteVendor(fetchImpl: Fetch = fetch): Vendor {
     });
     const raw = await res.text();
     // A record made through REST answers 204 with its address in Location.
-    const location = res.headers.get("location");
     return {
       status: res.status,
       data: raw ? parse(raw) : null,
-      ...(location ? { headers: { location } } : {}),
+      headers: Object.fromEntries(res.headers),
     } as VendorResponse;
   }
 

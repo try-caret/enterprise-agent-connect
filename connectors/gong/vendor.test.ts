@@ -57,7 +57,7 @@ test("connect proves the key on the company's address and keeps it secret", asyn
     header(calls[0].init, "authorization"),
     `Basic ${Buffer.from("AK:SECRET").toString("base64")}`,
   );
-  assert.equal(calls[0].init.redirect, "error");
+  assert.equal(calls[0].init.redirect, "manual");
 });
 
 test("connect explains a refused key, a missing one and other failures", async () => {
@@ -77,7 +77,11 @@ test("calls go to the connection's host with a JSON body", async () => {
     },
     { method: "POST", path: "/v2/calls/extensive", body: { filter: {} } },
   );
-  assert.deepEqual(res, { status: 200, data: { calls: [] } });
+  assert.deepEqual(res, {
+    status: 200,
+    data: { calls: [] },
+    headers: { "content-type": "application/json" },
+  });
   assert.equal(calls[0].url, "https://us-1.api.gong.io/v2/calls/extensive");
   assert.equal(calls[0].init.body, '{"filter":{}}');
   assert.equal(header(calls[0].init, "content-type"), "application/json");
@@ -104,10 +108,9 @@ test("a short Retry-After is waited out; a long one goes back as 429", async () 
   assert.equal(short.calls.length, 3);
 
   const long = fakeGong([limited("3600")]);
-  assert.deepEqual(await long.vendor.call(conn, get), {
-    status: 429,
-    data: { retryAfter: 3600 },
-  });
+  const refused = await long.vendor.call(conn, get);
+  assert.deepEqual([refused.status, refused.data], [429, { retryAfter: 3600 }]);
+  assert.equal(refused.headers?.["retry-after"], "3600");
   assert.deepEqual(long.waits, []);
 
   const persistent = fakeGong([limited("1"), limited("1"), limited("1")]);

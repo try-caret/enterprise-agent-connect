@@ -284,6 +284,10 @@ packages/connector-kit/src/ # what a connector builds on: connector.ts (connecto
                       # schemas, ConnectorModule, loading connectors/), common.ts (Toolset,
                       # audited: the audit row for every call), types.ts (Vendor, ConnectError),
                       # oauth.ts (client credentials with a cached token, vendor error text),
+                      # fetch.ts (vendorFetch: every coded app's calls, redirects refused as a
+                      # ConnectError, a 429 with Retry-After up to 10 s sent again twice;
+                      # vendorUrl: base + path refused when it leaves base's origin; the
+                      # redirects test calls every built-in app against a redirecting fake),
                       # branding.ts, certificate.ts. It still imports types from the server
                       # (Limits, TeamsAccess); untangling that is phase 3. index.ts: the public
                       # `@arbium/enterprise-agent-connect/kit`, only what a connector author needs

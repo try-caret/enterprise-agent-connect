@@ -1,3 +1,4 @@
+import { retryAfter, vendorFetch } from "../../packages/connector-kit/src/fetch.js";
 import {
   ConnectError,
   type Fetch,
@@ -16,9 +17,6 @@ import {
 const API = "https://slack.com/api";
 // Where files.getUploadURLExternal points the file's bytes; the only other host called.
 const UPLOAD_HOST = "files.slack.com";
-// Waits longer than this are answered as 429 for the agent to retry later.
-const MAX_WAIT_SECONDS = 10;
-const RETRIES = 2;
 
 const STATUS: Record<string, number> = {
   not_authed: 401,
@@ -72,48 +70,47 @@ export function slackError(res: VendorResponse): string {
   return `Slack answered ${code}: ${WORDS[code] ?? code.replaceAll("_", " ")}${needed}`;
 }
 
-const sleep = (seconds: number) => new Promise((r) => setTimeout(r, seconds * 1000));
+export function slackVendor(
+  unguarded: Fetch = fetch,
+  wait?: (seconds: number) => Promise<void>,
+): Vendor {
+  const fetchImpl = vendorFetch("Slack", unguarded, wait);
 
-export function slackVendor(fetchImpl: Fetch = fetch, wait = sleep): Vendor {
-  // A 429 means Slack did not run the call, so even a post is safe to send again.
   async function send(token: string, request: VendorRequest) {
     const upload = request.path.startsWith("https://");
     if (upload && new URL(request.path).host !== UPLOAD_HOST)
       throw new Error("Slack upload address on an unexpected host");
-    for (let attempt = 0; ; attempt++) {
-      const res = await fetchImpl(upload ? request.path : `${API}${request.path}`, {
-        method: request.method,
-        redirect: "error",
-        headers: upload
-          ? { "content-type": "application/octet-stream" }
-          : {
-              authorization: `Bearer ${token}`,
-              ...(request.body === undefined
-                ? {}
-                : { "content-type": "application/json; charset=utf-8" }),
-            },
-        body:
-          request.body === undefined
-            ? undefined
-            : upload
-              ? String(request.body)
-              : JSON.stringify(request.body),
-      });
-      const raw = await res.text();
-      if (res.status === 429) {
-        const after = Number(res.headers.get("retry-after") ?? "1");
-        if (attempt < RETRIES && Number.isFinite(after) && after <= MAX_WAIT_SECONDS) {
-          await wait(Math.max(after, 1));
-          continue;
-        }
-        const data = { ok: false, error: "ratelimited", retry_after: after };
-        return { headers: res.headers, response: { status: 429, data } };
-      }
-      const data = raw ? parse(raw) : null;
-      const error = !upload && res.ok ? refusal(data) : null;
-      const status = error === null ? res.status : (STATUS[error] ?? 400);
-      return { headers: res.headers, response: { status, data } as VendorResponse };
+    const res = await fetchImpl(upload ? request.path : `${API}${request.path}`, {
+      method: request.method,
+      headers: upload
+        ? { "content-type": "application/octet-stream" }
+        : {
+            authorization: `Bearer ${token}`,
+            ...(request.body === undefined
+              ? {}
+              : { "content-type": "application/json; charset=utf-8" }),
+          },
+      body:
+        request.body === undefined
+          ? undefined
+          : upload
+            ? String(request.body)
+            : JSON.stringify(request.body),
+    });
+    const raw = await res.text();
+    const headers = Object.fromEntries(res.headers);
+    if (res.status === 429) {
+      const data = {
+        ok: false,
+        error: "ratelimited",
+        retry_after: retryAfter(res.headers.get("retry-after")),
+      };
+      return { headers: res.headers, response: { status: 429, data, headers } };
     }
+    const data = raw ? parse(raw) : null;
+    const error = !upload && res.ok ? refusal(data) : null;
+    const status = error === null ? res.status : (STATUS[error] ?? 400);
+    return { headers: res.headers, response: { status, data, headers } as VendorResponse };
   }
 
   const token = (c: VendorConnection) => {
