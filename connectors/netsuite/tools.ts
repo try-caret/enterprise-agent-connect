@@ -28,9 +28,13 @@ type Mark = (status: number) => void;
 type Request = Parameters<ToolContext["call"]>[0];
 
 async function ok(ctx: ToolContext, mark: Mark, req: Request, hintTool?: string) {
+  return (await answer(ctx, mark, req, hintTool)).data as any;
+}
+
+async function answer(ctx: ToolContext, mark: Mark, req: Request, hintTool?: string) {
   const res = await ctx.call(req);
   mark(res.status);
-  if (res.status >= 200 && res.status < 300) return res.data as any;
+  if (res.status >= 200 && res.status < 300) return res;
   const why = netsuiteError(res.data);
   // NetSuite answers a record type the role may not read as not found, so the hint of what
   // the role needs is given as for a refusal.
@@ -235,12 +239,12 @@ async function findTransactions(
   };
 }
 
-const createdId = (data: unknown): string => {
-  const location = (data as { location?: unknown } | null)?.location;
-  const made = typeof location === "string" ? location.split("/").pop() : undefined;
+// A record made through REST answers 204 with its address in Location.
+async function create(ctx: ToolContext, mark: Mark, req: Request): Promise<string> {
+  const made = (await answer(ctx, mark, req)).headers?.location?.split("/").pop();
   if (!made || !ID.test(made)) throw new Error("NetSuite did not say which record it made");
   return made;
-};
+}
 
 // The saved search script answers {columns: [{name, join, label}], rows: [[{value, text}]],
 // pages, total}. Columns are named by label (else name); a key's subsidiaries or locations need
@@ -467,7 +471,7 @@ export const netsuiteTools: Toolset = {
               throw new Denied(
                 `This agent must name a subsidiary: one of ${subsidiaries.join(", ")}`,
               );
-            const data = await ok(ctx, mark, {
+            const made = await create(ctx, mark, {
               method: "POST",
               path: `${RECORD}/customer`,
               body: {
@@ -478,7 +482,6 @@ export const netsuiteTools: Toolset = {
                 ...(subsidiary ? { subsidiary: { id: subsidiary } } : {}),
               },
             });
-            const made = createdId(data);
             retarget(`customer/${made} ${company_name}`);
             return json({ id: made });
           }),
@@ -537,7 +540,7 @@ export const netsuiteTools: Toolset = {
                   throw new Denied(`This agent may not use customer ${customer}`);
                 subsidiary = String(found);
               }
-              const data = await ok(ctx, mark, {
+              const made = await create(ctx, mark, {
                 method: "POST",
                 path: `${RECORD}/salesOrder`,
                 body: {
@@ -557,7 +560,6 @@ export const netsuiteTools: Toolset = {
                   },
                 },
               });
-              const made = createdId(data);
               retarget(`salesOrder/${made} for customer ${customer}`);
               return json({ id: made });
             },

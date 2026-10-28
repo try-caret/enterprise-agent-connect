@@ -107,6 +107,23 @@ test("the connector's capabilities, tools and checks line up; nothing is destruc
     [],
   );
   assert.equal(connector.capabilities.find((c) => c.required)?.id, "read");
+  const asked = (auth: string) =>
+    connector.fields.filter((f) => !f.requires || f.requires.value === auth).map((f) => f.id);
+  assert.deepEqual(asked("oauth2"), [
+    "account_id",
+    "auth",
+    "client_id",
+    "certificate_id",
+    "private_key",
+  ]);
+  assert.deepEqual(asked("tba"), [
+    "account_id",
+    "auth",
+    "client_id",
+    "client_secret",
+    "token_id",
+    "token_secret",
+  ]);
 });
 
 test("OAuth 2.0 signs a PS256 assertion with the certificate id and proves it with SuiteQL", async () => {

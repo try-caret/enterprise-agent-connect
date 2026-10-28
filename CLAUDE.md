@@ -909,8 +909,8 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   header `kid` the certificate id, `iss` the client id, `scope` one of `rest_webservices` /
   `restlets`, `aud` the token URL, 5 min; RSA under 3072 bits is refused, NetSuite's minimum;
   each scope's token cached until near `expires_in` and re-minted once on a 401) or `tba`
-  (OAuth 1.0a HMAC-SHA256 per call, realm the account id). Every form field is shown; connect
-  requires only the chosen method's. `accountId` (`1234567_SB1`) is the `accountKey`; hosts are
+  (OAuth 1.0a HMAC-SHA256 per call, realm the account id). Each method's fields `requires` its
+  choice; connect reads only the chosen method's. `accountId` (`1234567_SB1`) is the `accountKey`; hosts are
   `<account lowercase, _ as ->.suitetalk.api.netsuite.com` and, for the saved search script only,
   `.restlets.api.netsuite.com`; redirects refused. Agents never write SuiteQL: tools build it
   from validated params (ids digits only, dates YYYY-MM-DD, text in single quotes with quotes
@@ -925,7 +925,7 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   subsidiary under that limit) and `netsuite_create_sales_order` (under a subsidiaries limit the
   customer is read first and its subsidiary set on the order, not found and outside refused alike;
   under a locations limit a key location is required, set on the order and each line). New ids
-  come from the 204's Location header. Saved searches: REST cannot run one, so the after-connect
+  come from the 204's Location header (`VendorResponse.headers.location`). Saved searches: REST cannot run one, so the after-connect
   step carries a SuiteScript 2.1 RESTlet the admin uploads (script and deployment ids
   `customscript_agent_saved_search` / `customdeploy_agent_saved_search`), answering
   `{columns, rows, pages, total}`; a key runs only the search ids in its `saved_searches` limit

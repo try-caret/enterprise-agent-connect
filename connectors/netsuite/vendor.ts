@@ -247,8 +247,11 @@ export function netsuiteVendor(fetchImpl: Fetch = fetch): Vendor {
     const raw = await res.text();
     // A record made through REST answers 204 with its address in Location.
     const location = res.headers.get("location");
-    const data = raw ? parse(raw) : location ? { location } : null;
-    return { status: res.status, data } as VendorResponse;
+    return {
+      status: res.status,
+      data: raw ? parse(raw) : null,
+      ...(location ? { headers: { location } } : {}),
+    } as VendorResponse;
   }
 
   async function call(c: VendorConnection, request: VendorRequest) {

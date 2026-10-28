@@ -51,7 +51,10 @@
     {
       "title": "OAuth 2.0: make a certificate and upload it",
       "body": "Run this to make a key pair (NetSuite needs RSA of at least 3072 bits and accepts a certificate for up to two years). Upload public.pem in the client credentials setup, mapped to the employee, the role and the integration, and copy the Certificate ID it shows. Paste the whole content of private.pem in the Private key field below, then delete the file.",
-      "option": { "field": "auth", "value": "oauth2" },
+      "option": {
+        "field": "auth",
+        "value": "oauth2"
+      },
       "shell": "bash",
       "copy": [
         "openssl req -new -x509 -newkey rsa:4096 -keyout private.pem -sigopt rsa_padding_mode:pss -sha256 -sigopt rsa_pss_saltlen:64 -out public.pem -nodes -days 730 -subj \"/CN={brand.microsoft.appName}\""
@@ -65,7 +68,10 @@
     {
       "title": "Token-based authentication: create an access token",
       "body": "Create an access token for the integration, the employee and the role, and copy the token ID and secret. NetSuite shows them only once.",
-      "option": { "field": "auth", "value": "tba" },
+      "option": {
+        "field": "auth",
+        "value": "tba"
+      },
       "click": [
         "Setup > Users/Roles > Access Tokens > New",
         "Application Name: {brand.microsoft.appName}, User: {brand.microsoft.appName}, Role: {brand.microsoft.appName} > Save",
@@ -139,33 +145,49 @@
     {
       "id": "certificate_id",
       "label": "Certificate ID",
-      "help": "OAuth 2.0 only.",
-      "secret": false
+      "secret": false,
+      "requires": {
+        "field": "auth",
+        "value": "oauth2"
+      }
     },
     {
       "id": "private_key",
       "label": "Private key",
-      "help": "OAuth 2.0 only: the whole content of private.pem.",
+      "help": "The whole content of private.pem.",
       "placeholder": "-----BEGIN PRIVATE KEY-----",
-      "secret": true
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "oauth2"
+      }
     },
     {
       "id": "client_secret",
       "label": "Client secret (consumer secret)",
-      "help": "Token-based authentication only.",
-      "secret": true
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "tba"
+      }
     },
     {
       "id": "token_id",
       "label": "Token ID",
-      "help": "Token-based authentication only.",
-      "secret": true
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "tba"
+      }
     },
     {
       "id": "token_secret",
       "label": "Token secret",
-      "help": "Token-based authentication only.",
-      "secret": true
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "tba"
+      }
     }
   ],
   "capabilities": [
@@ -282,7 +304,9 @@
   "discover": {
     "method": "POST",
     "path": "/services/rest/query/v1/suiteql?limit=1000",
-    "body": { "q": "SELECT id FROM subsidiary WHERE isinactive = 'F' ORDER BY id" },
+    "body": {
+      "q": "SELECT id FROM subsidiary WHERE isinactive = 'F' ORDER BY id"
+    },
     "label": "Subsidiaries the role can see",
     "show": "items[].id",
     "ifEmpty": "No subsidiaries were found. Either your account has none, or the role lacks Subsidiaries (View)."
