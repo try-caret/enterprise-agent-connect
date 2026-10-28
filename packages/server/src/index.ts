@@ -7,6 +7,8 @@ import {
 } from "../../connector-kit/src/branding.js";
 import { builtinConnectors, type ConnectorModule } from "./builtin.js";
 import httpConnector from "../../../connectors/http/index.js";
+import odataConnector from "../../../connectors/odata/index.js";
+import soapConnector from "../../../connectors/soap/index.js";
 import {
   loadConnectors,
   loadProviders,
@@ -52,10 +54,10 @@ export type AgentConnectOptions = {
   // The apps this deployment offers (default: every built-in one). A built-in app is offered
   // only while its module is here, so a subset of builtinConnectors offers only those. Your own
   // apps: a ConnectorModule carrying its definition as `connector`, or a definition with an
-  // `http` block alone (no code).
+  // `http`, `soap` or `odata` block alone (no code).
   connectors?: (ConnectorModule | ConnectorJson)[];
   // Folders laid out like connectors/ (<id>/connector.json), loaded after it; each needs a module
-  // in `connectors` unless it has an `http` block.
+  // in `connectors` unless it has an `http`, `soap` or `odata` block.
   extraConnectorDirs?: string[];
   // Approving the deployment's own multi-tenant Microsoft app instead of registering one: only
   // for a deployment that runs it, since every holder of its secret could reach every tenant
@@ -108,8 +110,16 @@ export async function createAgentConnect(options: AgentConnectOptions) {
   const apps: App[] = connectors.map((connector) => {
     if (connectors.filter((c) => c.id === connector.id).length > 1)
       throw new Error(`Two connectors have the id ${connector.id}`);
-    // An app described entirely in its connector.json runs on the generic http module.
-    const module = modules.get(connector.id) ?? (connector.http ? httpConnector : undefined);
+    // An app described entirely in its connector.json runs on a generic module.
+    const module =
+      modules.get(connector.id) ??
+      (connector.http
+        ? httpConnector
+        : connector.soap
+          ? soapConnector
+          : connector.odata
+            ? odataConnector
+            : undefined);
     if (!module) throw new Error(`Connector ${connector.id} has no code (ConnectorModule)`);
     return { connector, ...module.create({ microsoft, connector }) };
   });

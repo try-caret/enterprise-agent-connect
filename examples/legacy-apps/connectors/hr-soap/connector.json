@@ -1,0 +1,140 @@
+{
+  "id": "hr-soap",
+  "name": "HR directory",
+  "description": "Let agents look up employees in the internal HR directory, update a work phone number and end an employment record.",
+  "logo": "/brand/registry/hr-soap.svg",
+  "identity": "An integration user of the HR directory's web service.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an integration user",
+      "body": "Ask the team that runs the HR directory for a user that may call its web service. Give it only the operations agents need: GetEmployee, SearchEmployees, UpdateWorkPhone and, if agents may end records, TerminateEmployee."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    { "id": "username", "label": "User name", "secret": false },
+    { "id": "password", "label": "Password", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Look up employees",
+      "description": "Read an employee and search a department's employees.",
+      "required": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["hr_get_employee", "hr_search_employees"]
+    },
+    {
+      "id": "phone",
+      "label": "Update work phones",
+      "description": "Change an employee's work phone number.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["hr_update_work_phone"]
+    },
+    {
+      "id": "terminate",
+      "label": "End employment records",
+      "description": "Mark an employee as having left. This cannot be undone by the agent.",
+      "destructive": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["hr_terminate_employee"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "departments",
+      "label": "Departments",
+      "help": "Only employees of these departments. Leave empty for all.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Z0-9-]+$"
+    }
+  ],
+  "verify": { "label": "The HR directory answers", "check": "operation" },
+  "revoke": "Ask the team that runs the HR directory to disable the integration user.",
+  "soap": {
+    "endpoint": "https://hr.internal.example.com/services/EmployeeService",
+    "version": "1.1",
+    "namespaces": { "hr": "urn:example:hr:v1" },
+    "wsSecurity": { "username": "username", "password": "password" },
+    "verify": { "tool": "hr_search_employees", "args": { "department": "IT" }, "show": "name" },
+    "tools": [
+      {
+        "name": "hr_get_employee",
+        "description": "Read one employee by employee id: name, department, title, work email and phone.",
+        "operation": "GetEmployee",
+        "soapAction": "urn:example:hr:v1/GetEmployee",
+        "body": "<hr:GetEmployee><hr:employeeId>{employee_id}</hr:employeeId></hr:GetEmployee>",
+        "params": {
+          "employee_id": { "type": "string", "description": "The employee id, e.g. E1001" }
+        },
+        "result": "GetEmployeeResponse.employee",
+        "fields": ["id", "name", "department", "title", "email", "phone"],
+        "readOnly": true,
+        "answerLimits": [{ "field": "department", "limit": "departments" }]
+      },
+      {
+        "name": "hr_search_employees",
+        "description": "List a department's employees, optionally only those whose name starts with some text.",
+        "operation": "SearchEmployees",
+        "soapAction": "urn:example:hr:v1/SearchEmployees",
+        "body": "<hr:SearchEmployees><hr:department>{department}</hr:department><hr:namePrefix>{name_prefix}</hr:namePrefix></hr:SearchEmployees>",
+        "params": {
+          "department": {
+            "type": "string",
+            "description": "The department code, e.g. IT",
+            "limit": "departments"
+          },
+          "name_prefix": {
+            "type": "string",
+            "description": "The start of the name",
+            "required": false
+          }
+        },
+        "result": "SearchEmployeesResponse.employees.employee[]",
+        "fields": ["id", "name", "title"],
+        "readOnly": true
+      },
+      {
+        "name": "hr_update_work_phone",
+        "description": "Set an employee's work phone number.",
+        "operation": "UpdateWorkPhone",
+        "soapAction": "urn:example:hr:v1/UpdateWorkPhone",
+        "body": "<hr:UpdateWorkPhone><hr:department>{department}</hr:department><hr:employeeId>{employee_id}</hr:employeeId><hr:phone>{phone}</hr:phone></hr:UpdateWorkPhone>",
+        "params": {
+          "department": {
+            "type": "string",
+            "description": "The employee's department code; the service refuses another department's employee",
+            "limit": "departments"
+          },
+          "employee_id": { "type": "string", "description": "The employee id" },
+          "phone": { "type": "string", "description": "The new number, e.g. +1 555 0100" }
+        },
+        "result": "UpdateWorkPhoneResponse"
+      },
+      {
+        "name": "hr_terminate_employee",
+        "description": "End an employee's employment record as of a date.",
+        "operation": "TerminateEmployee",
+        "soapAction": "urn:example:hr:v1/TerminateEmployee",
+        "body": "<hr:TerminateEmployee><hr:department>{department}</hr:department><hr:employeeId>{employee_id}</hr:employeeId><hr:lastDay>{last_day}</hr:lastDay></hr:TerminateEmployee>",
+        "params": {
+          "department": {
+            "type": "string",
+            "description": "The employee's department code",
+            "limit": "departments"
+          },
+          "employee_id": { "type": "string", "description": "The employee id" },
+          "last_day": { "type": "string", "description": "The last working day, YYYY-MM-DD" }
+        },
+        "result": "TerminateEmployeeResponse",
+        "destructive": true
+      }
+    ]
+  }
+}

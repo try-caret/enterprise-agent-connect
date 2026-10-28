@@ -68,7 +68,7 @@ A connector with an `http` block is like any other connector (name, setup steps,
     `"prefix": "Token token="` (PagerDuty)
   - `{"type": "bearer", "token": "<field>"}`
   - `{"type": "basic", "username": "<plain field>", "password": "<secret field>"}`
-  - `{"type": "oauth2", "tokenUrl": "https://…", "clientId": "<plain field>", "clientSecret": "<secret field>"}` (client credentials)
+  - `{"type": "oauth2", "tokenUrl": "https://…", "clientId": "<plain field>", "clientSecret": "<secret field>"}` (client credentials; add `"scope"` for a token service that needs one, such as Microsoft Entra's)
   - `{"type": "query", "param": "api_key", "value": "<secret field>"}`: the key goes in every
     call's query string. No tool param may use the same name.
 - **headers**: sent with every call, e.g. `{"X-GitHub-Api-Version": "2022-11-28", "Accept":
@@ -125,6 +125,10 @@ A connector with an `http` block is like any other connector (name, setup steps,
 What the service enforces on every call: path values are encoded and `.`/`..` are refused,
 addresses stay under 8 KB and request bodies under 256 KB, answers under 1 MB and 30 seconds, only JSON or text answers
 are passed back, and the agent's own headers are never sent to your app.
+
+A SOAP service or an OData service (SAP, Dynamics, SuccessFactors) is described the same way,
+with a `soap` or `odata` block instead: see [soap-connector.md](soap-connector.md) and
+[odata-connector.md](odata-connector.md).
 
 When an app needs logic JSON cannot express, write a connector in code instead
 (`connectors/<app>/index.ts`, see the built-in ones) and pass it to `createAgentConnect`.

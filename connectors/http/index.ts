@@ -11,6 +11,7 @@ import type {
   Connector,
   ConnectorModule,
   HttpApp,
+  HttpAuth,
 } from "../../packages/connector-kit/src/connector.js";
 
 type HttpTool = HttpApp["tools"][number];
@@ -24,6 +25,7 @@ import {
   type VendorRequest,
   type VendorResponse,
 } from "../../packages/connector-kit/src/types.js";
+import type { Limits } from "../../packages/server/src/store.js";
 
 // The generic module behind every connector.json with an `http` block: an app described as
 // data, e.g. a company's internal REST API. Calls reach only baseUrl's origin under its path.
@@ -34,8 +36,15 @@ export const MAX_TARGET_BYTES = 8 * 1024;
 const TIMEOUT_MS = 30_000;
 
 // fetch that reaches only `allowed` origins, follows no redirect, gives up after TIMEOUT_MS and
-// reads at most MAX_RESPONSE_BYTES of JSON or text. Its refusals are ConnectError.
-export function guardedFetch(allowed: string[], fetchImpl: Fetch = fetch): Fetch {
+// reads at most MAX_RESPONSE_BYTES of JSON or text (or what `types` matches). Its refusals are
+// ConnectError.
+export function guardedFetch(
+  allowed: string[],
+  fetchImpl: Fetch = fetch,
+  types = /^(application\/([\w.+-]*\+)?json|text\/)/i,
+  // What `types` lets through, for the refusal.
+  passed = "JSON or text",
+): Fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
     if (!allowed.includes(url.origin))
@@ -50,14 +59,10 @@ export function guardedFetch(allowed: string[], fetchImpl: Fetch = fetch): Fetch
         `The app answered with a redirect (${res.status}), which is not followed`,
       );
     const type = res.headers.get("content-type") ?? "";
-    if (
-      res.body &&
-      !/^(application\/([\w.+-]*\+)?json|text\/)/i.test(type) &&
-      res.headers.get("content-length") !== "0"
-    ) {
+    if (res.body && !types.test(type) && res.headers.get("content-length") !== "0") {
       await res.body.cancel();
       throw new ConnectError(
-        `The app answered ${type || "without a content type"}; only JSON or text is passed on`,
+        `The app answered ${type || "without a content type"}; only ${passed} is passed on`,
       );
     }
     const chunks: Uint8Array[] = [];
@@ -85,6 +90,31 @@ function parse(raw: string): unknown {
   }
 }
 
+// The headers signing a call with a key, token or user and password (oauth2 signs its own, and
+// query auth goes in the address).
+export function authHeaders(auth: HttpAuth, c: VendorConnection): Record<string, string> {
+  if (auth.type === "header")
+    return { [auth.header.toLowerCase()]: `${auth.prefix ?? ""}${c.secret[auth.value]}` };
+  if (auth.type === "bearer") return { authorization: `Bearer ${c.secret[auth.token]}` };
+  if (auth.type === "basic")
+    return {
+      authorization: `Basic ${Buffer.from(`${c.config[auth.username]}:${c.secret[auth.password]}`).toString("base64")}`,
+    };
+  return {};
+}
+
+// The connect form's values: plain fields into config, secret ones into secret; all required.
+export function formValues(connector: Connector, fields: Record<string, string>) {
+  const config: Record<string, string> = {};
+  const secret: Record<string, string> = {};
+  for (const f of connector.fields) {
+    const value = fields[f.id]?.trim() ?? "";
+    if (!value) throw new ConnectError(`Enter ${f.label}`);
+    (f.secret ? secret : config)[f.id] = value;
+  }
+  return { config, secret };
+}
+
 export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vendor {
   const http = connector.http!;
   const base = new URL(http.baseUrl);
@@ -105,19 +135,9 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
           tokenUrl: auth.tokenUrl,
           clientId: c.config[auth.clientId],
           clientSecret: c.secret[auth.clientSecret],
+          scope: auth.scope,
         }
       : null!;
-
-  function headersFor(c: VendorConnection): Record<string, string> {
-    if (auth.type === "header")
-      return { [auth.header.toLowerCase()]: `${auth.prefix ?? ""}${c.secret[auth.value]}` };
-    if (auth.type === "bearer") return { authorization: `Bearer ${c.secret[auth.token]}` };
-    if (auth.type === "basic")
-      return {
-        authorization: `Basic ${Buffer.from(`${c.config[auth.username]}:${c.secret[auth.password]}`).toString("base64")}`,
-      };
-    return {};
-  }
 
   const call: Vendor["call"] = async (c, request) => {
     // The path is the tool's, already encoded; it must stay under baseUrl's path.
@@ -136,7 +156,7 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
       headers: {
         accept: "application/json",
         ...fixed,
-        ...headersFor(c),
+        ...authHeaders(auth, c),
         ...(req.body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: req.body === undefined ? undefined : JSON.stringify(req.body),
@@ -151,16 +171,10 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
 
   return {
     async connect(fields) {
-      const config: Record<string, string> = { host: base.host };
-      const secret: Record<string, string> = {};
-      for (const f of connector.fields) {
-        const value = fields[f.id]?.trim() ?? "";
-        if (!value) throw new ConnectError(`Enter ${f.label}`);
-        (f.secret ? secret : config)[f.id] = value;
-      }
-      const conn = { config, secret };
+      const { config, secret } = formValues(connector, fields);
+      const conn: VendorConnection = { config: { host: base.host, ...config }, secret };
       if (oauth) await oauth.signIn(oauthCreds(conn));
-      return { ...conn, accountLabel: config[connector.accountKey] ?? base.host };
+      return { ...conn, accountLabel: conn.config[connector.accountKey] ?? base.host };
     },
     call,
   };
@@ -179,7 +193,7 @@ function valuesAt(data: unknown, keys: string[]): unknown[] | null {
 }
 
 // Whether every value of `path` in the answer is among `values`. A missing one fails.
-function answerWithin(data: unknown, path: string, values: string[]): boolean {
+export function answerWithin(data: unknown, path: string, values: string[]): boolean {
   const found = valuesAt(data, path.split("."));
   return (
     found !== null &&
@@ -222,7 +236,28 @@ function nextCursor(tool: HttpTool, res: VendorResponse): string | number | null
   return param.type !== "string" && /^-?\d+(\.\d+)?$/.test(next) ? Number(next) : next;
 }
 
-const zodType = {
+// Each param naming a list limit the agent has values in must be sent, and each of its values
+// (every item, for an array) must be one of them.
+export function paramLimits(
+  limits: Limits,
+  params: Record<string, { limit?: string }>,
+  args: Record<string, unknown>,
+) {
+  for (const [name, p] of Object.entries(params)) {
+    const allowedValues = p.limit ? listLimit(limits, p.limit) : null;
+    if (!allowedValues) continue;
+    const value = args[name];
+    const values = Array.isArray(value) ? value : [value];
+    // Left out (or empty), an optional param would mean "all of them".
+    if (value === undefined || !values.length)
+      throw new Denied(`${name} is required: this agent is limited to some values`);
+    for (const v of values)
+      if (!allowedValues.includes(String(v)))
+        throw new Denied(`${name} ${String(v)} is outside this agent's limits`);
+  }
+}
+
+export const zodType = {
   string: z.string(),
   number: z.number(),
   integer: z.number().int(),
@@ -261,18 +296,7 @@ export function httpTools(http: HttpApp): Toolset {
           },
           (args: Record<string, unknown>) =>
             audited(ctx, tool.name, JSON.stringify(args).slice(0, 300), async (mark) => {
-              for (const [name, p] of Object.entries(tool.params)) {
-                const allowedValues = p.limit ? listLimit(ctx.limits, p.limit) : null;
-                if (!allowedValues) continue;
-                const value = args[name];
-                const values = Array.isArray(value) ? value : [value];
-                // Left out (or empty), an optional param would mean "all of them".
-                if (value === undefined || !values.length)
-                  throw new Denied(`${name} is required: this agent is limited to some values`);
-                for (const v of values)
-                  if (!allowedValues.includes(String(v)))
-                    throw new Denied(`${name} ${String(v)} is outside this agent's limits`);
-              }
+              paramLimits(ctx.limits, tool.params, args);
               const path = tool.path.replace(/\{([a-z][a-z0-9_]*)\}/g, (_, name: string) => {
                 const value = String(args[name]);
                 // URLs resolve . and .. segments even when percent-encoded.

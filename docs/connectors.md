@@ -7,11 +7,18 @@ connection is checked. Schema: `packages/connector-kit/src/connector.ts`.
 
 There are two ways to give an app its tools.
 
-## Without code: the `http` connector
+## Without code: the `http`, `soap` and `odata` connectors
 
 For an app with a REST API, add an `http` block to `connector.json` and describe each tool as a
 method and path. The image runs it as is. See [http-connector.md](http-connector.md) and the
 example in `examples/internal-app`.
+
+For a SOAP service, a `soap` block describes each operation as a body template
+([soap-connector.md](soap-connector.md)); for an OData v2 or v4 service (SAP Gateway and
+S/4HANA, Dynamics 365, SuccessFactors), an `odata` block describes each tool as a list, get,
+create, update, function or action on an entity set ([odata-connector.md](odata-connector.md)).
+Scripts draft both from the service's own description: `scripts/wsdl-to-connector.ts` and
+`scripts/odata-to-connector.ts`. Examples: `examples/legacy-apps`.
 
 ## With code
 
@@ -28,8 +35,8 @@ Then either add it to `packages/server/src/builtin.ts` (to contribute it here) o
 `createAgentConnect({ connectors: [...builtinConnectors, myApp] })` in your own Node app. Outside
 this repo, import the same helpers and types from `@arbium/enterprise-agent-connect/kit`, and give
 the module its definition inline (`connector: { ...its connector.json }`) instead of a folder in
-`extraConnectorDirs`. A definition with an `http` block can go into `connectors` alone, with no
-module. A built-in app is offered only while its module is in `connectors`. Example: the
+`extraConnectorDirs`. A definition with an `http`, `soap` or `odata` block can go into
+`connectors` alone, with no module. A built-in app is offered only while its module is in `connectors`. Example: the
 README's "Use it in your code".
 
 At startup the service checks that every tool a capability names exists, that each tool is in
