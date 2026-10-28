@@ -15,6 +15,10 @@
   projects, Okta groups, Salesforce objects, ServiceNow assignment groups and companies, Workday
   organizations and reports, account numbers, or any list an `http` connector declares. They are checked on every call, including
   against ids the agent passes in and, for `http` connectors, against fields of the answer.
+  projects, Okta groups, Salesforce objects, NetSuite subsidiaries and locations, ServiceNow
+  assignment groups and companies, account numbers, or any list an `http` connector declares.
+  They are checked on every call, including against ids the agent passes in and, for `http`
+  connectors, against fields of the answer.
 - **Destructive capabilities** (anything that deletes or overwrites) are off unless the admin
   confirms a warning, and every tool that deletes must sit in one. The service refuses to start
   otherwise.

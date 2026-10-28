@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -902,6 +902,40 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   the limit, reports need `report_org_column` (`config.reportOrgColumn`): rows whose column is
   not in scope are left out; without it reports are refused. Tested only against a fake Workday,
   never a real tenant.
+- Oracle NetSuite (`netsuite`): one NetSuite role (Web Services Only) on an employee, through an
+  integration record. The connect form's `auth` choice: `oauth2` (default; OAuth 2.0 client
+  credentials: the admin makes an RSA key pair with the openssl line in the steps, uploads
+  public.pem in the M2M setup and pastes private.pem, sealed; tokens come from a JWT signed PS256,
+  header `kid` the certificate id, `iss` the client id, `scope` one of `rest_webservices` /
+  `restlets`, `aud` the token URL, 5 min; RSA under 3072 bits is refused, NetSuite's minimum;
+  each scope's token cached until near `expires_in` and re-minted once on a 401) or `tba`
+  (OAuth 1.0a HMAC-SHA256 per call, realm the account id). Each method's fields `requires` its
+  choice; connect reads only the chosen method's. `accountId` (`1234567_SB1`) is the `accountKey`; hosts are
+  `<account lowercase, _ as ->.suitetalk.api.netsuite.com` and, for the saved search script only,
+  `.restlets.api.netsuite.com`; redirects refused. Agents never write SuiteQL: tools build it
+  from validated params (ids digits only, dates YYYY-MM-DD, text in single quotes with quotes
+  doubled; SuiteQL over REST takes no bound parameters), POST `/services/rest/query/v1/suiteql`
+  with `Prefer: transient`, paging by `limit`/`offset` (cursor `<offset>:<size>`). A 400
+  "Record 'x' was not found" is what NetSuite answers for a record type the role cannot read, so
+  it is passed as a 403 (the capability's `forbidden` hint). Limits `subsidiaries` and
+  `locations` (internal ids) go into every WHERE (customers' and vendors' primary subsidiary,
+  a transaction's mainline subsidiary and location, a stock row's location and that location's
+  subsidiary) and every row returned is checked again; transaction lines at a location outside
+  the key are left out (`lines_hidden`). Writes: `netsuite_create_customer` (needs a key
+  subsidiary under that limit) and `netsuite_create_sales_order` (under a subsidiaries limit the
+  customer is read first and its subsidiary set on the order, not found and outside refused alike;
+  under a locations limit a key location is required, set on the order and each line). New ids
+  come from the 204's Location header (`VendorResponse.headers.location`). Saved searches: REST cannot run one, so the after-connect
+  step carries a SuiteScript 2.1 RESTlet the admin uploads (script and deployment ids
+  `customscript_agent_saved_search` / `customdeploy_agent_saved_search`), answering
+  `{columns, rows, pages, total}`; a key runs only the search ids in its `saved_searches` limit
+  (none listed: none run), and under a subsidiaries or locations limit the search needs that
+  column without a join, rows outside dropped. Sales lines' quantity and amount are negated
+  (NetSuite stores them with a credit's sign). Sources: Oracle NetSuite help (REST web services,
+  SuiteQL, OAuth 2.0 client credentials, TBA), community SuiteQL examples for
+  `aggregateitemlocation` and `transactionline.mainline`, read October 27, 2026. Tested only
+  against a fake NetSuite, never a real account: table and column names, status letters and the
+  sign of lines are unverified live.
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under
