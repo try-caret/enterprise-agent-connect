@@ -63,16 +63,24 @@ export function clientCredentials(name: string, fetchImpl: Fetch) {
   const token = (c: Credentials) => tokens.get(key(c), () => mint(c));
 
   async function send(base: string, access: string, request: VendorRequest, headers = {}) {
+    // A string body (e.g. Jamf's Classic API XML) goes as is, under the request's own
+    // content-type; anything else is JSON.
+    const asIs = typeof request.body === "string";
     const res = await fetchImpl(`${base}${request.path}`, {
       method: request.method,
       headers: {
         authorization: `Bearer ${access}`,
         accept: "application/json",
         ...headers,
+        ...(request.body === undefined || asIs ? {} : { "content-type": "application/json" }),
         ...request.headers,
-        ...(request.body === undefined ? {} : { "content-type": "application/json" }),
       },
-      body: request.body === undefined ? undefined : JSON.stringify(request.body),
+      body:
+        request.body === undefined
+          ? undefined
+          : asIs
+            ? (request.body as string)
+            : JSON.stringify(request.body),
     });
     const raw = await res.text();
     return {

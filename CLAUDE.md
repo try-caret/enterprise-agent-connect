@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Okta, Slack, Salesforce, ServiceNow, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, ServiceNow, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -314,9 +314,10 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
                       # servicenow: OAuth client credentials or basic, on the instance;
-                      # fedex, dell-techdirect on the kit's oauth.ts (client credentials, a
-                      # cached token re-minted once on a 401); slack: a bot token, ok:false and
-                      # 429 handling; okta: an API service app,
+                      # fedex, dell-techdirect, jamf on the kit's oauth.ts (client credentials, a
+                      # cached token re-minted once on a 401; a string body is sent as is, under
+                      # the request's own content-type: Jamf's Classic API takes XML); slack: a bot
+                      # token, ok:false and 429 handling; okta: an API service app,
                       # private_key_jwt, a token per scope)
 connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for files and excel.ts
                       # for spreadsheets, joined by the kit's `toolsets`; entra and intune reuse
@@ -803,6 +804,45 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   against a fake instance. Not yet run against a real instance (client credentials, the
   `gs.getUserID()` verify probe, `123TEXTQUERY321` knowledge search and `sysparm_requested_for`
   on `order_now` are from ServiceNow's docs and community, read October 27, 2026).
+- Jamf Pro (`jamf`): a Jamf Pro API client (Settings > System > API roles and clients) whose API
+  role holds the ticked capabilities' privileges (`scopes`, filled into the role step). The
+  connect form takes the server address (https origin only, cloud or on premises: `config.url`,
+  `config.host` is the `accountKey`), client ID and secret. Token: client credentials at
+  `/api/v1/oauth/token` (form-encoded; current docs, the older `/api/oauth/token` is not used), on
+  the kit's oauth.ts. Verify reads `/api/v1/jamf-pro-version` (no privilege); discover lists site
+  ids (`/api/v1/sites`, Read Sites). Jamf Pro API: `/v4/computers-inventory` and
+  `/v2/mobile-devices/detail` (RSQL `filter`, `section`, `page`, `page-size`; one device is the
+  same listing with `id=in=(..)` / `mobileDeviceId=in=(..)`), group lists
+  `/v3/computer-groups/{static,smart}-groups` and `/v2/mobile-device-groups/{static,smart}-groups`,
+  `POST /v2/mdm/commands` (RESTART_DEVICE, DEVICE_LOCK, ERASE_DEVICE; by the device's
+  `general.managementId`) and `/v2/mdm/blank-push`. Classic API where the Jamf Pro API has no
+  equal: a group's members and static membership changes (`computergroups` /
+  `mobiledevicegroups` by id; PUT XML with `*_additions` / `*_deletions` changes only those
+  devices, where the Jamf Pro API's computer group PUT replaces the whole list), policies
+  (`/JSSResource/policies`, by id; no Jamf Pro API equal) and a computer's policy logs
+  (`computerhistory/id/{id}/subset/PolicyLogs`: Jamf keeps policy logs per computer). Update
+  inventory is left out: the Classic `UpdateInventory` mobile command is deprecated (11.28) with
+  no documented Jamf Pro API equal, and computers report inventory through their own agent.
+  Limit `sites` (Jamf site ids): the boundary because a device's site is set by Jamf
+  administrators and no tool here changes it; groups would not do, since an agent with
+  `group_membership` could add a device to its own group, and smart groups follow values the
+  device itself reports (its name, say). A device with no site is outside every sites limit.
+  Neither inventory listing filters by site, so listings filter here, reading on at most 5 pages
+  (`MAX_SCOPED_PAGES`); every lookup by id checks the device's site, and a device outside the
+  sites gets the same refusal as one Jamf does not have. Groups and policies are kept to the
+  key's sites too (policies listed under a limit are each read for their site, at most 50 per
+  call, `MAX_POLICY_READS`); a group's members are read back and checked. Capabilities: read
+  (required), groups, group_membership (destructive: removing a device can remove a scoped
+  profile or app), check_in (blank push), restart_lock, erase (destructive; the agent must give
+  the device's serial number, compared before the command), policies. A computer lock needs a
+  6-digit PIN. Sources: developer.jamf.com/jamf-pro/reference (Jamf Pro API 11.33 OpenAPI
+  files), docs/privileges-and-deprecations, docs/classic-api-minimum-required-privileges-and-endpoint-mapping,
+  docs/client-credentials, read October 27, 2026. Per-command Send privileges (Jamf Pro Server
+  Actions) are not all documented: `Send Computer Remote Lock Command`, `Send Mobile Device
+  Restart Device Command` and `Send Blank Pushes to Mobile Devices` come from Jamf community
+  threads, `Send Computer Remote Wipe Command` from Jamf's privileges table, `Send Mobile Device
+  Remote Wipe Command` by analogy; the 403 hint says to add the matching one. Nothing has run
+  against a real Jamf Pro server. Tests: `connectors/jamf/*.test.ts`, against a fake Jamf Pro.
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under
