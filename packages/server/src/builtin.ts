@@ -2,6 +2,7 @@ import dellTechdirect from "../../../connectors/dell-techdirect/index.js";
 import entra from "../../../connectors/entra/index.js";
 import fedex from "../../../connectors/fedex/index.js";
 import intune from "../../../connectors/intune/index.js";
+import jamf from "../../../connectors/jamf/index.js";
 import jira from "../../../connectors/jira/index.js";
 import okta from "../../../connectors/okta/index.js";
 import outlookCalendar from "../../../connectors/outlook-calendar/index.js";
@@ -30,4 +31,5 @@ export const builtinConnectors: ConnectorModule[] = [
   intune,
   slack,
   okta,
+  jamf,
 ];
