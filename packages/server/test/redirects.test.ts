@@ -90,6 +90,13 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     },
     request: { method: "GET", path: "/services/rest/record/v1/customer" },
   },
+  gong: {
+    conn: {
+      config: { host: "us-1.api.gong.io" },
+      secret: { access_key: "k", access_key_secret: "s" },
+    },
+    request: { method: "GET", path: "/v2/workspaces" },
+  },
   "dynamics-365": {
     conn: {
       config: { ...microsoftConn.config, environment: "https://acme.crm.dynamics.com" },
