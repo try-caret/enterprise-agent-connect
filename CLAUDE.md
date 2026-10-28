@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, ServiceNow, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, SAP S/4HANA, ServiceNow, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -313,6 +313,7 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # only the app's own choice fields, from its connector.json; microsoftApp()
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
+                      # sap-s4hana: OData v2 with basic auth or Cloud OAuth, sap-client, CSRF;
                       # servicenow: OAuth client credentials or basic, on the instance;
                       # fedex, dell-techdirect, jamf on the kit's oauth.ts (client credentials, a
                       # cached token re-minted once on a 401; a string body is sent as is, under
@@ -843,6 +844,34 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   threads, `Send Computer Remote Wipe Command` from Jamf's privileges table, `Send Mobile Device
   Remote Wipe Command` by analogy; the 403 hint says to add the matching one. Nothing has run
   against a real Jamf Pro server. Tests: `connectors/jamf/*.test.ts`, against a fake Jamf Pro.
+- SAP S/4HANA (`sap-s4hana`): SAP's released OData v2 APIs at `/sap/opu/odata/sap/<service>/`,
+  the same paths on S/4HANA Cloud (a communication user in one arrangement per scenario) and on
+  premise through SAP Gateway (a System-type technical user; `sapClient` appended as
+  `sap-client` to every call). The connect form's `deployment` choice switches the setup steps and
+  fields (`host` for Cloud; `gateway_host` and `sap_client` on premise); `auth` (asked only for Cloud) is basic or OAuth client credentials at
+  `/sap/bc/sec/oauth2/token` with the communication user as client (Basic client auth, token
+  cached and re-minted once on a 401). Host only, https only (an internal CA is the deployment's
+  `NODE_EXTRA_CA_CERTS`); calls go through the http connector's `guardedFetch` (that origin
+  only, no redirects, 1 MB). `accountKey` is `system` (host, plus client). Connect proves the
+  sign-in by reading the API_BUSINESS_PARTNER root (401 is a refused sign-in; 403/404 are not,
+  the arrangement may not exist yet); the `services` check opens each ticked capability's
+  service roots (capability `roles` are service names, `scopes` the Cloud scenario ids for the
+  `{scope}` line, `permissions` the services to activate on premise) and names the missing
+  ones. Writes fetch an `x-csrf-token` from the service root first and send it with the
+  session cookies it came with; a refused fetch is answered as is. Capabilities: partners
+  (A_BusinessPartner; master data, not narrowed by limits), read_sales / create_sales
+  (API_SALES_ORDER_SRV, deep insert of to_Item), read_purchasing / create_purchasing
+  (API_PURCHASEORDER_PROCESS_SRV; create is destructive and `costs`; no approve tool), stock
+  (API_PRODUCT_SRV descriptions, API_MATERIAL_STOCK_SRV A_MatlStkInAcctMod), finance
+  (API_SUPPLIERINVOICE_PROCESS_SRV, API_OPLACCTGDOCITEMCUBE_SRV open and cleared items).
+  Limits (lists): company_codes, sales_organizations, purchasing_organizations, plants. Reads put
+  them in `$filter` (values quoted with `'` doubled) and filter the answer rows again; a single
+  order outside them, or with a line at another plant, is refused after the read; creates check
+  every org value and each line's plant before any call. Lists page with `$top` (one extra row
+  asks whether there is more) and `$skip` as `cursor`. Scenario ids SAP_COM_0008, 0109, 0053,
+  0009, 0164, 0057 and 0303 (the last two from SAP's SDK docs and a support note) and the
+  OData field names come from SAP's API reference as remembered and searched on October 27,
+  2026; tested only against a fake SAP, never a real system.
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under

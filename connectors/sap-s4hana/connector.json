@@ -1,0 +1,263 @@
+{
+  "id": "sap-s4hana",
+  "name": "SAP S/4HANA",
+  "description": "Let agents look up customers, suppliers, orders, stock and invoices in SAP S/4HANA and, if you allow it, create sales and purchase orders, within the company codes, sales and purchasing organizations and plants you choose.",
+  "logo": "/brand/registry/sap.svg",
+  "identity": "A dedicated SAP user for {brand.microsoft.appName}: a communication user on SAP S/4HANA Cloud, or a technical (system) user on premise. Agents never see more than this user's SAP authorizations allow.",
+  "accountKey": "system",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a communication user",
+      "body": "In SAP S/4HANA Cloud, open the Maintain Communication Users app and create a user for {brand.microsoft.appName}. Let SAP propose a password and copy it now: it is shown only once.",
+      "option": { "field": "deployment", "value": "cloud" },
+      "click": [
+        "SAP Fiori launchpad > Communication Management > Maintain Communication Users > New",
+        "User Name: a name such as AGENT_CONNECT, Description: {brand.microsoft.appName} > Propose Password > copy it > Create"
+      ]
+    },
+    {
+      "title": "Create a communication system",
+      "body": "Open the Communication Systems app and create a system for {brand.microsoft.appName}. Tick Inbound Only, and add the communication user under Users for Inbound Communication with the authentication method User ID and Password.",
+      "option": { "field": "deployment", "value": "cloud" },
+      "click": [
+        "Communication Management > Communication Systems > New",
+        "System ID and Name: AGENT_CONNECT > Create > Inbound Only: on",
+        "Users for Inbound Communication > + > the communication user, User ID and Password > OK > Save"
+      ]
+    },
+    {
+      "title": "Create a communication arrangement for each scenario",
+      "body": "Open the Communication Arrangements app and create one arrangement per scenario below, each with the communication system above. Agents can only reach the services of these scenarios. To sign in with OAuth 2.0, choose OAuth 2.0 as the inbound authentication of each arrangement. The arrangement shows the API host under Inbound Services, for example my123456-api.s4hana.cloud.sap: enter that host below.",
+      "option": { "field": "deployment", "value": "cloud" },
+      "copy": ["{scope}"],
+      "click": [
+        "Communication Management > Communication Arrangements > New > Scenario: the scenario > Create",
+        "Communication System: AGENT_CONNECT > Save"
+      ]
+    },
+    {
+      "title": "Activate the OData services",
+      "body": "On the SAP Gateway system, add each service below in transaction /IWFND/MAINT_SERVICE (system alias LOCAL on an embedded Gateway), then check that its node /sap/opu/odata/sap/ followed by the service name is active in transaction SICF.",
+      "option": { "field": "deployment", "value": "on_premise" },
+      "permissions": true,
+      "click": [
+        "Transaction /IWFND/MAINT_SERVICE > Add Service > System Alias: LOCAL > Technical Service Name: the service > Get Services > select it > Add Selected Services > Local Object",
+        "Transaction SICF > Service Path: /sap/opu/odata/sap/ the service > Execute > right-click the service node > Activate Service"
+      ]
+    },
+    {
+      "title": "Create a role for the services and your organizations",
+      "body": "In transaction PFCG create a role, add the same services to its menu (Authorization Default, TADIR Service, R3TR IWSG and the service name followed by _0001), and in its authorizations give display access, plus create for the order capabilities you tick, only for the organizations agents need: V_VBAK_VKO and V_VBAK_AAT (sales organizations, order types), M_BEST_EKO, M_BEST_BSA and M_BEST_WRK (purchasing organizations, order types, plants), M_MSEG_WWA (plants) and F_BKPF_BUK (company codes). SAP then enforces these too, whatever the limits here.",
+      "option": { "field": "deployment", "value": "on_premise" },
+      "click": [
+        "Transaction PFCG > Role: Z_AGENT_CONNECT > Single Role > Menu > Authorization Default > TADIR Service, R3TR IWSG, the services with _0001",
+        "Authorizations > Change Authorization Data > fill the organizational levels > Generate > Save"
+      ]
+    },
+    {
+      "title": "Create a technical user",
+      "body": "In transaction SU01 create a user of type System for {brand.microsoft.appName}, give it a password and the role above. A System user cannot sign in to SAP GUI and its password does not expire.",
+      "option": { "field": "deployment", "value": "on_premise" },
+      "click": [
+        "Transaction SU01 > User: AGENT_CONNECT > Create",
+        "Logon Data > User Type: System > set the password",
+        "Roles > Z_AGENT_CONNECT > Save"
+      ]
+    },
+    {
+      "title": "Find the Gateway's https address",
+      "body": "Agents reach SAP through this service, which usually runs inside your network next to SAP. Use the Gateway's https host and port, for example sap-gw.example.internal:44300 (transaction SMICM, Goto, Services lists the HTTPS port). If your SAP certificate comes from an internal certificate authority, whoever runs this service adds that authority to it first.",
+      "option": { "field": "deployment", "value": "on_premise" },
+      "click": ["Transaction SMICM > Goto > Services > the HTTPS line's host name and port"]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "deployment",
+      "label": "SAP system",
+      "secret": false,
+      "options": [
+        {
+          "value": "cloud",
+          "label": "SAP S/4HANA Cloud",
+          "description": "Reached through communication arrangements and a communication user."
+        },
+        {
+          "value": "on_premise",
+          "label": "On premise or private cloud",
+          "description": "SAP S/4HANA reached through SAP Gateway with a technical user."
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "label": "Sign-in",
+      "secret": false,
+      "requires": { "field": "deployment", "value": "cloud" },
+      "options": [
+        {
+          "value": "basic",
+          "label": "User name and password",
+          "description": "The communication user's name and password on every call."
+        },
+        {
+          "value": "oauth",
+          "label": "OAuth 2.0 client credentials",
+          "description": "The communication user signs in for a short-lived token. Its arrangements must use OAuth 2.0."
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "label": "API host",
+      "help": "The host shown under Inbound Services in the communication arrangement.",
+      "placeholder": "my123456-api.s4hana.cloud.sap",
+      "secret": false,
+      "requires": { "field": "deployment", "value": "cloud" }
+    },
+    {
+      "id": "gateway_host",
+      "label": "Gateway address",
+      "help": "The SAP Gateway's https host and port.",
+      "placeholder": "sap-gw.example.internal:44300",
+      "secret": false,
+      "requires": { "field": "deployment", "value": "on_premise" }
+    },
+    {
+      "id": "sap_client",
+      "label": "Client",
+      "help": "The three-digit SAP client, for example 100. Leave empty for the system's default client.",
+      "placeholder": "100",
+      "secret": false,
+      "requires": { "field": "deployment", "value": "on_premise" }
+    },
+    {
+      "id": "user",
+      "label": "User name",
+      "help": "The communication user (Cloud) or the technical user (on premise).",
+      "secret": false
+    },
+    {
+      "id": "password",
+      "label": "Password",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "partners",
+      "label": "Look up customers and suppliers",
+      "description": "Find business partners by name or number: name, whether they are a customer or supplier, blocked or not, city and country. Partners are shared across your organizations, so the limits below do not narrow them.",
+      "scopes": ["SAP_COM_0008"],
+      "roles": ["API_BUSINESS_PARTNER"],
+      "permissions": ["API_BUSINESS_PARTNER"],
+      "forbidden": "The SAP user needs the business partner service: on SAP S/4HANA Cloud the arrangement for SAP_COM_0008, on premise API_BUSINESS_PARTNER in its role.",
+      "tools": ["sap_find_business_partners"]
+    },
+    {
+      "id": "read_sales",
+      "label": "Read sales orders",
+      "description": "List and read sales orders with their lines, status and delivery status.",
+      "scopes": ["SAP_COM_0109"],
+      "roles": ["API_SALES_ORDER_SRV"],
+      "permissions": ["API_SALES_ORDER_SRV"],
+      "forbidden": "The SAP user needs the sales order service: on SAP S/4HANA Cloud the arrangement for SAP_COM_0109, on premise API_SALES_ORDER_SRV and display access to the sales organization in its role.",
+      "tools": ["sap_list_sales_orders", "sap_get_sales_order"]
+    },
+    {
+      "id": "create_sales",
+      "label": "Create sales orders",
+      "description": "Create sales orders for customers from materials and quantities. SAP prices them from your master data. Agents cannot change or cancel orders.",
+      "scopes": ["SAP_COM_0109"],
+      "roles": ["API_SALES_ORDER_SRV"],
+      "permissions": ["API_SALES_ORDER_SRV"],
+      "forbidden": "On premise, the SAP user's role needs create access (V_VBAK_VKO activity 01) for the sales organization and order type.",
+      "tools": ["sap_create_sales_order"]
+    },
+    {
+      "id": "read_purchasing",
+      "label": "Read purchase orders",
+      "description": "List and read purchase orders with their lines, approval status, and what is delivered and invoiced.",
+      "scopes": ["SAP_COM_0053"],
+      "roles": ["API_PURCHASEORDER_PROCESS_SRV"],
+      "permissions": ["API_PURCHASEORDER_PROCESS_SRV"],
+      "forbidden": "The SAP user needs the purchase order service: on SAP S/4HANA Cloud the arrangement for SAP_COM_0053, on premise API_PURCHASEORDER_PROCESS_SRV and display access to the purchasing organization in its role.",
+      "tools": ["sap_list_purchase_orders", "sap_get_purchase_order"]
+    },
+    {
+      "id": "create_purchasing",
+      "label": "Create purchase orders",
+      "description": "Create purchase orders to suppliers. Each goes through your purchase order approval as usual: agents can never approve one. Once approved and sent, it commits your company to pay.",
+      "destructive": true,
+      "costs": true,
+      "note": "Agents with this can commit your company to spend money. Keep each agent to the company codes, purchasing organizations and plants it needs, and keep your approval rules in place.",
+      "scopes": ["SAP_COM_0053"],
+      "roles": ["API_PURCHASEORDER_PROCESS_SRV"],
+      "permissions": ["API_PURCHASEORDER_PROCESS_SRV"],
+      "forbidden": "On premise, the SAP user's role needs create access (M_BEST_EKO activity 01) for the purchasing organization, order type and plant.",
+      "tools": ["sap_create_purchase_order"]
+    },
+    {
+      "id": "stock",
+      "label": "Read products and stock",
+      "description": "Find products by number or description, and read a material's stock by plant, storage location and batch.",
+      "scopes": ["SAP_COM_0009", "SAP_COM_0164"],
+      "roles": ["API_PRODUCT_SRV", "API_MATERIAL_STOCK_SRV"],
+      "permissions": ["API_PRODUCT_SRV", "API_MATERIAL_STOCK_SRV"],
+      "forbidden": "The SAP user needs the product and stock services: on SAP S/4HANA Cloud the arrangements for SAP_COM_0009 and SAP_COM_0164, on premise API_PRODUCT_SRV and API_MATERIAL_STOCK_SRV in its role.",
+      "tools": ["sap_find_products", "sap_get_stock"]
+    },
+    {
+      "id": "finance",
+      "label": "Read invoices and payments",
+      "description": "List supplier invoices, and open or paid customer and supplier items in accounting with their due dates.",
+      "scopes": ["SAP_COM_0057", "SAP_COM_0303"],
+      "roles": ["API_SUPPLIERINVOICE_PROCESS_SRV", "API_OPLACCTGDOCITEMCUBE_SRV"],
+      "permissions": ["API_SUPPLIERINVOICE_PROCESS_SRV", "API_OPLACCTGDOCITEMCUBE_SRV"],
+      "forbidden": "The SAP user needs the invoice and accounting item services: on SAP S/4HANA Cloud the arrangements for SAP_COM_0057 and SAP_COM_0303, on premise API_SUPPLIERINVOICE_PROCESS_SRV and API_OPLACCTGDOCITEMCUBE_SRV and display access to the company code in its role.",
+      "tools": ["sap_list_supplier_invoices", "sap_list_account_items"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "company_codes",
+      "label": "Company codes",
+      "help": "Purchase orders, invoices and accounting items in these company codes only. Leave empty to allow every company code the SAP user can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9]{1,4}$"
+    },
+    {
+      "id": "sales_organizations",
+      "label": "Sales organizations",
+      "help": "Sales orders of these sales organizations only. Leave empty to allow every one the SAP user can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9]{1,4}$"
+    },
+    {
+      "id": "purchasing_organizations",
+      "label": "Purchasing organizations",
+      "help": "Purchase orders of these purchasing organizations only. Leave empty to allow every one the SAP user can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9]{1,4}$"
+    },
+    {
+      "id": "plants",
+      "label": "Plants",
+      "help": "Stock at these plants only, new order lines must name one of them, and orders with lines at other plants are not shown. Leave empty to allow every plant.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9]{1,4}$"
+    }
+  ],
+  "verify": {
+    "label": "Services the SAP user can use",
+    "check": "services",
+    "ifEmpty": "The SAP user cannot open any of the services yet. Follow the setup steps for the capabilities you ticked."
+  },
+  "revoke": "On SAP S/4HANA Cloud, delete the communication arrangements and the communication user for {brand.microsoft.appName}. On premise, lock the technical user in transaction SU01."
+}

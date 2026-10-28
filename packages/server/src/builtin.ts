@@ -8,6 +8,7 @@ import okta from "../../../connectors/okta/index.js";
 import outlookCalendar from "../../../connectors/outlook-calendar/index.js";
 import outlookMail from "../../../connectors/outlook-mail/index.js";
 import salesforce from "../../../connectors/salesforce/index.js";
+import sapS4hana from "../../../connectors/sap-s4hana/index.js";
 import servicenow from "../../../connectors/servicenow/index.js";
 import sharepointFiles from "../../../connectors/sharepoint-files/index.js";
 import slack from "../../../connectors/slack/index.js";
@@ -32,4 +33,5 @@ export const builtinConnectors: ConnectorModule[] = [
   slack,
   okta,
   jamf,
+  sapS4hana,
 ];
