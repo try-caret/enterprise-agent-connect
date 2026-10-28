@@ -67,5 +67,9 @@ which agent, which app and tool, a shortened target, the decision and the app's 
 
 - Give the service a database role that owns only its schema.
 - Keep `CONNECT_ENCRYPTION_KEY` and `AGENT_CONNECT_ADMIN_TOKEN` in a secrets manager.
-- Expose only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`.
+- Expose only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`. Behind a
+  proxy, reach the admin API in process or over the private network
+  ([inside-your-network.md](inside-your-network.md)).
+- Trust your own certificate authority with `NODE_EXTRA_CA_CERTS` (the chart's `caBundle`),
+  never by turning certificate checks off.
 - Report vulnerabilities privately: see [SECURITY.md](../SECURITY.md).
