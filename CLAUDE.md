@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Slack, Salesforce, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Okta, Slack, Salesforce, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -311,7 +311,8 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # salesforce: External Client App client credentials on the My Domain;
                       # fedex, dell-techdirect on the kit's oauth.ts (client credentials, a
                       # cached token re-minted once on a 401); slack: a bot token, ok:false and
-                      # 429 handling)
+                      # 429 handling; okta: an API service app,
+                      # private_key_jwt, a token per scope)
 connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for files and excel.ts
                       # for spreadsheets, joined by the kit's `toolsets`; entra and intune reuse
                       # its Graph paging, outlook-calendar outlook-mail's). Folder, mail, calendar and people listings page with `cursor`
@@ -684,6 +685,33 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   intune-enrollment-windowsautopilotdeviceidentity (v1.0 and beta), resources/
   intune-enrollment-enrollmentstate, intune-shared-windowsautopilotdeploymentprofile-get (beta)
   (read October 25, 2026). Tests: `connectors/intune/autopilot.test.ts`, against a fake Graph.
+- Okta (`okta`): an Okta API service app on the org authorization server
+  (`https://<org>/oauth2/v1/token`), client credentials with a private_key_jwt client assertion
+  (RS256, `kid`, iss = sub = client id, aud = the token URL, 5 minutes) signed with the private key
+  Okta generated in the app (PEM or JWK, kept as PKCS#8 PEM in the secret). Okta has no catch-all
+  scope and refuses a whole token request naming a scope not granted (`invalid_scope`), so each
+  call gets a token for the one scope its path and method need (`scopeFor`:
+  `okta.<resource>.read` for a GET, `.manage` otherwise, resource users, groups, apps or logs),
+  cached per credential and scope, re-minted once on a 401. The `scopes` check mints one token per expected scope and warns only about missing ones.
+  An error naming DPoP (on by default for new service apps) says to clear it. The org is
+  `<name>.okta.com` (also oktapreview, okta-emea, okta-gov; an `-admin` host is its org), the only
+  host called, redirects refused. Lists come back as `{items, after}` from the Link header. Okta
+  also checks the app's admin role on every call: the setup has the admin make a custom role (the
+  capabilities' `permissions`) with a resource set of the agents' groups. Capabilities: `read`
+  (required: get, search users, factors, search groups, group members), `read_apps`,
+  `read_activity` (System Log for one person: `actor.id` or `target.id`, a window kept in the
+  cursor as `<until>~<after>`, since a log query with `since` and no `until` never ends; another
+  person's name is left out under limits), `manage_groups`, `helpdesk` (unlock, password reset
+  always `sendEmail=true`, so the reset link never reaches the agent), and destructive
+  `reset_mfa`, `suspend` (suspend, unsuspend, clear sessions with `oauthTokens=true`) and
+  `deactivate` (`sendEmail=false`). Limit `groups` (Okta group ids; Okta groups do not nest): a
+  person is in scope when `/users/{id}/groups` (5 pages of 200 at most) has one of them; every tool
+  naming a person checks first, a username not found under limits gets the same refusal, searches
+  read on up to 5 pages, group tools and membership changes take only the key's groups. Not yet run
+  against a real Okta org: tested against fakes only (`connectors/okta/*.test.ts`). Sources:
+  developer.okta.com guides implement-oauth-for-okta-serviceapp, client-auth, pagination, and the
+  Management API's User, UserLifecycle, UserSessions, UserFactor, Group, Application and SystemLog
+  references (read October 27, 2026).
 - FedEx (`fedex`): a FedEx Developer Portal project's API key and secret key, OAuth client
   credentials at `/oauth/token` on `apis-sandbox.fedex.com` or `apis.fedex.com` (the connect
   form's `environment` choice; no default is assumed: the admin app always sends the choice),
