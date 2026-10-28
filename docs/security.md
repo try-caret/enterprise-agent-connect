@@ -38,10 +38,14 @@
 
 ## Calls to apps
 
-- Each built-in connector reaches only its vendor's addresses. An `http` connector reaches only
-  its `baseUrl` (https unless `allowInsecureHttp` is set) and its token URL, a `soap` connector
-  only its endpoint, an `odata` connector only its service root and token URL; redirects are not
-  followed. Request and answer sizes and call time are capped.
+- Each built-in connector reaches only its vendor's addresses, and no connector follows a
+  redirect: a redirect is refused as an error, so a token or request body is never sent on to
+  another host. The one exception is a SharePoint file's content, which Microsoft Graph serves
+  from a SharePoint download address; that address is called without the token, and only when
+  it is on SharePoint. An `http` connector reaches only its `baseUrl` (https unless
+  `allowInsecureHttp` is set) and its token URL, a `soap` connector only its endpoint, an `odata`
+  connector only its service root and token URL. Request and answer sizes and call time are
+  capped.
 - Agents never write the app's query language or markup: SOAP values are XML-escaped into a fixed
   body, and OData filters, keys and literals are written by the service from typed values. SOAP
   answers are read without any document type declaration, so XML entities cannot reach files or

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { vendorFetch } from "../../packages/connector-kit/src/fetch.js";
 import { vendorError } from "../../packages/connector-kit/src/oauth.js";
 import {
   ConnectError,
@@ -99,7 +100,8 @@ export function connectedReports(config: Record<string, string>): Report[] {
   return config.reports ? (JSON.parse(config.reports) as Report[]) : [];
 }
 
-export function workdayVendor(fetchImpl: Fetch = fetch): Vendor {
+export function workdayVendor(unguarded: Fetch = fetch): Vendor {
+  const fetchImpl = vendorFetch("Workday", unguarded);
   const tokens = new TokenCache();
   const key = (c: VendorConnection) =>
     createHash("sha256")
@@ -121,7 +123,6 @@ export function workdayVendor(fetchImpl: Fetch = fetch): Vendor {
         grant_type: "refresh_token",
         refresh_token: c.secret.refresh_token,
       }),
-      redirect: "manual",
     });
     const raw = await res.text();
     const body = parse(raw) as { access_token?: unknown; expires_in?: unknown } | string | null;
@@ -147,10 +148,13 @@ export function workdayVendor(fetchImpl: Fetch = fetch): Vendor {
         ...(request.body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
-      redirect: "manual",
     });
     const raw = await res.text();
-    return { status: res.status, data: raw ? parse(raw) : null };
+    return {
+      status: res.status,
+      data: raw ? parse(raw) : null,
+      headers: Object.fromEntries(res.headers),
+    };
   }
 
   const call: Vendor["call"] = async (c, request) => {

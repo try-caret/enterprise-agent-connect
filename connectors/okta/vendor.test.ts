@@ -198,7 +198,7 @@ test("calls get a token for their own scope, kept, and minted again once after a
   );
   assert.equal(okta.calls[0].url, "https://acme.okta.com/api/v1/users/00u1");
   assert.equal((okta.calls[0].init.headers as Record<string, string>).authorization, "Bearer at-1");
-  assert.equal(okta.calls[0].init.redirect, "error");
+  assert.equal(okta.calls[0].init.redirect, "manual");
 
   okta.rejectNext();
   const res = await vendor.call(conn, { method: "GET", path: "/api/v1/users/00u1" });

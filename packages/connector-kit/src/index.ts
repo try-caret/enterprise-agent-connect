@@ -13,6 +13,7 @@ export {
   type Toolset,
 } from "./common.js";
 export type { Capability, Connector, ConnectorJson, ConnectorModule } from "./connector.js";
+export { retryAfter, vendorFetch, vendorUrl } from "./fetch.js";
 export { clientCredentials, vendorError } from "./oauth.js";
 export {
   ConnectError,

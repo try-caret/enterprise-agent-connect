@@ -1,3 +1,4 @@
+import { vendorFetch } from "../../packages/connector-kit/src/fetch.js";
 import { clientCredentials } from "../../packages/connector-kit/src/oauth.js";
 import {
   ConnectError,
@@ -43,19 +44,8 @@ function checkPath(path: string) {
   if (!/^\/(?![/\\])/.test(path)) throw new Error(`Refused ServiceNow path ${path.slice(0, 50)}`);
 }
 
-export function noRedirects(fetchImpl: Fetch): Fetch {
-  return (async (input: string | URL | Request, init?: RequestInit) => {
-    const res = await fetchImpl(input, { ...init, redirect: "manual" });
-    if (res.status >= 300 && res.status < 400)
-      throw new ConnectError(
-        `ServiceNow answered with a redirect (${res.status}), which is not followed. Enter the address the instance is served at.`,
-      );
-    return res;
-  }) as Fetch;
-}
-
 export function servicenowVendor(unguarded: Fetch = fetch): Vendor {
-  const fetchImpl = noRedirects(unguarded);
+  const fetchImpl = vendorFetch("ServiceNow", unguarded);
   const oauth = clientCredentials("ServiceNow", fetchImpl);
   const creds = (c: VendorConnection) => ({
     tokenUrl: `${base(c.config)}/oauth_token.do`,
@@ -75,7 +65,11 @@ export function servicenowVendor(unguarded: Fetch = fetch): Vendor {
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
     });
     const raw = await res.text();
-    return { status: res.status, data: raw ? safeJson(raw) : null };
+    return {
+      status: res.status,
+      data: raw ? safeJson(raw) : null,
+      headers: Object.fromEntries(res.headers),
+    };
   }
 
   const call: Vendor["call"] = async (c, request) => {

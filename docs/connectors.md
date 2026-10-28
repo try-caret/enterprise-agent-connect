@@ -30,7 +30,10 @@ For an app that needs logic JSON cannot express (paging, multi-step writes, chec
 delete), write a `ConnectorModule` next to the JSON:
 
 - `vendor.ts`: how it signs in and calls the app (`connect`, `call`), built on
-  `packages/connector-kit/src/types.ts`.
+  `packages/connector-kit/src/types.ts`. Send every request through `vendorFetch` (it refuses
+  redirects and waits out a short `Retry-After` on a 429) and build addresses with `vendorUrl`
+  (it refuses a path that leaves the app's address); `clientCredentials` does both. Return the
+  answer's headers in `VendorResponse.headers`.
 - `tools.ts`: the MCP tools, each wrapped in `audited(...)` from `connector-kit/src/common.ts`,
   enforcing the grant's limits with `listLimit`, `mapLimit` and friends.
 - `index.ts`: `export default { id, create }`.
