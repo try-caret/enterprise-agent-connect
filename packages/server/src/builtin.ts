@@ -13,6 +13,7 @@ import servicenow from "../../../connectors/servicenow/index.js";
 import sharepointFiles from "../../../connectors/sharepoint-files/index.js";
 import slack from "../../../connectors/slack/index.js";
 import teams from "../../../connectors/teams/index.js";
+import workday from "../../../connectors/workday/index.js";
 import type { ConnectorModule } from "../../connector-kit/src/connector.js";
 
 export type { ConnectorModule };
@@ -34,4 +35,5 @@ export const builtinConnectors: ConnectorModule[] = [
   okta,
   jamf,
   sapS4hana,
+  workday,
 ];
