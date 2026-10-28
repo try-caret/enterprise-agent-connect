@@ -293,8 +293,12 @@ packages/connector-kit/src/ # what a connector builds on: connector.ts (connecto
                       # ConnectError, a 429 with Retry-After up to 10 s sent again twice;
                       # vendorUrl: base + path refused when it leaves base's origin; the
                       # redirects test calls every built-in app against a redirecting fake),
-                      # branding.ts, certificate.ts. It still imports types from the server
-                      # (Limits, TeamsAccess); untangling that is phase 3. index.ts: the public
+                      # branding.ts, certificate.ts. Imports nothing from the server or
+                      # connectors/ (Limits lives in types.ts; store.ts re-exports it).
+                      # ConnectorModule.create gets a ConnectorContext ({connector}); the
+                      # built-ins are BuiltinModule (connectors/microsoft/client.ts: also the
+                      # Microsoft client), and Teams tools read their bot from TeamsToolContext
+                      # (connectors/teams/tools.ts). index.ts: the public
                       # `@arbium/enterprise-agent-connect/kit`, only what a connector author needs
 packages/connector-kit/src/certificate.ts # RSA key pair + self-signed X.509 (DER written by hand; Node only parses
                       # X.509), SHA-1 thumbprint for display, PS256 (RSA-PSS) client assertion
@@ -302,7 +306,8 @@ packages/connector-kit/src/certificate.ts # RSA key pair + self-signed X.509 (DE
 packages/server/src/index.ts # createAgentConnect(options): checks and wires everything (connectors and
                       # their modules, providers, branding, runners, migrations), returns
                       # {fetch, start, stop}; what an embedder imports. `connectors`: modules
-                      # (a built-in folder's app is offered only while its module is passed;
+                      # (a built-in folder's app is offered, and its connector.json read, only
+                      # while its module is passed;
                       # a module may carry its connector.json inline as `connector`) and
                       # http-only definitions; checked like a folder's. Teams may be left out
 packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<id>/index.ts)

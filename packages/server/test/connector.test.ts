@@ -47,6 +47,20 @@ test("an invalid connector file is refused with its name", () => {
   assert.throws(() => loadConnectors(pathToFileURL(dir + "/")), /bad\/connector\.json/);
 });
 
+test("only the folders asked for are read, so an app not offered is never parsed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "connectors-"));
+  mkdirSync(join(dir, "bad"));
+  writeFileSync(join(dir, "bad", "connector.json"), JSON.stringify({ id: "bad" }));
+  assert.deepEqual(
+    loadConnectors(pathToFileURL(dir + "/"), (id) => id !== "bad"),
+    [],
+  );
+  assert.deepEqual(
+    loadConnectors(undefined, (id) => id === "jira").map((c) => c.id),
+    ["jira"],
+  );
+});
+
 test("a connector folder may be a link, as in a Kubernetes ConfigMap mount", () => {
   const dir = mkdtempSync(join(tmpdir(), "connectors-"));
   const orders = new URL("../../../examples/internal-app/connectors/orders", import.meta.url);

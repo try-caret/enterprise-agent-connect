@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { brand } from "../../packages/connector-kit/src/branding.js";
 import { clientAssertion } from "../../packages/connector-kit/src/certificate.js";
 import type { Toolset } from "../../packages/connector-kit/src/common.js";
-import { choiceFields, type ConnectorModule } from "../../packages/connector-kit/src/connector.js";
+import {
+  choiceFields,
+  type ConnectorContext,
+  type ConnectorModule,
+} from "../../packages/connector-kit/src/connector.js";
 import { vendorFetch, vendorUrl } from "../../packages/connector-kit/src/fetch.js";
 import {
   ConnectError,
@@ -485,6 +489,10 @@ export function microsoftClient(
 
 export type MicrosoftClient = ReturnType<typeof microsoftClient>;
 
+/** What a built-in app's module is given: also the deployment's Microsoft client. */
+export type BuiltinContext = ConnectorContext & { microsoft: MicrosoftClient };
+export type BuiltinModule = ConnectorModule<BuiltinContext>;
+
 // Pre-authenticated addresses Graph hands out (downloads, upload sessions) are on SharePoint.
 function sharePointUrl(raw: string): string {
   const url = URL.parse(raw);
@@ -515,7 +523,7 @@ export function mailboxVendor(ms: MicrosoftClient, keep: readonly string[] = [])
 }
 
 // A Microsoft app keeps its own choice fields (its JSON) and nothing else.
-export const microsoftApp = (id: string, toolset: Toolset): ConnectorModule => ({
+export const microsoftApp = (id: string, toolset: Toolset): BuiltinModule => ({
   id,
   create: ({ microsoft, connector }) => ({
     vendor: mailboxVendor(microsoft, choiceFields(connector)),

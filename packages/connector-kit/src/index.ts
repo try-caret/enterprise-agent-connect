@@ -12,16 +12,22 @@ export {
   type ToolContext,
   type Toolset,
 } from "./common.js";
-export type { Capability, Connector, ConnectorJson, ConnectorModule } from "./connector.js";
+export type {
+  Capability,
+  Connector,
+  ConnectorContext,
+  ConnectorJson,
+  ConnectorModule,
+} from "./connector.js";
 export { retryAfter, vendorFetch, vendorUrl } from "./fetch.js";
 export { clientCredentials, vendorError } from "./oauth.js";
 export {
   ConnectError,
   type CheckInput,
   type Fetch,
+  type Limits,
   type Vendor,
   type VendorConnection,
   type VendorRequest,
   type VendorResponse,
 } from "./types.js";
-export type { Limits } from "../../server/src/store.js";
