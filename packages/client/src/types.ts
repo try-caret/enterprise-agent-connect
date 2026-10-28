@@ -46,6 +46,12 @@ export type InstallTarget = S["InstallTarget"];
 export type TeamsTrigger = S["TeamsTrigger"];
 export type TeamsTriggerInput = Body<"setTeamsTrigger">;
 export type TeamsRun = S["TeamsRun"];
+export type EventSubscription = S["EventSubscription"];
+export type EventSubscriptionInput = Body<"subscribeEvents">;
+export type EventSubscribed = S["EventSubscribed"];
+export type EventTrigger = S["EventTrigger"];
+export type EventTriggerInput = Body<"setEventTrigger">;
+export type EventRun = S["EventRun"];
 export type ClaudeKey = S["ClaudeKey"];
 export type ClaudeAgent = S["ClaudeAgent"];
 

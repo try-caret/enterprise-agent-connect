@@ -13,9 +13,9 @@ import {
 } from "./claude.js";
 import type { RunRow, TeamsStore, TriggerRow } from "./store.js";
 
-// What answers a Teams message once the core decided it should be answered (who may ask, reply
-// mode, the hourly, daily and concurrent caps, the reply token and teams_reply stay in
-// runtime.ts whatever the runner).
+// What answers a Teams message, or an app's event, once the core decided it should be answered
+// (who may ask, reply mode, the caps, the reply token and teams_reply stay in teams/runtime.ts;
+// matching, limits and caps for events in events/runtime.ts, whatever the runner).
 
 export const CLAUDE_RUNNER = "claude-managed-agents";
 
@@ -25,6 +25,12 @@ export type RunnerContext = {
   // This service's public address (see createTeamsAdmin), null when it has none.
   publicUrl: string | null;
 };
+
+// What a runner reads of a trigger, Teams' or an event's.
+export type RunnerTrigger = Pick<
+  TriggerRow,
+  "agentId" | "runner" | "settings" | "managedAgentId" | "environmentId" | "vaultIds"
+>;
 
 export type RunInput = {
   org: string;
@@ -41,6 +47,38 @@ export type RunInput = {
   secret: string | null;
 };
 
+// A run started by an app's event (events/runtime.ts). Nothing is replied to: the agent acts
+// with its tools. `data`: the event's kept fields, written by people in the app (untrusted).
+export type EventRunInput = {
+  org: string;
+  agentId: string;
+  runId: string;
+  text: string;
+  budgetCents: number;
+  trigger: RunnerTrigger;
+  secret: string | null;
+  event: { app: string; type: string; deliveryId: string; data: Record<string, unknown> };
+};
+
+// A run as runner.state reads it. An event run awaits no reply: once started it is answered.
+export type RunnerRun = Pick<RunRow, "sessionId" | "replyCount"> & { awaitsReply?: boolean };
+
+export type RunCounts = { active: number; lastHour: number; spentToday: number };
+export type Caps = Pick<
+  TriggerRow,
+  "budgetCents" | "maxRunsPerHour" | "maxCentsPerDay" | "maxConcurrent"
+>;
+
+/** The cap one more run would pass, or null: runs in the last hour, spending in 24 hours
+ *  (what was spent plus every live run's budget), runs at once. */
+export function capReached(counts: RunCounts, caps: Caps): "hour" | "day" | "concurrent" | null {
+  if (counts.lastHour >= caps.maxRunsPerHour) return "hour";
+  if (counts.spentToday + caps.budgetCents * (counts.active + 1) > caps.maxCentsPerDay)
+    return "day";
+  if (counts.active >= caps.maxConcurrent) return "concurrent";
+  return null;
+}
+
 export interface TriggerRunner {
   id: string;
   // The trigger body's `settings` for this runner, stored as they are (so never a secret).
@@ -50,17 +88,19 @@ export interface TriggerRunner {
   // Proves the trigger: when saved, and again before each answer (`when`), since what it
   // points at can change elsewhere. Refuses with ConnectError or InvalidInput.
   verify(
-    trigger: TriggerRow,
+    trigger: RunnerTrigger,
     org: string,
     secret: string | null,
     when: "save" | "answer",
   ): Promise<void>;
   // Starts answering; the id later calls name the session by.
   start(input: RunInput): Promise<string>;
+  // Starts a run for an app's event. A runner without it cannot be chosen for event triggers.
+  startEvent?(input: EventRunInput): Promise<string>;
   // The next message in the same session (the same person in the same thread).
   continue(sessionId: string, input: RunInput): Promise<void>;
   // Where the session stands, or why it is gone.
-  state(run: RunRow, org: string): Promise<SessionState | { gone: string }>;
+  state(run: RunnerRun, org: string): Promise<SessionState | { gone: string }>;
   stop(sessionId: string, org: string): Promise<void>;
 }
 
@@ -135,6 +175,22 @@ export const claudeManagedAgents =
           text: input.text,
         });
       },
+      async startEvent(input) {
+        return (await need(input.org)).createSession({
+          agentId: input.trigger.managedAgentId!,
+          environmentId: input.trigger.environmentId!,
+          vaultIds: input.trigger.vaultIds,
+          budgetCents: input.budgetCents,
+          metadata: {
+            source: `${brand().resourcePrefix}-events`,
+            agent: input.agentId,
+            run: input.runId,
+            app: input.event.app,
+            event: input.event.type,
+          },
+          text: input.text,
+        });
+      },
       async continue(sessionId, input) {
         await (await need(input.org)).sendMessage(sessionId, input.text, input.budgetCents);
       },
@@ -160,11 +216,12 @@ export function signature(secret: string, body: string, t = Math.floor(Date.now(
 /** A signed POST of the message and its context to the trigger's `url`, for any agent
  *  framework. The receiver answers through MCP teams_reply with the reply token and this
  *  agent's own key, as a Claude agent does. It reports no cost; the trigger's caps still
- *  apply. A run is answered once a reply arrives, and stopped after the turn timeout. */
+ *  apply. A run is answered once a reply arrives, and stopped after the turn timeout. An app
+ *  event is posted as `type: "event"` with its data and needs no reply: 2xx answers it. */
 export const signedWebhook =
   (fetchImpl: Fetch = fetch): RunnerFactory =>
   (ctx) => {
-    async function post(trigger: TriggerRow, secret: string | null, payload: unknown) {
+    async function post(trigger: RunnerTrigger, secret: string | null, payload: unknown) {
       if (!secret) throw new InvalidInput("Give the webhook a signing secret");
       const body = JSON.stringify(payload);
       const res = await fetchImpl(String(trigger.settings.url), {
@@ -179,6 +236,8 @@ export const signedWebhook =
       });
       if (!res.ok) throw new ConnectError(`The webhook answered ${res.status}`);
     }
+    const mcpUrl = (agentId: string) =>
+      ctx.publicUrl ? agentMcpUrl(ctx.publicUrl, agentId) : null;
     const message = (input: RunInput) => ({
       type: "message",
       run: input.runId,
@@ -187,7 +246,7 @@ export const signedWebhook =
       requestedBy: input.requestedBy,
       text: input.text,
       replyToken: input.replyToken,
-      mcpUrl: ctx.publicUrl ? agentMcpUrl(ctx.publicUrl, input.agentId) : null,
+      mcpUrl: mcpUrl(input.agentId),
     });
     return {
       id: "webhook",
@@ -200,11 +259,26 @@ export const signedWebhook =
         await post(input.trigger, input.secret, message(input));
         return `webhook:${input.runId}`;
       },
+      async startEvent(input) {
+        await post(input.trigger, input.secret, {
+          type: "event",
+          run: input.runId,
+          agent: input.agentId,
+          app: input.event.app,
+          event: input.event.type,
+          deliveryId: input.event.deliveryId,
+          data: input.event.data,
+          text: input.text,
+          mcpUrl: mcpUrl(input.agentId),
+        });
+        return `webhook:${input.runId}`;
+      },
       async continue(_sessionId, input) {
         await post(input.trigger, input.secret, message(input));
       },
       async state(run) {
-        return { status: run.replyCount > 0 ? "idle" : "running", costCents: 0, atBudget: false };
+        const answered = run.awaitsReply === false || run.replyCount > 0;
+        return { status: answered ? "idle" : "running", costCents: 0, atBudget: false };
       },
       async stop() {},
     };

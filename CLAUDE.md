@@ -78,7 +78,18 @@ orgs/:org/teams/publish/callback` {state, nonce, params, by} (the administrator'
   `GET/PUT …/agents/:id/teams-trigger`, `GET
 …/agents/:id/teams-runs?limit`; the organization's Claude API key at `GET/PUT/DELETE
 orgs/:org/claude-key` (write-only, shown as its last four characters) and `GET
-orgs/:org/claude-key/agents`.
+orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in openapi.json):
+  `GET/POST orgs/:org/event-subscriptions` (POST {app, source webhook|poll, filter, intervalSeconds,
+  register, by}: one per org and app; answers the address, the secret once, the setup steps with
+  {url} filled and, with `register`, whether the app's API took it), `POST …/:subscription/secret`
+  {by} (a new secret, once), `DELETE …/:subscription` {by}; per agent `GET …/event-triggers`,
+  `PUT/DELETE …/event-triggers/:app` and `GET …/event-runs?limit`.
+- `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
+  cap, the connector's proof (HMAC-SHA256 of the raw body or a token header, constant time) checked
+  before the body is parsed (401; audited at most once a minute per subscription), then type,
+  delivery id (else the body's SHA-256) and replay window; a repeated delivery id or an
+  undeclared type is audited and ignored. Accepted: the kept fields sealed into `app_events`,
+  answered 200 at once.
 - `POST /agent-connect/teams/bots/:botAppId/messages`: public, for Teams. Every request carries
   Microsoft's Bot Framework token, checked by hand (packages/server/src/teams/jwt.ts): signature from
   login.botframework.com keys, issuer, audience = this bot, 5 min skew, serviceUrl claim,
@@ -123,8 +134,9 @@ a deprecation line in the log (server.ts `renamed`; drop it in the release after
 `CONNECT_ENCRYPTION_KEY_PREVIOUS`; old rows still open and are re-sealed on their next check,
 recorded or read only (an app page or the Integrations tab; only over the credential it read, so a
 reconnect meanwhile wins). Teams bot credentials
-(`teams_bots`), Claude keys (`providers`, provider `anthropic`) and trigger signing secrets
-(`teams_triggers.secret`) are re-sealed by a pass at startup while `CONNECT_ENCRYPTION_KEY_PREVIOUS` is set. Drop the
+(`teams_bots`), Claude keys (`providers`, provider `anthropic`), trigger signing secrets
+(`teams_triggers.secret`) and app event webhook and trigger secrets (`event_subscriptions.secret`,
+`event_triggers.secret`) are re-sealed by a pass at startup while `CONNECT_ENCRYPTION_KEY_PREVIOUS` is set. Drop the
 previous key once every row's `credential_key_id` is the new one in `connections`,
 `providers` and `teams_bots`. Approvals in flight during a rotation must be restarted.
 
@@ -163,12 +175,18 @@ runner continues, watches or stops it, and saving the trigger with another runne
 runner's live sessions. A run whose runner the deployment no longer offers is marked failed,
 but its session is left running (nothing here can stop it). The webhook URL is an admin-only capability: the service POSTs from its
 own network, so receivers check `t` freshness and dedupe on `replyToken` (`docs/teams.md`, As built).
-`createAgentConnect({runners})` takes runner factories.
+`createAgentConnect({runners})` takes runner factories. App events use the same runners through
+the optional `startEvent` (EventRunInput: no bot or reply token; `RunInput` is unchanged for
+existing runners): only a runner with it can be chosen for an event trigger. Claude: a session
+with `source: <prefix>-events` metadata; webhook: `{type: "event", run, agent, app, event,
+deliveryId, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
+`capReached` is the one cap rule for both (hour, then day with live budgets, then concurrency).
 
 ## Database
 
 Schema `agent_connect` (`DATABASE_SCHEMA`), tables without a prefix (`agents`, `providers`,
-`connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`); index and
+`connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`,
+`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`); index and
 constraint names keep the `agent_connect_<table>_...` spelling they had in public (`store.ts`
 matches `agent_connect_providers_one_org_per_tenant`). `packages/server/src/migrate.ts` applies
 `packages/server/migrations/NNNN_*.sql` on start, all pending in one transaction under an advisory lock, with
@@ -183,7 +201,7 @@ the org ids already in them, 0003 drops two never-used columns, 0004 gives trigg
 (`claude-managed-agents` for every earlier row), its settings and a sealed signing secret, 0005
 records each run's runner (a trigger moved to another runner stops the old runner's live
 sessions and never reuses them), 0006 makes `approvals` (Teams approval cards; the
-rollback drops it). The adopting run then makes simple views
+rollback drops it), 0007 the app event tables (rollback drops them). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -200,9 +218,10 @@ equivalence of both paths, the rows, the key and the rollback.
 the example internal app, `docker-compose.sql-example.yml` the example orders database; the
 image moves the optional database drivers, peers of the npm package, into its dependencies
 before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (one replica, Service, optional
-Ingress with only `/agent-connect/mcp` and `/agent-connect/teams`; `existingSecret` holds
+Ingress with only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`; `existingSecret` holds
 `DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`). One replica only: Teams
-run limits (concurrent runs, runs per hour, daily spend) are counted and admitted by one process,
+and app event run limits (concurrent runs, runs per hour, daily spend) and polls are counted,
+admitted and run by one process,
 so a rollout recreates rather than overlaps. The admin API is never public: it refuses any
 request carrying `X-Forwarded-For`. Give the service a database role that owns only its schema.
 
@@ -219,7 +238,8 @@ connectors/<id>/      # one folder per app: connector.json, index.ts (its Connec
 connectors/<id>/connector.json # one per app: logo (admin /brand path), setup steps, form fields,
                       # capabilities → tools + vendor scopes (+ token `roles` when they differ;
                       # connector-level `scopes`: needed whatever is ticked, e.g. Teams' target search)
-                      # + in-app permissions + step fills, value limits, verify/discover
+                      # + in-app permissions + step fills, value limits, `events` (types, kept
+                      # fields, limit fields, self, webhook proof and steps, poll; docs/triggers.md), verify/discover
                       # probes, optional `provider`, `siteAccess` (grant steps and a note to
                       # IT per added site). Fields may be choices (`options`, the first the
                       # default; an option's `scopes` add to the token roles expected, and the
@@ -352,6 +372,13 @@ connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for fil
                       # (Graph's $skiptoken, or mail's and calendar's $skip as `s<n>` / token as `t<token>`,
                       # returned as `next`); shortcuts to other sites are never listed nor read by id
 docs/teams.md         # Teams design (a bot per agent, real-time responses)
+docs/triggers.md      # app events that start agents: how it works, Jira webhook and poll, how a
+                      # connector declares `events`, security
+packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window, paths, kept
+                      # fields, limits, conditions, request templates, the prompt), runtime.ts
+                      # (public inbound, queue, decisions per trigger, polls, run watcher),
+                      # admin.ts (subscriptions, triggers, runs, secret re-seal), store.ts
+packages/server/src/queue.ts # the one-process queue worker Teams and app events share
 deploy/docker/        # Dockerfile (context: the repository root),
                       # docker-compose.yml (Postgres + the service) and .env.example
 deploy/helm/agent-connect/ # small standalone chart (Deployment, Service, optional Ingress with
@@ -380,6 +407,9 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # upgrade.test.ts: an install from fixtures/legacy-20261023200000.sql (a
                       # frozen copy of the earlier layout) adopted, against a fresh one, and
                       # by an owner that cannot bypass RLS
+                      # events.test.ts: app events on a made-up app (signatures, replays,
+                      # repeats, limits, conditions, own changes, caps, poll cursor, the signed
+                      # webhook runner end to end, admin); deliver.test.ts its pure rules
                       # teams.test.ts: the Teams runtime and trigger admin with fake runners
                       # (replies while starting, sessions kept to their runner) and approval
                       # card clicks (approver only, once, unexpired, this bot's, this place's,

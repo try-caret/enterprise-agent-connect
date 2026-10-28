@@ -20,7 +20,7 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-          {{- range list "/agent-connect/mcp" "/agent-connect/teams" }}
+          {{- range list "/agent-connect/mcp" "/agent-connect/teams" "/agent-connect/events" }}
           - path: {{ . }}
             pathType: Prefix
             backend:

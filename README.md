@@ -16,6 +16,9 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
   as named queries ([docs/sql-connector.md](docs/sql-connector.md)).
 - **Per-agent access:** tick what each agent can do per app, and limit it to values (mailboxes,
   sites, projects, customers). Anything that deletes needs an explicit confirmation.
+- **Agents started by app events:** a Jira issue created or updated starts the agents you choose,
+  each within its own limits, by webhook or by polling apps that cannot send one
+  ([docs/triggers.md](docs/triggers.md)).
 - **Self-hosted:** one Node service and Postgres. No UI ships; the admin API
   (`packages/server/openapi.json`) and the typed client (`packages/client`) are for building
   your own admin pages.
@@ -89,7 +92,7 @@ lists its setup steps, as click paths and as commands), add your own app
 ([docs/http-connector.md](docs/http-connector.md)), or embed the service in your own Node app
 (below).
 
-Only `/agent-connect/mcp` and `/agent-connect/teams` may be public. The admin API refuses any
+Only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events` may be public. The admin API refuses any
 request that carries `X-Forwarded-For`, so never route it through a public load balancer.
 
 ## Use it in your code
@@ -112,7 +115,7 @@ export const eac = await createAgentConnect({
   adminToken: process.env.AGENT_CONNECT_ADMIN_TOKEN!,
   connectors: [...builtinConnectors, orders, inventory], // default: every built-in app
 });
-eac.start(); // the Teams worker; await eac.stop() on shutdown
+eac.start(); // the Teams and app event workers; await eac.stop() on shutdown
 ```
 
 `connectors` is the list of apps this deployment offers. Leave it out for every built-in app;
@@ -225,14 +228,15 @@ To offer only some built-in apps, set `BUILTIN_APPS` to their ids, comma-separat
 `jira,servicenow,sap-s4hana`; `GET /agent-connect/admin/v1/connectors` lists every id). Unset, every
 built-in app is offered. Apps you add with `CONNECTOR_DIRS` are always offered.
 
-`deploy/helm/agent-connect` is a small chart: one replica (Teams run limits are counted in one
-process), a Service, and an optional Ingress with only the public paths. It needs the image
+`deploy/helm/agent-connect` is a small chart: one replica (Teams and app event run limits are
+counted in one process), a Service, and an optional Ingress with only the public paths. It needs the image
 (`image.repository`, `image.tag`; releases are `ghcr.io/try-caret/enterprise-agent-connect:<version>`) and a Secret with `DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`
 and `AGENT_CONNECT_ADMIN_TOKEN` (`existingSecret`).
 
 ## Layout
 
-- `packages/server`: the service (HTTP, admin API, MCP, Teams, store, migrations) and its tests
+- `packages/server`: the service (HTTP, admin API, MCP, Teams, app events, store,
+  migrations) and its tests
 - `packages/connector-kit`: what a connector builds on (schemas, tool helpers, vendor types)
 - `packages/client`: typed admin API client
 - `connectors/<app>`: one folder per app: `connector.json`, `index.ts`, `tools.ts`, `vendor.ts`
