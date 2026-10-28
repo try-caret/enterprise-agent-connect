@@ -62,7 +62,8 @@ A connector with an `http` block is like any other connector (name, setup steps,
   are not followed. It must be `https://`; for an app reachable only inside your network over
   plain http, add `"allowInsecureHttp": true` (this also allows a plain http `tokenUrl`).
 - **auth**: names the connect form fields that hold the credentials. Secrets must be fields with
-  `"secret": true`; they are stored encrypted and never shown again.
+  `"secret": true`; they are stored encrypted and never shown again. Every field must be filled
+  in unless it has `"optional": true`.
   - `{"type": "header", "header": "X-Api-Key", "value": "<field>"}`, with `"prefix"` for a word
     before the value, e.g. `"header": "Authorization", "prefix": "SSWS "` (Okta) or
     `"prefix": "Token token="` (PagerDuty)
@@ -121,6 +122,12 @@ A connector with an `http` block is like any other connector (name, setup steps,
   agent's.
 - **verify**: a request the service makes when the app is connected, to prove the credentials,
   e.g. `{"method": "GET", "path": "/health", "label": "Orders answers", "show": "name"}`.
+- **discover** (optional): a request listing the values a limit chooses from, shown to the admin,
+  e.g. `{"method": "GET", "path": "/customers", "label": "Customers", "show": "items[].id",
+  "name": "items[].name"}`. `name` gives each value a label read from the same list item, so the
+  admin picks "Acme Corp" rather than an id.
+- **Setup steps** may carry `"capabilities": ["<capability id>"]`: shown only while one of those
+  capabilities is ticked, e.g. a script only one feature needs.
 
 What the service enforces on every call: path values are encoded and `.`/`..` are refused,
 addresses stay under 8 KB and request bodies under 256 KB, answers under 1 MB and 30 seconds, only JSON or text answers

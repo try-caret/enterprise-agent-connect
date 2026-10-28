@@ -11,6 +11,7 @@ import {
   loadConnectors,
   loadProviders,
   pickDisplay,
+  pickLabels,
   providerSettings,
 } from "../../connector-kit/src/connector.ts";
 import { assertToolsImplemented, InvalidInput, validateCapabilities } from "../src/service.ts";
@@ -150,6 +151,33 @@ test("display paths read nested values", () => {
     "B",
   ]);
   assert.deepEqual(pickDisplay({ baseUrl: "u" }, "baseUrl"), ["u"]);
+});
+
+test("a probe's name labels each value from the same list item", () => {
+  const data = { items: [{ id: 1, name: "US" }, { id: 2 }, { id: 3, name: "UK", inactive: true }] };
+  assert.deepEqual(pickLabels(data, "items[].id", "items[].name"), { "1": "US", "3": "UK" });
+  assert.deepEqual(pickLabels(data, "items[].id", "items[].name", { inactive: true }), {
+    "3": "UK",
+  });
+  const netsuite = loadConnectors().find((c) => c.id === "netsuite")!;
+  const discover = { ...netsuite.discover!, name: "rows[].name" };
+  assert.match(
+    String(connectorSchema.safeParse({ ...netsuite, discover }).error),
+    /same list as its show/,
+  );
+});
+
+test("a step's capabilities and a field's optional are checked and kept", () => {
+  const netsuite = loadConnectors().find((c) => c.id === "netsuite")!;
+  assert.deepEqual(netsuite.afterConnect.at(-1)!.capabilities, ["saved_searches"]);
+  const afterConnect = [{ ...netsuite.afterConnect[0], capabilities: ["nope"] }];
+  assert.match(
+    String(connectorSchema.safeParse({ ...netsuite, afterConnect }).error),
+    /capabilities name capabilities/,
+  );
+  const okta = loadConnectors().find((c) => c.id === "okta")!;
+  assert.equal(okta.fields.find((f) => f.id === "key_id")!.optional, true);
+  assert.equal(okta.fields.find((f) => f.id === "org")!.optional, false);
 });
 
 test("a map limit is keyed by a list limit listed before it", () => {

@@ -131,6 +131,7 @@
       "help": "The three-digit SAP client, for example 100. Leave empty for the system's default client.",
       "placeholder": "100",
       "secret": false,
+      "optional": true,
       "requires": { "field": "deployment", "value": "on_premise" }
     },
     {

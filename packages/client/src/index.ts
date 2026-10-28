@@ -329,6 +329,7 @@ export function createClient(options: ClientOptions) {
           connector,
           [...connector.setup, ...connector.afterConnect],
           connection?.config ?? {},
+          connection?.capabilities ?? [],
         ).filter((s) => s.live);
         return { connector, connection, liveSteps };
       });

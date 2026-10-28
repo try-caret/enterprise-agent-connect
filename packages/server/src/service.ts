@@ -5,6 +5,7 @@ import { signInNonce, signState, verifyState } from "./consent.js";
 import {
   effectiveCapabilities,
   pickDisplay,
+  pickLabels,
   providerSettings,
   tokenRolesFor,
   type Connector,
@@ -52,7 +53,12 @@ export type PublicProvider = Omit<
   apps: string[];
 };
 
-export type CheckResult = { label: string; values: string[]; warning?: string };
+export type CheckResult = {
+  label: string;
+  values: string[];
+  warning?: string;
+  labels?: Record<string, string>;
+};
 
 export class InvalidInput extends Error {}
 
@@ -504,12 +510,17 @@ export function createService(deps: {
     const results: CheckResult[] = [];
     for (const p of probes(connector)) {
       if ("check" in p) {
-        const { values, warning } = await vendor.checks![p.check](conn, {
+        const { values, warning, labels } = await vendor.checks![p.check](conn, {
           expected: tokenRolesFor(connector, ceiling, conn.config),
         });
         // The vendor's own warning says more than the generic "nothing yet".
         const shown = warning || (values.length === 0 ? p.ifEmpty : undefined);
-        results.push({ label: p.label, values, ...(shown ? { warning: shown } : {}) });
+        results.push({
+          label: p.label,
+          values,
+          ...(shown ? { warning: shown } : {}),
+          ...(labels ? { labels } : {}),
+        });
         continue;
       }
       // {name} in a probe path is the connection's config value, e.g. the signed-in user's id.
@@ -526,6 +537,7 @@ export function createService(deps: {
         label: p.label,
         values,
         ...(values.length === 0 && p.ifEmpty ? { warning: p.ifEmpty } : {}),
+        ...(p.name ? { labels: pickLabels(res.data, p.show, p.name, p.match) } : {}),
       });
     }
     return results;

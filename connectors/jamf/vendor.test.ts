@@ -100,11 +100,14 @@ test("calls go to the connected server only, JSON as JSON and Classic XML as is"
   );
 });
 
-test("the sites check lists site ids, and says which privilege is missing", async () => {
+test("the sites check lists site ids with their names, and says which privilege is missing", async () => {
   const { impl } = fakeFetch();
   const vendor = jamfVendor(impl);
   const conn = await vendor.connect(FIELDS);
-  assert.deepEqual(await vendor.checks!.sites(conn, { expected: [] }), { values: ["1", "2"] });
+  assert.deepEqual(await vendor.checks!.sites(conn, { expected: [] }), {
+    values: ["1", "2"],
+    labels: { "1": "North", "2": "South" },
+  });
   const refused = jamfVendor((async (url: string) =>
     url.endsWith("/oauth/token")
       ? new Response(JSON.stringify({ access_token: "t", expires_in: 1800 }))

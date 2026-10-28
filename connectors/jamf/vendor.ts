@@ -77,7 +77,11 @@ export function jamfVendor(fetchImpl: Fetch = fetch): Vendor {
           );
         if (res.status !== 200 || !Array.isArray(res.data))
           throw new ConnectError(`Jamf Pro answered ${res.status} for its sites`);
-        return { values: (res.data as { id: string }[]).map((s) => String(s.id)) };
+        const sites = res.data as { id: string; name?: string }[];
+        return {
+          values: sites.map((s) => String(s.id)),
+          labels: Object.fromEntries(sites.map((s) => [String(s.id), s.name ?? String(s.id)])),
+        };
       },
     },
   };
