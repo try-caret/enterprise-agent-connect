@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Jamf Pro, Okta, Slack, Salesforce, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -320,7 +320,9 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # the request's own content-type: Jamf's Classic API takes XML); slack: a bot
                       # token, ok:false and 429 handling; okta: an API service app,
                       # private_key_jwt, a token per scope;
-                      # workday: an API client for integrations' refresh token)
+                      # workday: an API client for integrations' refresh token;
+                      # dynamics-365: the Microsoft connection signing in to one Dataverse
+                      # environment)
 connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for files and excel.ts
                       # for spreadsheets, joined by the kit's `toolsets`; entra and intune reuse
                       # its Graph paging, outlook-calendar outlook-mail's). Folder, mail, calendar and people listings page with `cursor`
@@ -720,6 +722,51 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   developer.okta.com guides implement-oauth-for-okta-serviceapp, client-auth, pagination, and the
   Management API's User, UserLifecycle, UserSessions, UserFactor, Group, Application and SystemLog
   references (read October 27, 2026).
+- Dynamics 365 (`dynamics-365`, provider microsoft): one Dataverse environment per connection,
+  its URL the connect form's `environment` field (`accountKey`), normalized to its origin: hosts
+  `<org>.crm[N].dynamics.com` (a pasted `<org>.api.crm[N]` Web API address is mapped back);
+  GCC High, DoD and China hosts (`crm.microsoftdynamics.us`, `crm.appsplatform.us`,
+  `crm.dynamics.cn`) are refused by name, since the Microsoft connection signs in only to the
+  global cloud. Calls are the Microsoft connection's client credentials with a token for the
+  environment itself (`<origin>/.default`, `ms.call`'s origin) and go only to that origin, under
+  `/api/data/v9.2`. The app needs no Entra API permission: it is added to the environment as an
+  application user (Power Platform admin center, or `pac admin assign-user --application-user`)
+  with a security role, and what agents reach is that role. Connect proves it with `WhoAmI`
+  (401/403 says to add the application user). Capabilities' `scopes` are Dataverse privilege
+  names (`prvReadAccount`, ...; connector `scopes` adds `prvReadUser` for the check); the `access`
+  check lists the application user's directly assigned roles and warns only about expected
+  privileges `RetrieveUserPrivileges` does not return. Tools: search and get accounts/contacts,
+  opportunities and cases (fixed `$select` per table; text search is `contains` on name columns),
+  create/update accounts and contacts (plain columns only: names `_?[a-z][a-z0-9_]*`, no `_x_value`
+  and no `@odata.bind`, so no owner change; a contact's account through `account_id`; update sends
+  `If-Match: *` so it never upserts), close opportunities (`WinOpportunity` / `LoseOpportunity`,
+  Status 3 / 4), close cases (`CloseIncident` Status 5, or PATCH statecode 2 statuscode 6),
+  list a record's activities (`activitypointers` by `_regardingobjectid_value`) or notes
+  (`annotations` by `_objectid_value`), add a note, task or phone call (completed by a second
+  PATCH unless `completed` false), list/get rows of the tables in the key's `tables` limit
+  (entity set and primary columns from `EntityDefinitions`), and destructive delete. Agents never
+  write OData: `filters` are {column, op, value}, values rendered as literals here (GUIDs, ISO
+  dates, numbers and booleans bare, other text quoted with `'` doubled). Every request asks for
+  formatted values (`Prefer: odata.include-annotations="*"`): answers give option sets and money
+  as labels and lookups as {id, name, table}, text over 2000 characters shortened. Paging:
+  `odata.maxpagesize` and the next link's `$skiptoken` as `cursor`. Limits `business_units` and
+  `teams` (ids; a record is in scope when its owning business unit or owning team is one of
+  them): every listing adds the owner filter and drops any row outside it, every read or write of
+  one record reads it first (not found under limits gets the same refusal as outside), a contact's
+  account must be in scope, and a created record must land in scope (the app user's own business
+  unit, the key's only team, or `owner_team`, which must be a key team or in a key business unit).
+  Under limits, `tables` reads only `UserOwned` tables, activities and notes are those of an
+  in-scope record whoever owns them, and delete takes only tasks, phone calls and notes (checked
+  through their record), since deleting an account, contact, opportunity or case cascades to
+  records that may be outside the scope. Not yet run against a real environment: tested against
+  fakes only (`connectors/dynamics-365/*.test.ts`). Sources: learn.microsoft.com/power-apps/
+  developer/data-platform/use-single-tenant-server-server-authentication (no API permission is
+  needed for S2S) and learn.microsoft.com/power-platform/developer/cli/reference/admin
+  (`assign-user --application-user`; without `--business-unit` the application user goes to the
+  signed-in admin's business unit), read October 27, 2026; the Web API shapes (WhoAmI,
+  RetrieveUserPrivileges, WinOpportunity, LoseOpportunity, CloseIncident, `@odata.bind`
+  navigation names, paging, formatted values) are from Microsoft's Dataverse Web API reference,
+  not re-read for this.
 - FedEx (`fedex`): a FedEx Developer Portal project's API key and secret key, OAuth client
   credentials at `/oauth/token` on `apis-sandbox.fedex.com` or `apis.fedex.com` (the connect
   form's `environment` choice; no default is assumed: the admin app always sends the choice),
