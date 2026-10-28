@@ -297,6 +297,9 @@ scripts/test-databases.sh # makes an empty ac_test on a scratch Postgres, for th
 scripts/consumer-test.sh # packs both packages, installs them in a temp project, type-checks and runs
                       # scripts/consumer/ (the README's "Use it in your code" snippets) on Postgres
 RELEASING.md          # cutting a release or a dev build; switching npm to trusted publishing
+scripts/openapi-to-connector.ts # drafts an http connector.json from an OpenAPI 3.x spec (JSON) and
+                      # chosen operations or tags; prints what a person must still edit. Tested on
+                      # scripts/fixtures/tracker.openapi.json
 packages/server/src/consent.ts # signed approval state (org, app, capability ceiling, return address, tenant once
                       # approved, nonce, 15 min expiry)
 connectors/jira/jql.ts # confines agent JQL to granted projects

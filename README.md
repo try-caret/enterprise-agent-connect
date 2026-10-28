@@ -6,7 +6,8 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
 
 - **Built-in apps:** Jira, Microsoft 365 (Outlook mail and calendar, SharePoint files and Excel,
   Teams, Entra ID, Intune), Okta, Slack, Salesforce, FedEx, Dell TechDirect.
-- **Your own apps without code:** describe an internal REST API in one `connector.json`
+- **Your own apps without code:** describe an internal REST API or a SaaS app's in one
+  `connector.json`, or draft one from its OpenAPI spec
   ([docs/http-connector.md](docs/http-connector.md)).
 - **Per-agent access:** tick what each agent can do per app, and limit it to values (mailboxes,
   sites, projects, customers). Anything that deletes needs an explicit confirmation.
@@ -227,6 +228,7 @@ and `AGENT_CONNECT_ADMIN_TOKEN` (`existingSecret`).
 - `connectors/<app>`: one folder per app: `connector.json`, `index.ts`, `tools.ts`, `vendor.ts`
 - `connectors/http`: runs any app described only in its `connector.json` (docs/http-connector.md)
 - `examples/internal-app`: a small internal API and its connector, for the quick start
+- `scripts/openapi-to-connector.ts`: drafts an http connector from an OpenAPI 3.x spec
 - `deploy/docker`, `deploy/helm`: image, Compose file and chart
 
 ## License

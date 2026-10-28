@@ -16,7 +16,8 @@ export type VendorRequest = {
   responseType?: "text";
 };
 
-export type VendorResponse = { status: number; data: unknown };
+// `headers` (lower-case names): set by vendors whose tools read them, e.g. a Link header.
+export type VendorResponse = { status: number; data: unknown; headers?: Record<string, string> };
 
 export type CheckInput = {
   // The vendor scopes (or token roles) the connection's capabilities need.

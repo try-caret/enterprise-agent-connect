@@ -1153,6 +1153,7 @@ export interface components {
                     type: "header";
                     header: string;
                     value: string;
+                    prefix?: string;
                 } | {
                     /** @constant */
                     type: "bearer";
@@ -1169,6 +1170,15 @@ export interface components {
                     tokenUrl: string;
                     clientId: string;
                     clientSecret: string;
+                } | {
+                    /** @constant */
+                    type: "query";
+                    param: string;
+                    value: string;
+                };
+                /** @default {} */
+                headers: {
+                    [key: string]: string;
                 };
                 tools: {
                     name: string;
@@ -1180,12 +1190,18 @@ export interface components {
                     params: {
                         [key: string]: {
                             /** @enum {string} */
-                            type: "string" | "number" | "integer" | "boolean";
+                            type: "string" | "number" | "integer" | "boolean" | "array";
                             description: string;
                             /** @enum {string} */
                             in: "path" | "query" | "body";
+                            name?: string;
                             /** @default true */
                             required: boolean;
+                            default?: (string | number | boolean) | (string | number | boolean)[];
+                            enum?: (string | number | boolean)[];
+                            /** @enum {string} */
+                            items?: "string" | "number" | "integer" | "boolean";
+                            join?: string;
                             limit?: string;
                         };
                     };
@@ -1196,6 +1212,21 @@ export interface components {
                         field: string;
                         limit: string;
                     }[];
+                    result?: {
+                        items?: string;
+                        fields?: string[];
+                    };
+                    paging?: {
+                        param: string;
+                        body: string;
+                    } | {
+                        param: string;
+                        header: string;
+                    } | {
+                        param: string;
+                        /** @constant */
+                        link: true;
+                    };
                 }[];
                 /** @default false */
                 allowInsecureHttp: boolean;
