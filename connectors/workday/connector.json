@@ -85,14 +85,14 @@
     {
       "id": "reports",
       "label": "Reports",
-      "help": "Each report's JSON link from Workday, separated by spaces or new lines. Leave empty for none.",
+      "help": "Optional. Each report's JSON link from Workday, separated by spaces or new lines. Leave empty for none.",
       "placeholder": "https://wd5-services1.myworkday.com/ccx/service/customreport2/acme/jsmith/Open_Requisitions?format=json",
       "secret": false
     },
     {
       "id": "report_org_column",
       "label": "Organization column in reports",
-      "help": "The column holding each row's organization Workday ID, in every report above. Agents narrowed to some organizations see only their rows, and cannot run reports while this is empty.",
+      "help": "Optional. The column holding each row's organization Workday ID, in every report above. Agents narrowed to some organizations see only their rows, and cannot run reports while this is empty.",
       "placeholder": "Supervisory_Organization_ID",
       "secret": false
     }
