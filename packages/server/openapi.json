@@ -8405,6 +8405,184 @@
               "allowInsecureHttp"
             ],
             "additionalProperties": false
+          },
+          "sql": {
+            "type": "object",
+            "properties": {
+              "engine": {
+                "type": "string",
+                "enum": [
+                  "postgres",
+                  "sqlserver",
+                  "mysql",
+                  "oracle"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "database": {
+                "type": "string",
+                "minLength": 1
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "user": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  }
+                },
+                "required": [
+                  "user",
+                  "password"
+                ],
+                "additionalProperties": false
+              },
+              "tls": {
+                "default": "verify",
+                "type": "string",
+                "enum": [
+                  "verify",
+                  "insecure",
+                  "off"
+                ]
+              },
+              "timeoutSeconds": {
+                "default": 30,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300
+              },
+              "maxRows": {
+                "default": 200,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "tools": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sql": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "params": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "number",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "required": {
+                            "default": true,
+                            "type": "boolean"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description",
+                          "required"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "write": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "destructive": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "answerLimits": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "column": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "column",
+                          "limit"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "description",
+                    "sql",
+                    "params",
+                    "write",
+                    "destructive",
+                    "answerLimits"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "engine",
+              "host",
+              "database",
+              "auth",
+              "tls",
+              "timeoutSeconds",
+              "maxRows",
+              "tools"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

@@ -170,11 +170,12 @@ test("an app described only in its connector.json runs without code", { skip: !s
     extraConnectorDirs: [
       new URL("../../../examples/internal-app/connectors", import.meta.url).pathname,
       new URL("../../../examples/legacy-apps/connectors", import.meta.url).pathname,
+      new URL("../../../examples/legacy-orders/connectors", import.meta.url).pathname,
     ],
     log: { log() {}, error() {} },
   });
-  // http, soap and odata blocks each run on their generic module.
-  for (const id of ["orders", "hr-soap", "sap-sales-orders"])
+  // http, soap, odata and sql blocks each run on their generic module.
+  for (const id of ["orders", "hr-soap", "sap-sales-orders", "erp"])
     assert.ok(service.connectors.includes(id));
   await service.stop();
 });

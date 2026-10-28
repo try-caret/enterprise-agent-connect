@@ -9,6 +9,7 @@ import { builtinConnectors, type ConnectorModule } from "./builtin.js";
 import httpConnector from "../../../connectors/http/index.js";
 import odataConnector from "../../../connectors/odata/index.js";
 import soapConnector from "../../../connectors/soap/index.js";
+import sqlConnector from "../../../connectors/sql/index.js";
 import {
   loadConnectors,
   loadProviders,
@@ -54,10 +55,10 @@ export type AgentConnectOptions = {
   // The apps this deployment offers (default: every built-in one). A built-in app is offered
   // only while its module is here, so a subset of builtinConnectors offers only those. Your own
   // apps: a ConnectorModule carrying its definition as `connector`, or a definition with an
-  // `http`, `soap` or `odata` block alone (no code).
+  // `http`, `soap`, `odata` or `sql` block alone (no code).
   connectors?: (ConnectorModule | ConnectorJson)[];
   // Folders laid out like connectors/ (<id>/connector.json), loaded after it; each needs a module
-  // in `connectors` unless it has an `http`, `soap` or `odata` block.
+  // in `connectors` unless it has an `http`, `soap`, `odata` or `sql` block.
   extraConnectorDirs?: string[];
   // Approving the deployment's own multi-tenant Microsoft app instead of registering one: only
   // for a deployment that runs it, since every holder of its secret could reach every tenant
@@ -119,7 +120,9 @@ export async function createAgentConnect(options: AgentConnectOptions) {
           ? soapConnector
           : connector.odata
             ? odataConnector
-            : undefined);
+            : connector.sql
+              ? sqlConnector
+              : undefined);
     if (!module) throw new Error(`Connector ${connector.id} has no code (ConnectorModule)`);
     return { connector, ...module.create({ microsoft, connector }) };
   });

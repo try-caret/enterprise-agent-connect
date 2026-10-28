@@ -11,13 +11,16 @@
 - **What an agent can do** in an app is the capabilities ticked on its key, within that app's
   ceiling (the most any agent may get from it). Tools outside that are never listed, and a call
   to one is refused and audited.
-- **Limits** narrow a capability to values: mailboxes, SharePoint sites and folders, Jira
-  projects, Okta groups, Dynamics 365 business units and teams, Salesforce objects, NetSuite
-  subsidiaries and locations, ServiceNow assignment groups and companies, Workday organizations
-  and reports, account numbers, or any list an `http`, `soap` or `odata` connector declares. They
-  are checked on every call, including against ids the agent passes in and, for those connectors,
-  against fields of the answer (an OData update reads the record first and changes it only inside
-  the agent's values).
+- **Limits** narrow a capability to values: the mailbox of Outlook mail and calendar, SharePoint
+  sites and a folder per site, Teams teams and channels, Entra ID groups and administrative
+  units, Intune groups, Dynamics 365 business units, owning teams and other tables, Jira
+  projects, Jamf Pro sites, Okta groups, Slack channels, Salesforce objects, SAP S/4HANA company
+  codes, sales and purchasing organizations and plants, NetSuite subsidiaries, locations and
+  saved searches, ServiceNow assignment groups and companies, Workday organizations and reports,
+  FedEx account numbers, or any list an `http`, `soap`, `odata` or `sql` connector declares.
+  They are checked on every call, including against ids the agent passes in and, for those
+  connectors, against fields of the answer (an OData update reads the record first and an SQL
+  write is rolled back unless every row it changed is inside the agent's values).
 - **Destructive capabilities** (anything that deletes or overwrites) are off unless the admin
   confirms a warning, and every tool that deletes must sit in one. The service refuses to start
   otherwise.

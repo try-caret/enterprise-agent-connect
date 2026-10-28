@@ -671,6 +671,59 @@ const odataSchema = z
 export type ODataApp = z.infer<typeof odataSchema>;
 export type ODataTool = ODataApp["tools"][number];
 
+// An app reached as a database, described entirely here: the generic sql module
+// (connectors/sql) runs it. Each tool is one statement the company's developer wrote, with
+// :name params bound by the driver, never pasted into the text.
+const sqlParamSchema = z
+  .object({
+    type: z.enum(["string", "number", "integer", "boolean"]),
+    description: text,
+    // Left out, an optional param is bound as null.
+    required: z.boolean().default(true),
+    // The value must be one of the agent's values of this list limit, while it has any.
+    limit: slug.optional(),
+  })
+  .strict();
+
+const sqlToolSchema = z
+  .object({
+    name: slug,
+    description: text,
+    sql: text,
+    params: z.record(slug, sqlParamSchema).default({}),
+    // Changes data: run read-write and committed, and never in a required capability. Any
+    // other tool runs in a read-only transaction that is rolled back.
+    write: z.boolean().default(false),
+    // Deletes or overwrites: its capability must be destructive.
+    destructive: z.boolean().default(false),
+    // While the agent has values of `limit`, every row's `column` must be one of them, else
+    // nothing is returned (a write is rolled back). A missing column is refused.
+    answerLimits: z.array(z.object({ column: text, limit: slug }).strict()).default([]),
+  })
+  .strict()
+  .refine((t) => !t.destructive || t.write, { message: "A destructive tool is a write" });
+
+const sqlSchema = z
+  .object({
+    engine: z.enum(["postgres", "sqlserver", "mysql", "oracle"]),
+    host: z.string().regex(/^[A-Za-z0-9._-]+$/),
+    // The engine's usual port when left out.
+    port: z.number().int().min(1).max(65535).optional(),
+    // Oracle: the service name.
+    database: text,
+    // Ids of connect form fields: user a plain one, password a secret one.
+    auth: z.object({ user: slug, password: slug }).strict(),
+    // "verify": encrypted, the server's certificate checked; "insecure": encrypted, not
+    // checked; "off": plain, e.g. a database on the same private network.
+    tls: z.enum(["verify", "insecure", "off"]).default("verify"),
+    timeoutSeconds: z.number().int().min(1).max(300).default(30),
+    // Rows returned per call; more are cut off and the answer says so.
+    maxRows: z.number().int().min(1).max(1000).default(200),
+    tools: z.array(sqlToolSchema).min(1),
+  })
+  .strict();
+export type SqlApp = z.infer<typeof sqlSchema>;
+
 export const connectorSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
@@ -794,10 +847,11 @@ export const connectorSchema = z
     http: httpSchema.optional(),
     soap: soapSchema.optional(),
     odata: odataSchema.optional(),
+    sql: sqlSchema.optional(),
   })
   .strict()
-  .refine((c) => [c.http, c.soap, c.odata].filter(Boolean).length <= 1, {
-    message: "A connector has at most one of http, soap and odata",
+  .refine((c) => [c.http, c.soap, c.odata, c.sql].filter(Boolean).length <= 1, {
+    message: "A connector has at most one of http, soap, odata and sql",
   })
   .refine(
     (c) => {
@@ -815,13 +869,24 @@ export const connectorSchema = z
     },
     {
       message:
-        "An http, soap or odata app's auth names its fields (secrets as secret fields), its accountKey is host or a plain field, a param's or answer's limit names a list limit, and it has no provider",
+        "An http, soap, odata or sql app's auth names its fields (secrets as secret fields), its accountKey is host or a plain field, a param's or answer's limit names a list limit, and it has no provider",
     },
   )
   .refine(
     (c) =>
       !c.agentAccess || c.limits.some((l) => l.id === c.agentAccess!.limit && l.kind === "text"),
     { message: "agentAccess.limit must be one of the connector's text limits" },
+  )
+  .refine(
+    (c) => {
+      if (!c.sql) return true;
+      const writes = new Set(c.sql.tools.filter((t) => t.write).map((t) => t.name));
+      return (
+        [c.verify, ...(c.discover ? [c.discover] : [])].every((p) => "check" in p) &&
+        c.capabilities.every((cap) => !cap.required || !cap.tools.some((t) => writes.has(t)))
+      );
+    },
+    { message: "An sql app's probes are checks, and a write tool is in no required capability" },
   )
   .refine(
     (c) =>
@@ -870,12 +935,13 @@ export const connectorSchema = z
     { message: "A map limit's keys must be a list limit listed before it" },
   );
 
-// An app described in its connector.json (http, soap or odata): the connect form fields its
-// sign-in names, and the list limits its tools name.
+// An app described in its connector.json (http, soap, odata or sql): the connect form fields
+// its sign-in names, and the list limits its tools name.
 function described(c: {
   http?: HttpApp;
   soap?: SoapApp;
   odata?: ODataApp;
+  sql?: SqlApp;
 }): { fields: [string, boolean][]; limits: string[] } | null {
   const limitsOf = (...sets: Record<string, { limit?: string }>[]) =>
     sets.flatMap((s) => Object.values(s).flatMap((p) => (p.limit ? [p.limit] : [])));
@@ -910,6 +976,17 @@ function described(c: {
       fields: authFields(c.odata.auth),
       limits: c.odata.tools.flatMap((t) => [
         ...limitsOf(t.key, t.filters, t.fields, t.params),
+        ...t.answerLimits.map((a) => a.limit),
+      ]),
+    };
+  if (c.sql)
+    return {
+      fields: [
+        [c.sql.auth.user, false],
+        [c.sql.auth.password, true],
+      ],
+      limits: c.sql.tools.flatMap((t) => [
+        ...limitsOf(t.params),
         ...t.answerLimits.map((a) => a.limit),
       ]),
     };

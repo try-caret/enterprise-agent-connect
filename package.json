@@ -36,11 +36,30 @@
     "postgres": "^3.4.9",
     "zod": "^4.5.4"
   },
+  "peerDependencies": {
+    "mssql": "^12.7.4",
+    "mysql2": "^3.24.5",
+    "oracledb": "^7.0.1"
+  },
+  "peerDependenciesMeta": {
+    "mssql": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    },
+    "oracledb": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^26.1.0",
+    "mssql": "^12.7.4",
+    "mysql2": "^3.24.5",
+    "openapi-typescript": "7.13.0",
+    "oracledb": "^7.0.1",
     "tsx": "^4.19.0",
-    "typescript": "^6.0.3",
-    "openapi-typescript": "7.13.0"
+    "typescript": "^6.0.3"
   },
   "overrides": {
     "openapi-typescript": {
