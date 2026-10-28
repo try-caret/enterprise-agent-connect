@@ -12,7 +12,8 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
   ([docs/http-connector.md](docs/http-connector.md)); a SOAP service
   ([docs/soap-connector.md](docs/soap-connector.md)) or an OData service such as SAP S/4HANA,
   Dynamics 365 or SuccessFactors ([docs/odata-connector.md](docs/odata-connector.md)), drafted
-  from its WSDL or `$metadata`.
+  from its WSDL or `$metadata`; or a database (PostgreSQL, SQL Server, MySQL, MariaDB, Oracle)
+  as named queries ([docs/sql-connector.md](docs/sql-connector.md)).
 - **Per-agent access:** tick what each agent can do per app, and limit it to values (mailboxes,
   sites, projects, customers). Anything that deletes needs an explicit confirmation.
 - **Self-hosted:** one Node service and Postgres. No UI ships; the admin API
@@ -235,13 +236,15 @@ and `AGENT_CONNECT_ADMIN_TOKEN` (`existingSecret`).
 - `packages/connector-kit`: what a connector builds on (schemas, tool helpers, vendor types)
 - `packages/client`: typed admin API client
 - `connectors/<app>`: one folder per app: `connector.json`, `index.ts`, `tools.ts`, `vendor.ts`
-- `connectors/http`, `connectors/soap`, `connectors/odata`: run any app described only in its
-  `connector.json` (docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md)
+- `connectors/http`, `connectors/soap`, `connectors/odata`, `connectors/sql`: run any app
+  described only in its `connector.json` (docs/http-connector.md, docs/soap-connector.md,
+  docs/odata-connector.md, docs/sql-connector.md)
 - `examples/internal-app`: a small internal API and its connector, for the quick start
 - `scripts/openapi-to-connector.ts`: drafts an http connector from an OpenAPI 3.x spec
 - `examples/legacy-apps`: a SOAP and an SAP OData connector, described only in JSON
 - `scripts/wsdl-to-connector.ts`, `scripts/odata-to-connector.ts`: draft a connector from a WSDL
   or an OData `$metadata`
+- `examples/legacy-orders`: a small orders database and its connector
 - `deploy/docker`, `deploy/helm`: image, Compose file and chart
 
 ## License

@@ -7,7 +7,7 @@ connection is checked. Schema: `packages/connector-kit/src/connector.ts`.
 
 There are two ways to give an app its tools.
 
-## Without code: the `http`, `soap` and `odata` connectors
+## Without code: the `http`, `soap`, `odata` and `sql` connectors
 
 For an app with a REST API, add an `http` block to `connector.json` and describe each tool as a
 method and path. The image runs it as is. See [http-connector.md](http-connector.md) and the
@@ -19,6 +19,10 @@ S/4HANA, Dynamics 365, SuccessFactors), an `odata` block describes each tool as 
 create, update, function or action on an entity set ([odata-connector.md](odata-connector.md)).
 Scripts draft both from the service's own description: `scripts/wsdl-to-connector.ts` and
 `scripts/odata-to-connector.ts`. Examples: `examples/legacy-apps`.
+
+For an app best reached through its database, an `sql` block describes each tool as one named
+query with bound params. See [sql-connector.md](sql-connector.md)
+and the example in `examples/legacy-orders`.
 
 ## With code
 

@@ -109,8 +109,9 @@ base64), `AGENT_CONNECT_ADMIN_TOKEN` (≥32 chars), `PORT` (3000), `PUBLIC_BASE_
 deployment's origin, the service under `/agent-connect`; where Teams reaches the bots; without it
 the bot setup script and package say to set `global.publicBaseUrl`), `BRANDING` (JSON, see
 Branding), `BUILTIN_APPS` (comma-separated built-in app ids this deployment offers; unset offers every one, an unknown id stops startup), `CONNECTOR_DIRS` (`:`-separated folders laid out like `connectors/`, `<id>/connector.json` each; one with an
-`http`, `soap` or `odata` block runs on the generic module of that name in `connectors/`,
-docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md; any other needs a
+`http`, `soap`, `odata` or `sql` block runs on the generic module of that name in `connectors/`,
+docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md, docs/sql-connector.md;
+any other needs a
 `ConnectorModule` passed to `createAgentConnect`).
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
 multi-tenant Entra app instead of the customer's own, and then needs
@@ -196,7 +197,9 @@ equivalence of both paths, the rows, the key and the rollback.
 ## Deploy
 
 `deploy/docker` (image, `docker-compose.yml` with Postgres, `docker-compose.example.yml` adding
-the example internal app) and `deploy/helm/agent-connect` (one replica, Service, optional
+the example internal app, `docker-compose.sql-example.yml` the example orders database; the
+image moves the optional database drivers, peers of the npm package, into its dependencies
+before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (one replica, Service, optional
 Ingress with only `/agent-connect/mcp` and `/agent-connect/teams`; `existingSecret` holds
 `DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`). One replica only: Teams
 run limits (concurrent runs, runs per hour, daily spend) are counted and admitted by one process,
@@ -335,6 +338,12 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # workday: an API client for integrations' refresh token;
                       # dynamics-365: the Microsoft connection signing in to one Dataverse
                       # environment)
+connectors/sql/       # the generic module for connector.json files with an `sql` block:
+                      # index.ts (vendor: a pool per credential, the `database` check; tools),
+                      # engines.ts (:name parsing, one adapter per engine: postgres, sqlserver
+                      # (mssql), mysql (mysql2), oracle (oracledb thin); drivers but postgres
+                      # are optional peer dependencies, imported on first use, a missing one
+                      # fails startup). docs/sql-connector.md, examples/legacy-orders
 connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for files and excel.ts
                       # for spreadsheets, joined by the kit's `toolsets`; entra and intune reuse
                       # its Graph paging, outlook-calendar outlook-mail's). Folder, mail, calendar and people listings page with `cursor`
@@ -809,8 +818,8 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   are left out: a separate API not confirmed under the same key. No limits.
 - Generic `soap` and `odata` modules (docs/soap-connector.md, docs/odata-connector.md), siblings
   of `http`, sharing its guarded fetch (origin, no redirects, 30 s, 1 MB; SOAP also takes XML
-  types), auth headers, form values and limit checks. At most one of http, soap, odata per
-  connector; the shared refine checks auth fields, accountKey, list limits, no provider. SOAP: a
+  types), auth headers, form values and limit checks. At most one of http, soap, odata, sql
+  per connector; the shared refine checks auth fields, accountKey, list limits, no provider. SOAP: a
   POST of the endpoint only; each tool's body is a template whose `{param}`s are filled in one pass
   with XML-escaped values (control characters refused); an optional param is a whole element,
   dropped when left out; bodies must parse at startup; WS-Security UsernameToken (text or digest,
@@ -831,6 +840,28 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   The audit target is the request sent. oauth2 takes an optional `scope` (Entra v2, Dynamics).
   Tested only against fakes (connectors/soap/*.test.ts, connectors/odata/*.test.ts), never a live
   SAP, Dynamics, SuccessFactors or SOAP service.
+- SQL (`connectors/sql`, any connector.json with an `sql` block): each tool is one statement
+  the company's developer wrote, `:name` params found outside quotes, comments and `::` casts
+  and bound by the driver (postgres `$n`, SQL Server `@name`, MySQL `?` through `execute`, a
+  server-side prepared statement, Oracle `:name`); the params declared must be exactly the
+  names used (checked at startup). Every call is its own transaction: tools without `write`
+  run read-only (Postgres and MySQL `read only` transactions, Oracle `set transaction read
+  only`, SQL Server `ApplicationIntent=ReadOnly` on a pool of its own: no read-only
+  transaction there, so the user's grants are the guard) and are rolled back; writes commit.
+  Answer limits (`column`) are checked on the rows inside the transaction, before commit, so a
+  write outside them is rolled back; under a limit, a write returning fewer rows than it
+  changed is refused. Rows are capped at `maxRows` (default 200, at most 1000) and 1 MB
+  (Postgres stops at a cursor batch, SQL Server `set rowcount`, MySQL `sql_select_limit`,
+  Oracle `maxRows`, each maxRows + 1 so `truncated` shows); `timeoutSeconds` (Postgres
+  `statement_timeout`, SQL Server requestTimeout, MySQL the driver's query timeout, Oracle
+  callTimeout). A write tool cannot be in a required capability; `destructive` needs `write`.
+  Pools: 3 connections, 60 s idle, keyed by user and password (a changed credential gets a
+  new pool; the old one idles at zero connections), never closed; a failed first connection
+  is tried again on the next call. TLS `verify` (default), `insecure` (refused for Oracle,
+  whose thin driver always checks the chain), `off`. Tested: Postgres in the suite; MySQL 8.4,
+  SQL Server 2022 and Oracle 23ai Free by the optional smoke test (TEST_MYSQL_URL,
+  TEST_SQLSERVER_URL, TEST_ORACLE_URL) against containers, 2026-10-27 (TLS `insecure` for the
+  first two, `off` for Oracle; `verify` against none); MariaDB never.
 - Slack (`slack`): a Slack app made from the manifest in the first setup step (YAML: a JSON
   manifest cannot take the `{scope}` line repeat without a trailing comma), installed to one
   workspace; the connect form takes its Bot User OAuth Token (`xoxb-`). `auth.test` proves it

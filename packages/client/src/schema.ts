@@ -1423,6 +1423,51 @@ export interface components {
                 /** @default false */
                 allowInsecureHttp: boolean;
             };
+            sql?: {
+                /** @enum {string} */
+                engine: "postgres" | "sqlserver" | "mysql" | "oracle";
+                host: string;
+                port?: number;
+                database: string;
+                auth: {
+                    user: string;
+                    password: string;
+                };
+                /**
+                 * @default verify
+                 * @enum {string}
+                 */
+                tls: "verify" | "insecure" | "off";
+                /** @default 30 */
+                timeoutSeconds: number;
+                /** @default 200 */
+                maxRows: number;
+                tools: {
+                    name: string;
+                    description: string;
+                    sql: string;
+                    /** @default {} */
+                    params: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "number" | "integer" | "boolean";
+                            description: string;
+                            /** @default true */
+                            required: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default false */
+                    write: boolean;
+                    /** @default false */
+                    destructive: boolean;
+                    /** @default [] */
+                    answerLimits: {
+                        column: string;
+                        limit: string;
+                    }[];
+                }[];
+            };
         };
         ConnectResult: {
             connection: components["schemas"]["Connection"];

@@ -152,7 +152,7 @@ test("soap definitions are validated", () => {
           },
         },
       ),
-    /at most one of http, soap and odata/,
+    /at most one of http, soap, odata and sql/,
   );
   // A body that is not XML fails at startup, not on a call.
   const broken = hr(tools({ ...get, body: "<hr:GetEmployee>{employee_id}</hr:Other>" }));

@@ -13,7 +13,10 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# The database drivers are optional peers of the npm package; the image carries all of them, at
+# the versions the lockfile pins for development.
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));for(const n in p.peerDependencies){p.dependencies[n]=p.peerDependencies[n];delete p.devDependencies[n]}fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
+  && npm ci --omit=dev
 # npm is not used at runtime and its bundled tar carries CVEs.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/dist ./dist
