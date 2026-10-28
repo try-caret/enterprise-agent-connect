@@ -64,13 +64,14 @@ export function parsePrivateKey(raw: string): string {
 
 export function clientAssertion(input: {
   clientId: string;
+  // Left out when empty: Okta then tries each of the app's keys.
   keyId: string;
   privateKey: string;
   tokenUrl: string;
 }): string {
   const now = Math.floor(Date.now() / 1000);
   const part = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const signed = `${part({ alg: "RS256", typ: "JWT", kid: input.keyId })}.${part({
+  const signed = `${part({ alg: "RS256", typ: "JWT", kid: input.keyId || undefined })}.${part({
     iss: input.clientId,
     sub: input.clientId,
     aud: input.tokenUrl,
@@ -181,7 +182,7 @@ export function oktaVendor(fetchImpl: Fetch = fetch): Vendor {
       const keyId = fields.key_id?.trim() ?? "";
       if (!CLIENT_ID.test(clientId))
         throw new ConnectError("Enter the app's Client ID, from its General tab");
-      if (!KEY_ID.test(keyId))
+      if (keyId && !KEY_ID.test(keyId))
         throw new ConnectError(
           "Enter the key's KID, shown beside the key in the app's General tab",
         );

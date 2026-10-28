@@ -246,7 +246,12 @@ connectors/<id>/connector.json # one per app: logo (admin /brand path), setup st
                       # admin page asks such a choice in step 1, before the steps naming
                       # {scopes}; `requires` {field, value}: asked only while an earlier choice
                       # is that option, else a choice's first option holds; a text field with
-                      # it is not asked at all, e.g. ServiceNow's password only for basic). Limits
+                      # it is not asked at all, e.g. ServiceNow's password only for basic;
+                      # `optional`: may be left empty, e.g. Okta's KID). A step with
+                      # `capabilities` shows only while one of them is ticked (chosenSteps'
+                      # `ticked`; NetSuite's saved search script). An http probe's `name`
+                      # labels each value from the same list item as `show` (Check.labels;
+                      # a vendor check may return `labels` too; client discoveredChoices). Limits
                       # are list, text or map (`keys`: one value per chosen value of an earlier
                       # list limit, e.g. a folder per site). zod-validated at startup (connector-kit/src/connector.ts)
                       # Steps may carry `click` (the same step in the vendor's admin portals;
@@ -958,7 +963,7 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   `config.host` is the `accountKey`), client ID and secret. Token: client credentials at
   `/api/v1/oauth/token` (form-encoded; current docs, the older `/api/oauth/token` is not used), on
   the kit's oauth.ts. Verify reads `/api/v1/jamf-pro-version` (no privilege); discover lists site
-  ids (`/api/v1/sites`, Read Sites). Jamf Pro API: `/v4/computers-inventory` and
+  ids with their names as labels (`/api/v1/sites`, Read Sites). Jamf Pro API: `/v4/computers-inventory` and
   `/v2/mobile-devices/detail` (RSQL `filter`, `section`, `page`, `page-size`; one device is the
   same listing with `id=in=(..)` / `mobileDeviceId=in=(..)`), group lists
   `/v3/computer-groups/{static,smart}-groups` and `/v2/mobile-device-groups/{static,smart}-groups`,

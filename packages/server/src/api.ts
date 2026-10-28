@@ -42,6 +42,8 @@ export const schemas = (() => {
       label: z.string(),
       values: z.array(z.string()),
       warning: z.string().optional(),
+      // A label per value for the admin, e.g. a subsidiary's name for its id.
+      labels: z.record(z.string(), z.string()).optional(),
     }),
   );
   const Ok = z.strictObject({ ok: z.literal(true) });

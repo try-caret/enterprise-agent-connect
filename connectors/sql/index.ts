@@ -80,6 +80,7 @@ export function sqlVendor(connector: Connector, open = openEngine): Vendor {
       const secret: Record<string, string> = {};
       for (const f of connector.fields) {
         const value = fields[f.id]?.trim() ?? "";
+        if (!value && f.optional) continue;
         if (!value) throw new ConnectError(`Enter ${f.label}`);
         (f.secret ? secret : config)[f.id] = value;
       }

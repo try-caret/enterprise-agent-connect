@@ -75,8 +75,9 @@
     {
       "id": "key_id",
       "label": "Key ID (KID)",
-      "help": "Shown beside the key under Public keys.",
-      "secret": false
+      "help": "Shown beside the key under Public keys. Needed only when the app has more than one key.",
+      "secret": false,
+      "optional": true
     },
     {
       "id": "private_key",

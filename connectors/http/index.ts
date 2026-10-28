@@ -103,12 +103,14 @@ export function authHeaders(auth: HttpAuth, c: VendorConnection): Record<string,
   return {};
 }
 
-// The connect form's values: plain fields into config, secret ones into secret; all required.
+// The connect form's values: plain fields into config, secret ones into secret; required
+// unless `optional`.
 export function formValues(connector: Connector, fields: Record<string, string>) {
   const config: Record<string, string> = {};
   const secret: Record<string, string> = {};
   for (const f of connector.fields) {
     const value = fields[f.id]?.trim() ?? "";
+    if (!value && f.optional) continue;
     if (!value) throw new ConnectError(`Enter ${f.label}`);
     (f.secret ? secret : config)[f.id] = value;
   }

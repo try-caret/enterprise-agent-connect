@@ -966,6 +966,9 @@ export interface components {
             label: string;
             values: string[];
             warning?: string;
+            labels?: {
+                [key: string]: string;
+            };
         };
         CheckOutcome: {
             /** @constant */
@@ -1070,6 +1073,7 @@ export interface components {
                     field: string;
                     value: string;
                 };
+                capabilities?: string[];
             }[];
             afterConnect: {
                 title: string;
@@ -1103,6 +1107,7 @@ export interface components {
                     field: string;
                     value: string;
                 };
+                capabilities?: string[];
             }[];
             fields: {
                 id: string;
@@ -1120,6 +1125,8 @@ export interface components {
                     field: string;
                     value: string;
                 };
+                /** @default false */
+                optional: boolean;
             }[];
             capabilities: {
                 id: string;
@@ -1217,6 +1224,7 @@ export interface components {
                 path: string;
                 label: string;
                 show: string;
+                name?: string;
                 match?: {
                     [key: string]: string | number | boolean;
                 };
@@ -1236,6 +1244,7 @@ export interface components {
                 path: string;
                 label: string;
                 show: string;
+                name?: string;
                 match?: {
                     [key: string]: string | number | boolean;
                 };

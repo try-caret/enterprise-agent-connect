@@ -86,6 +86,12 @@ const clickRule = [
 ] as const;
 export const setupStep = stepSchema.refine(...clickRule);
 const step = setupStep;
+// An app's own setup step, which may be shown only while one of `capabilities` is ticked
+// (e.g. a script only saved searches need).
+const appStep = stepSchema
+  .extend({ capabilities: z.array(slug).min(1).optional() })
+  .strict()
+  .refine(...clickRule);
 const agentStep = agentStepSchema.refine(...clickRule);
 
 // A field with `options` is a choice (the first is the default), stored in the app's config
@@ -106,6 +112,8 @@ const fieldSchema = z
     // Asked only while an earlier choice is this option; otherwise a choice's first option
     // holds and a text field is not asked (e.g. a password only for that sign-in method).
     requires: chosenSchema.optional(),
+    // May be left empty.
+    optional: z.boolean().default(false),
   })
   .strict();
 
@@ -126,19 +134,29 @@ const limitSchema = z
     message: "A map limit names the list limit it is keyed by (keys), and only it",
   });
 
+// The path up to and including its last list (`items[]` of `items[].id`), or "" without one.
+const listPrefix = (path: string) =>
+  path.includes("[]") ? path.slice(0, path.lastIndexOf("[]") + 2) : "";
+
 const httpProbeSchema = z
   .object({
     method: z.enum(["GET", "POST"]),
     path: z.string().startsWith("/"),
     label: text,
     show: text,
+    // Each value's label for the admin, read from the same list item as `show` (e.g. show
+    // "items[].id", name "items[].name").
+    name: text.optional(),
     // Keeps only list items whose fields equal these values, e.g. objects agents can query.
     match: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
     body: z.record(z.string(), z.unknown()).optional(),
     // Shown to the admin when the probe finds nothing, e.g. a missing project permission.
     ifEmpty: text.optional(),
   })
-  .strict();
+  .strict()
+  .refine((p) => !p.name || listPrefix(p.name) === listPrefix(p.show), {
+    message: "A probe's name is read from the same list as its show",
+  });
 
 // A check no single API call answers, e.g. the permissions inside a token. The vendor client
 // implements it under this name (Vendor.checks).
@@ -860,8 +878,8 @@ export const connectorSchema = z
     // Vendor scopes every ceiling needs, whatever is ticked (e.g. what adding agents' Teams
     // bots takes), filled into {scope}/{scopes} with the capabilities' own.
     scopes: z.array(text).optional(),
-    setup: z.array(step),
-    afterConnect: z.array(step),
+    setup: z.array(appStep),
+    afterConnect: z.array(appStep),
     fields: z.array(fieldSchema),
     capabilities: z
       .array(
@@ -1042,6 +1060,14 @@ export const connectorSchema = z
     },
     { message: "A step's option and a field's requires name an option of an earlier choice" },
   )
+  .refine(
+    (c) =>
+      [...c.setup, ...c.afterConnect].every(
+        (s) =>
+          !s.capabilities || s.capabilities.every((id) => c.capabilities.some((x) => x.id === id)),
+      ),
+    { message: "A step's capabilities name capabilities of its connector" },
+  )
   .refine((c) => c.provider !== undefined || c.fields.length > 0, {
     message: "A guided connector needs connect form fields",
   })
@@ -1134,7 +1160,7 @@ export const providerSchema = z
     // The service can make a key pair whose certificate the admin uploads to their app.
     certificate: z.boolean(),
     setup: z.array(step),
-    fields: z.array(fieldSchema.extend({ optional: z.boolean().default(false) }).strict()).min(1),
+    fields: z.array(fieldSchema).min(1),
     // What one more agent needs outside the service (e.g. its mailbox), shown when its API key is
     // made with one of the apps each step names.
     addAgent: z.array(agentStep).default([]),
@@ -1271,6 +1297,31 @@ export function pickDisplay(
   path: string,
   match: Record<string, unknown> = {},
 ): string[] {
+  return pick(data, path, match)
+    .filter((v) => v !== undefined && v !== null)
+    .map(String);
+}
+
+/** Each value `show` picks, with its label `name` picks from the same list item. */
+export function pickLabels(
+  data: unknown,
+  show: string,
+  name: string,
+  match: Record<string, unknown> = {},
+): Record<string, string> {
+  const prefix = listPrefix(show);
+  const items = prefix ? pick(data, prefix, match) : [data];
+  const rest = (path: string) => path.slice(prefix.length).replace(/^\./, "");
+  const out: Record<string, string> = {};
+  for (const item of items) {
+    const [value] = rest(show) ? pick(item, rest(show)) : [item];
+    const [label] = rest(name) ? pick(item, rest(name)) : [item];
+    if (value != null && label != null) out[String(value)] = String(label);
+  }
+  return out;
+}
+
+function pick(data: unknown, path: string, match: Record<string, unknown> = {}): unknown[] {
   const matches = (v: unknown) =>
     Object.entries(match).every(
       ([k, want]) => v && typeof v === "object" && (v as Record<string, unknown>)[k] === want,
@@ -1284,5 +1335,5 @@ export function pickDisplay(
       return many ? (Array.isArray(next) ? next.filter(matches) : []) : [next];
     });
   }
-  return values.filter((v) => v !== undefined && v !== null).map(String);
+  return values;
 }

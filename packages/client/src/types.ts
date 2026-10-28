@@ -60,7 +60,7 @@ export type Step = Connector["setup"][number];
 export type AgentStep = Provider["addAgent"][number];
 export type Setting = NonNullable<Step["settings"]>[number];
 export type ChosenOption = NonNullable<Step["option"]>;
-/** A connect form field; a provider's may be left empty (`optional`). */
+/** A connect form field; an `optional` one may be left empty. */
 export type Field = Connector["fields"][number] & { optional?: boolean };
 export type FieldOption = NonNullable<Field["options"]>[number];
 export type Limit = Connector["limits"][number];

@@ -42,13 +42,14 @@ export type Vendor = {
     // `write`: also prove the app may change files there.
     access(connection: VendorConnection, site: string, write: boolean): Promise<SiteAccess>;
   };
-  // Checks named by the connector's `{ check }` probes.
+  // Checks named by the connector's `{ check }` probes. `labels`: a label for the admin per
+  // value, e.g. a site's name for its id.
   checks?: Record<
     string,
     (
       connection: VendorConnection,
       input: CheckInput,
-    ) => Promise<{ values: string[]; warning?: string }>
+    ) => Promise<{ values: string[]; warning?: string; labels?: Record<string, string> }>
   >;
 };
 

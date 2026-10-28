@@ -6915,6 +6915,15 @@
           },
           "warning": {
             "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -7347,6 +7356,14 @@
                     "value"
                   ],
                   "additionalProperties": false
+                },
+                "capabilities": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  }
                 }
               },
               "required": [
@@ -7489,6 +7506,14 @@
                     "value"
                   ],
                   "additionalProperties": false
+                },
+                "capabilities": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  }
                 }
               },
               "required": [
@@ -7573,12 +7598,17 @@
                     "value"
                   ],
                   "additionalProperties": false
+                },
+                "optional": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
                 "id",
                 "label",
-                "secret"
+                "secret",
+                "optional"
               ],
               "additionalProperties": false
             }
@@ -8014,6 +8044,10 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
                   "match": {
                     "type": "object",
                     "propertyNames": {
@@ -8093,6 +8127,10 @@
                     "minLength": 1
                   },
                   "show": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
                     "type": "string",
                     "minLength": 1
                   },

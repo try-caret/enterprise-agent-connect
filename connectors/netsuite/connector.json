@@ -86,7 +86,8 @@
   ],
   "afterConnect": [
     {
-      "title": "Only for saved searches: add the search script",
+      "title": "Add the saved search script",
+      "capabilities": ["saved_searches"],
       "body": "Agents run saved searches through a small script. Save these lines as agent_saved_search.js, upload it as a RESTlet script with the ID _agent_saved_search, and deploy it with the ID _agent_saved_search, Status Released and Audience the role you made. Share each saved search agents may run with that role, add a Subsidiary or Location column (no join) to it if agents are limited to some, and add its ID to each agent's Saved searches.",
       "click": [
         "Customization > Scripting > Scripts > New > upload agent_saved_search.js > Create Script Record",
@@ -305,10 +306,11 @@
     "method": "POST",
     "path": "/services/rest/query/v1/suiteql?limit=1000",
     "body": {
-      "q": "SELECT id FROM subsidiary WHERE isinactive = 'F' ORDER BY id"
+      "q": "SELECT id, name FROM subsidiary WHERE isinactive = 'F' ORDER BY id"
     },
     "label": "Subsidiaries the role can see",
     "show": "items[].id",
+    "name": "items[].name",
     "ifEmpty": "No subsidiaries were found. Either your account has none, or the role lacks Subsidiaries (View)."
   },
   "revoke": "In NetSuite, open Setup > Integration > Manage Integrations > {brand.microsoft.appName} and set State to Blocked, then revoke its certificate or access token."
