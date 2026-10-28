@@ -65,7 +65,7 @@
     {
       "id": "instance",
       "label": "Instance address",
-      "help": "The address you open ServiceNow at.",
+      "help": "The address you open ServiceNow at: your-company.service-now.com, or your company's own https address for it.",
       "placeholder": "https://your-company.service-now.com",
       "secret": false
     },

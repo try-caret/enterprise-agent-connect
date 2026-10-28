@@ -615,20 +615,73 @@ test("a ServiceNow refusal reaches the agent with its reason and the capability'
   assert.deepEqual([audit[0].decision, audit[0].vendorStatus], ["failed", 403]);
 });
 
-test("the instance address must be a service-now.com instance", () => {
+test("the instance is a bare name on service-now.com or any https address as entered", () => {
+  assert.equal(normalizeInstance("acme"), "acme.service-now.com");
   assert.equal(
     normalizeInstance("https://Acme.service-now.com/now/nav/ui"),
     "acme.service-now.com",
   );
-  assert.equal(normalizeInstance("acme"), "acme.service-now.com");
+  assert.equal(normalizeInstance("https://itsm.acme.example/"), "itsm.acme.example");
+  assert.equal(normalizeInstance("itsm.acme.example:8443"), "itsm.acme.example:8443");
+  // Addresses are not refused for being IP literals, as for the http connector.
+  assert.equal(normalizeInstance("https://10.0.0.5"), "10.0.0.5");
+  assert.equal(normalizeInstance("https://[fd00::5]"), "[fd00::5]");
   for (const bad of [
     "http://acme.service-now.com",
-    "acme.service-now.com.evil.example",
-    "evil.example",
+    "ftp://itsm.acme.example",
+    "https://user:pw@itsm.acme.example",
+    "https://intranet",
     "a b",
     "",
   ])
     assert.throws(() => normalizeInstance(bad), /instance address/, bad);
+});
+
+test("a custom domain gets every call, the token included, and nothing else", async () => {
+  const seen: string[] = [];
+  const fake = (async (url: string | URL) => {
+    seen.push(String(url));
+    if (String(url).endsWith("/oauth_token.do"))
+      return new Response(JSON.stringify({ access_token: "tok", expires_in: 1799 }));
+    return new Response(JSON.stringify({ result: [] }));
+  }) as typeof fetch;
+  const vendor = servicenowVendor(fake);
+  const conn = await vendor.connect({
+    instance: "https://itsm.acme.example",
+    auth: "oauth",
+    client_id: "cid",
+    client_secret: "cs",
+  });
+  assert.deepEqual(
+    [conn.config.instance, conn.accountLabel],
+    ["itsm.acme.example", "itsm.acme.example"],
+  );
+  await vendor.call(conn, { method: "GET", path: "/api/now/table/incident" });
+  assert.deepEqual(seen, [
+    "https://itsm.acme.example/oauth_token.do",
+    "https://itsm.acme.example/api/now/table/incident",
+  ]);
+  for (const path of ["@evil.example/x", "//evil.example/x", "/\\evil.example/x"])
+    await assert.rejects(vendor.call(conn, { method: "GET", path }), /Refused ServiceNow path/);
+  assert.equal(seen.length, 2);
+});
+
+test("a redirect from the instance is refused, never followed", async () => {
+  const inits: RequestInit[] = [];
+  const fake = (async (_url: string, init: RequestInit) => {
+    inits.push(init);
+    return new Response(null, { status: 302, headers: { location: "https://evil.example/" } });
+  }) as typeof fetch;
+  const vendor = servicenowVendor(fake);
+  await assert.rejects(
+    vendor.connect({ instance: "itsm.acme.example", auth: "basic", username: "u", password: "p" }),
+    /redirect \(302\), which is not followed/,
+  );
+  await assert.rejects(
+    vendor.connect({ instance: "acme", auth: "oauth", client_id: "a", client_secret: "b" }),
+    /redirect \(302\)/,
+  );
+  assert.ok(inits.every((i) => i.redirect === "manual"));
 });
 
 test("the vendor signs in with OAuth client credentials or basic, only at the instance", async () => {

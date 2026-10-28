@@ -776,8 +776,11 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   manifests from Slack's same reference, not re-read). Tested only against a fake Slack, never a
   real workspace.
 - ServiceNow (`servicenow`): an integration user (web service access only) on
-  `https://<name>.service-now.com` (bare name or address accepted; any other host, including
-  custom domains, is refused). Sign-in choice `auth`: `oauth` (default; an application
+  its instance: a bare name is `<name>.service-now.com`; any other https address (a company's
+  own domain, a port) is taken as the admin entered it, the admin being trusted to name their
+  instance (no IP literal check, as for the `http` connector). Every call goes to that origin:
+  paths must start with a single `/`, the token URL is built on it, and a redirect is refused
+  (`noRedirects`), never followed. Sign-in choice `auth`: `oauth` (default; an application
   registry entry "OAuth API endpoint for external clients" whose OAuth Application User is the
   integration user, client credentials at `/oauth_token.do`, which ServiceNow only allows once
   the system property `glide.oauth.inbound.client.credential.grant_type.enabled` is true; the

@@ -9,31 +9,53 @@ import {
 
 // A ServiceNow integration user, signing in through an OAuth application registry entry
 // (client credentials, token at /oauth_token.do, run as the entry's OAuth Application User) or
-// with its user name and password (basic). Every call goes to the instance's own host.
-
-const INSTANCE = /^[a-z0-9][a-z0-9-]{0,62}\.service-now\.com$/;
+// with its user name and password (basic). Every call goes to the instance the admin named
+// (a bare name is <name>.service-now.com; a company's own domain is accepted as entered), and
+// a redirect is refused rather than followed, so nothing leaves that origin.
 
 export function normalizeInstance(input: string): string {
-  let host = input
-    .trim()
-    .toLowerCase()
-    .replace(/^https:\/\//, "")
-    .replace(/\/.*$/, "");
-  if (/^[a-z0-9][a-z0-9-]{0,62}$/.test(host)) host = `${host}.service-now.com`;
-  if (!INSTANCE.test(host))
+  const typed = input.trim().toLowerCase();
+  if (/^[a-z0-9][a-z0-9-]{0,62}$/.test(typed)) return `${typed}.service-now.com`;
+  const url = URL.parse(/^[a-z][a-z0-9+.-]*:\/\//.test(typed) ? typed : `https://${typed}`);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    // A one-word host after https:// is more likely a typo than an instance.
+    !/[.[]/.test(url.hostname)
+  )
     throw new ConnectError(
-      "Enter your instance address, for example https://your-company.service-now.com",
+      "Enter your instance address, for example https://your-company.service-now.com or your own https address",
     );
-  return host;
+  return url.host;
 }
 
 function base(config: Record<string, string>): string {
-  if (!INSTANCE.test(config.instance ?? ""))
+  const url = URL.parse(`https://${config.instance ?? ""}`);
+  if (!config.instance || url?.host !== config.instance)
     throw new Error("ServiceNow connection has no instance");
-  return `https://${config.instance}`;
+  return url.origin;
 }
 
-export function servicenowVendor(fetchImpl: Fetch = fetch): Vendor {
+// Paths come from the tools; one not starting with a single / could name another host.
+function checkPath(path: string) {
+  if (!/^\/(?![/\\])/.test(path)) throw new Error(`Refused ServiceNow path ${path.slice(0, 50)}`);
+}
+
+export function noRedirects(fetchImpl: Fetch): Fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const res = await fetchImpl(input, { ...init, redirect: "manual" });
+    if (res.status >= 300 && res.status < 400)
+      throw new ConnectError(
+        `ServiceNow answered with a redirect (${res.status}), which is not followed. Enter the address the instance is served at.`,
+      );
+    return res;
+  }) as Fetch;
+}
+
+export function servicenowVendor(unguarded: Fetch = fetch): Vendor {
+  const fetchImpl = noRedirects(unguarded);
   const oauth = clientCredentials("ServiceNow", fetchImpl);
   const creds = (c: VendorConnection) => ({
     tokenUrl: `${base(c.config)}/oauth_token.do`,
@@ -56,8 +78,12 @@ export function servicenowVendor(fetchImpl: Fetch = fetch): Vendor {
     return { status: res.status, data: raw ? safeJson(raw) : null };
   }
 
-  const call: Vendor["call"] = (c, request) =>
-    c.config.auth === "basic" ? basic(c, request) : oauth.call(creds(c), base(c.config), request);
+  const call: Vendor["call"] = async (c, request) => {
+    checkPath(request.path);
+    return c.config.auth === "basic"
+      ? basic(c, request)
+      : oauth.call(creds(c), base(c.config), request);
+  };
 
   return {
     async connect(fields) {
