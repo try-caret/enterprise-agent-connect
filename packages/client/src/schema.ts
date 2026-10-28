@@ -1170,6 +1170,7 @@ export interface components {
                     tokenUrl: string;
                     clientId: string;
                     clientSecret: string;
+                    scope?: string;
                 } | {
                     /** @constant */
                     type: "query";
@@ -1227,6 +1228,197 @@ export interface components {
                         /** @constant */
                         link: true;
                     };
+                }[];
+                /** @default false */
+                allowInsecureHttp: boolean;
+            };
+            soap?: {
+                /** Format: uri */
+                endpoint: string;
+                /**
+                 * @default 1.1
+                 * @enum {string}
+                 */
+                version: "1.1" | "1.2";
+                /** @default {} */
+                namespaces: {
+                    [key: string]: string;
+                };
+                auth?: {
+                    /** @constant */
+                    type: "header";
+                    header: string;
+                    value: string;
+                    prefix?: string;
+                } | {
+                    /** @constant */
+                    type: "bearer";
+                    token: string;
+                } | {
+                    /** @constant */
+                    type: "basic";
+                    username: string;
+                    password: string;
+                };
+                wsSecurity?: {
+                    username: string;
+                    password: string;
+                    /** @default false */
+                    digest: boolean;
+                };
+                verify?: {
+                    tool: string;
+                    /** @default {} */
+                    args: {
+                        [key: string]: string | number | boolean;
+                    };
+                    show: string;
+                };
+                tools: {
+                    name: string;
+                    description: string;
+                    operation: string;
+                    soapAction?: string;
+                    body: string;
+                    /** @default {} */
+                    params: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "number" | "integer" | "boolean";
+                            description: string;
+                            /** @default true */
+                            required: boolean;
+                            limit?: string;
+                        };
+                    };
+                    result?: string;
+                    fields?: string[];
+                    /** @default false */
+                    readOnly: boolean;
+                    /** @default false */
+                    destructive: boolean;
+                    /** @default [] */
+                    answerLimits: {
+                        field: string;
+                        limit: string;
+                    }[];
+                }[];
+                /** @default false */
+                allowInsecureHttp: boolean;
+            };
+            odata?: {
+                /** Format: uri */
+                serviceRoot: string;
+                /** @enum {string} */
+                version: "2" | "4";
+                auth: {
+                    /** @constant */
+                    type: "header";
+                    header: string;
+                    value: string;
+                    prefix?: string;
+                } | {
+                    /** @constant */
+                    type: "bearer";
+                    token: string;
+                } | {
+                    /** @constant */
+                    type: "basic";
+                    username: string;
+                    password: string;
+                } | {
+                    /** @constant */
+                    type: "oauth2";
+                    /** Format: uri */
+                    tokenUrl: string;
+                    clientId: string;
+                    clientSecret: string;
+                    scope?: string;
+                } | {
+                    /** @constant */
+                    type: "query";
+                    param: string;
+                    value: string;
+                };
+                /** @default {} */
+                headers: {
+                    [key: string]: string;
+                };
+                /** @default false */
+                csrf: boolean;
+                /**
+                 * @default skip
+                 * @enum {string}
+                 */
+                paging: "skip" | "server";
+                tools: {
+                    name: string;
+                    description: string;
+                    /** @enum {string} */
+                    kind: "list" | "get" | "create" | "update" | "function" | "action";
+                    entitySet?: string;
+                    function?: string;
+                    /** @default {} */
+                    key: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default {} */
+                    filters: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                            /**
+                             * @default eq
+                             * @enum {string}
+                             */
+                            op: "eq" | "ne" | "gt" | "ge" | "lt" | "le" | "contains" | "startswith";
+                        };
+                    };
+                    /** @default {} */
+                    fields: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default {} */
+                    params: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default [] */
+                    select: string[];
+                    orderBy?: string;
+                    /** @default 50 */
+                    top: number;
+                    /** @default false */
+                    destructive: boolean;
+                    /** @default [] */
+                    answerLimits: {
+                        field: string;
+                        limit: string;
+                    }[];
                 }[];
                 /** @default false */
                 allowInsecureHttp: boolean;

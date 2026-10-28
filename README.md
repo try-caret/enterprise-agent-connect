@@ -5,13 +5,14 @@ grant it. Agents reach the apps through one MCP endpoint; every call is checked 
 agent's grants and written to an audit log. Agents never hold the apps' credentials.
 
 - **Built-in apps:** Jira, Microsoft 365 (Outlook mail and calendar, SharePoint files and Excel,
-  Teams, Entra ID, Intune), Jamf Pro, Okta, Slack, Salesforce, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect.
-  Teams, Entra ID, Intune), Jamf Pro, Okta, Slack, Salesforce, Oracle NetSuite, ServiceNow,
-  FedEx, Dell TechDirect.
-  Teams, Entra ID, Intune, Dynamics 365), Jamf Pro, Okta, Slack, Salesforce, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect.
+  Teams, Entra ID, Intune, Dynamics 365), Jamf Pro, Okta, Slack, Salesforce, SAP S/4HANA,
+  Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect.
 - **Your own apps without code:** describe an internal REST API or a SaaS app's in one
   `connector.json`, or draft one from its OpenAPI spec
-  ([docs/http-connector.md](docs/http-connector.md)).
+  ([docs/http-connector.md](docs/http-connector.md)); a SOAP service
+  ([docs/soap-connector.md](docs/soap-connector.md)) or an OData service such as SAP S/4HANA,
+  Dynamics 365 or SuccessFactors ([docs/odata-connector.md](docs/odata-connector.md)), drafted
+  from its WSDL or `$metadata`.
 - **Per-agent access:** tick what each agent can do per app, and limit it to values (mailboxes,
   sites, projects, customers). Anything that deletes needs an explicit confirmation.
 - **Self-hosted:** one Node service and Postgres. No UI ships; the admin API
@@ -158,7 +159,8 @@ const rows = await admin.audit(org.id, { agent: agent.id });
 ```
 
 **Your own app, no code.** Pass a connector definition with an `http` block
-([docs/http-connector.md](docs/http-connector.md)) straight into `connectors`. It is checked like
+([docs/http-connector.md](docs/http-connector.md)), or a `soap` or `odata` block, straight into
+`connectors`. It is checked like
 a `connector.json`; the type is `ConnectorJson`:
 
 ```ts
@@ -233,9 +235,13 @@ and `AGENT_CONNECT_ADMIN_TOKEN` (`existingSecret`).
 - `packages/connector-kit`: what a connector builds on (schemas, tool helpers, vendor types)
 - `packages/client`: typed admin API client
 - `connectors/<app>`: one folder per app: `connector.json`, `index.ts`, `tools.ts`, `vendor.ts`
-- `connectors/http`: runs any app described only in its `connector.json` (docs/http-connector.md)
+- `connectors/http`, `connectors/soap`, `connectors/odata`: run any app described only in its
+  `connector.json` (docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md)
 - `examples/internal-app`: a small internal API and its connector, for the quick start
 - `scripts/openapi-to-connector.ts`: drafts an http connector from an OpenAPI 3.x spec
+- `examples/legacy-apps`: a SOAP and an SAP OData connector, described only in JSON
+- `scripts/wsdl-to-connector.ts`, `scripts/odata-to-connector.ts`: draft a connector from a WSDL
+  or an OData `$metadata`
 - `deploy/docker`, `deploy/helm`: image, Compose file and chart
 
 ## License

@@ -109,7 +109,8 @@ base64), `AGENT_CONNECT_ADMIN_TOKEN` (≥32 chars), `PORT` (3000), `PUBLIC_BASE_
 deployment's origin, the service under `/agent-connect`; where Teams reaches the bots; without it
 the bot setup script and package say to set `global.publicBaseUrl`), `BRANDING` (JSON, see
 Branding), `BUILTIN_APPS` (comma-separated built-in app ids this deployment offers; unset offers every one, an unknown id stops startup), `CONNECTOR_DIRS` (`:`-separated folders laid out like `connectors/`, `<id>/connector.json` each; one with an
-`http` block runs on the generic module `connectors/http`, docs/http-connector.md; any other needs a
+`http`, `soap` or `odata` block runs on the generic module of that name in `connectors/`,
+docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md; any other needs a
 `ConnectorModule` passed to `createAgentConnect`).
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
 multi-tenant Entra app instead of the customer's own, and then needs
@@ -303,6 +304,17 @@ scripts/openapi-to-connector.ts # drafts an http connector.json from an OpenAPI 
                       # scripts/fixtures/tracker.openapi.json
 packages/server/src/consent.ts # signed approval state (org, app, capability ceiling, return address, tenant once
                       # approved, nonce, 15 min expiry)
+connectors/http/      # the generic module for a connector.json `http` block; exports guardedFetch,
+                      # authHeaders, formValues, paramLimits and answerWithin for its siblings
+connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
+                      # templates with XML-escaped values, faults, result path), xml.ts (the XML
+                      # reader: no DTD, five entities, depth 100; also used by the scripts)
+connectors/odata/     # `odata` block (v2 and v4): typed literals, structured filters, keys,
+                      # create, update (read first under answerLimits), function and action
+                      # imports, $skip / skiptoken paging as `cursor`, SAP's CSRF token on writes
+scripts/wsdl-to-connector.ts, scripts/odata-to-connector.ts # draft a soap / odata connector.json
+                      # from a WSDL or $metadata (tested in connectors/soap and connectors/odata)
+examples/legacy-apps/ # hr-soap and sap-sales-orders, JSON-only; the soap and odata tests' fixtures
 connectors/jira/jql.ts # confines agent JQL to granted projects
 connectors/salesforce/soql.ts # finds the one object a SOQL query reads; refuses anything reaching another
 connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account client credentials;
@@ -795,6 +807,30 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   only after approval. `dell_warranty_lookup` returns model, ship date and each entitlement
   with an `active` flag; an answer that is not a list fails loudly. Asset components (parts)
   are left out: a separate API not confirmed under the same key. No limits.
+- Generic `soap` and `odata` modules (docs/soap-connector.md, docs/odata-connector.md), siblings
+  of `http`, sharing its guarded fetch (origin, no redirects, 30 s, 1 MB; SOAP also takes XML
+  types), auth headers, form values and limit checks. At most one of http, soap, odata per
+  connector; the shared refine checks auth fields, accountKey, list limits, no provider. SOAP: a
+  POST of the endpoint only; each tool's body is a template whose `{param}`s are filled in one pass
+  with XML-escaped values (control characters refused); an optional param is a whole element,
+  dropped when left out; bodies must parse at startup; WS-Security UsernameToken (text or digest,
+  fresh nonce and Created, no Timestamp); a Fault of either version, any status, is
+  `The service refused the call: <reason> (<code>)`; a non-envelope error page passes its text;
+  answers become JSON without prefixes (repeats as lists, xsi:nil null, unprefixed attributes
+  kept, `_text` beside children), cut to `result` (`[]`: always a list) and `fields`;
+  `answerLimits` only on `readOnly` tools; verify is the vendor check `operation` running
+  `soap.verify`. OData: agents send typed values only (string, integer, number, decimal, boolean,
+  guid, datetime, datetimeoffset, each re-checked before a literal is written); v2 literals carry
+  their prefixes and suffixes; a limited `eq` filter left out is the OR of the agent's values,
+  and every listed item is checked on it; `answerLimits` on get, list and function, and an update
+  under them reads the entity first (`$select` of their fields); `cursor` is `s<skip>` or
+  `t<skiptoken>` read raw from the next link, never a URL, so the filter is rebuilt each page;
+  `paging: server` (v4 only) sends `Prefer: odata.maxpagesize`; writes with `csrf` fetch a token
+  and its cookies first (fresh per write); v4 create and update ask `return=representation`,
+  update sends `If-Match: *` (no Dynamics upsert), v2 update is POST with `X-HTTP-Method: MERGE`.
+  The audit target is the request sent. oauth2 takes an optional `scope` (Entra v2, Dynamics).
+  Tested only against fakes (connectors/soap/*.test.ts, connectors/odata/*.test.ts), never a live
+  SAP, Dynamics, SuccessFactors or SOAP service.
 - Slack (`slack`): a Slack app made from the manifest in the first setup step (YAML: a JSON
   manifest cannot take the `{scope}` line repeat without a trailing comma), installed to one
   workspace; the connect form takes its Bot User OAuth Token (`xoxb-`). `auth.test` proves it

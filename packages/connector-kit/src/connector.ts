@@ -157,7 +157,7 @@ export type Probe = z.infer<typeof probeSchema>;
 const headerName = z.string().regex(/^[A-Za-z0-9-]+$/);
 // Printable ASCII only: a header value can never carry a line break into the request.
 const headerValue = z.string().regex(/^[\x20-\x7E]*$/);
-const httpAuthSchema = z.discriminatedUnion("type", [
+const keyAuths = [
   z
     .object({
       type: z.literal("header"),
@@ -169,12 +169,20 @@ const httpAuthSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("bearer"), token: slug }).strict(),
   z.object({ type: z.literal("basic"), username: slug, password: slug }).strict(),
+] as const;
+const httpAuthSchema = z.discriminatedUnion("type", [
+  ...keyAuths,
   z
     .object({
       type: z.literal("oauth2"),
       tokenUrl: z.url({ protocol: /^https?$/ }),
       clientId: slug,
       clientSecret: slug,
+      // Sent with the token request, e.g. https://<org>.crm.dynamics.com/.default.
+      scope: z
+        .string()
+        .regex(/^[\x21-\x7e]+( [\x21-\x7e]+)*$/)
+        .optional(),
     })
     .strict(),
   // Added to every call's query string, e.g. ?api_key=…
@@ -186,6 +194,24 @@ const httpAuthSchema = z.discriminatedUnion("type", [
     })
     .strict(),
 ]);
+
+export type HttpAuth = z.infer<typeof httpAuthSchema>;
+
+// The connect form fields an auth names, each with whether it must be a secret field.
+const authFields = (a: HttpAuth): [string, boolean][] =>
+  a.type === "header" || a.type === "query"
+    ? [[a.value, true]]
+    : a.type === "bearer"
+      ? [[a.token, true]]
+      : a.type === "basic"
+        ? [
+            [a.username, false],
+            [a.password, true],
+          ]
+        : [
+            [a.clientId, false],
+            [a.clientSecret, true],
+          ];
 
 const scalarType = z.enum(["string", "number", "integer", "boolean"]);
 const scalar = z.union([z.string(), z.number(), z.boolean()]);
@@ -378,6 +404,273 @@ const httpSchema = z
   );
 export type HttpApp = z.infer<typeof httpSchema>;
 
+const answerLimitsSchema = z.array(z.object({ field: dotPath, limit: slug }).strict()).default([]);
+const secure = (allowInsecure: boolean, ...urls: string[]) =>
+  allowInsecure || urls.every((u) => u.startsWith("https://"));
+
+// A SOAP service described here, run by connectors/soap. Each tool is one operation: its Body
+// content is a template whose {param} placeholders are filled with XML-escaped values.
+const soapParamSchema = z
+  .object({
+    type: z.enum(["string", "number", "integer", "boolean"]),
+    description: text,
+    // Left out, an optional param's element (`<x>{param}</x>`) is left out of the body.
+    required: z.boolean().default(true),
+    limit: slug.optional(),
+  })
+  .strict();
+
+const PLACEHOLDER = /\{([a-z][a-z0-9_]*)\}/g;
+const xmlName = z.string().regex(/^[A-Za-z_][\w.-]*$/);
+
+const soapToolSchema = z
+  .object({
+    name: slug,
+    description: text,
+    operation: xmlName,
+    // Sent as the SOAPAction header (1.1) or the content type's action (1.2).
+    soapAction: z
+      .string()
+      .regex(/^[^"\r\n]*$/)
+      .optional(),
+    body: text,
+    params: z.record(slug, soapParamSchema).default({}),
+    // Dot path in the Body's content to the answer, default `<operation>Response`; ending `[]`
+    // makes it a list even when the service answers one item.
+    result: z
+      .string()
+      .regex(/^[A-Za-z_][\w.-]*(\.[A-Za-z_][\w.-]*)*(\[\])?$/)
+      .optional(),
+    // Only these fields of the answer (of each item, for a list) reach the agent.
+    fields: z.array(xmlName).min(1).optional(),
+    // Changes nothing (a lookup): only these can have answerLimits.
+    readOnly: z.boolean().default(false),
+    destructive: z.boolean().default(false),
+    answerLimits: answerLimitsSchema,
+  })
+  .strict()
+  .refine(
+    (t) => {
+      const used = [...t.body.matchAll(PLACEHOLDER)].map((m) => m[1]);
+      return (
+        new Set(used).size === used.length &&
+        used.every((n) => n in t.params) &&
+        Object.keys(t.params).every((n) => used.includes(n))
+      );
+    },
+    { message: "Each param is a {param} placeholder in the tool's body, once, and only those" },
+  )
+  .refine(
+    (t) =>
+      Object.entries(t.params).every(
+        ([n, p]) =>
+          p.required || new RegExp(`<([\\w.:-]+)(\\s[^>]*)?>\\{${n}\\}</\\1>`).test(t.body),
+      ),
+    { message: "An optional param's placeholder is the whole content of an element" },
+  )
+  .refine((t) => !t.answerLimits.length || t.readOnly, {
+    message: "answerLimits are for readOnly tools only",
+  })
+  .refine((t) => !(t.readOnly && t.destructive), {
+    message: "A readOnly tool cannot be destructive",
+  });
+
+const soapSchema = z
+  .object({
+    endpoint: z.url({ protocol: /^https?$/ }).refine((u) => !u.includes("#"), "No fragment"),
+    version: z.enum(["1.1", "1.2"]).default("1.1"),
+    // Prefixes declared on the Envelope for the tools' bodies, e.g. {"hr": "urn:example:hr"}.
+    namespaces: z
+      .record(
+        xmlName.refine((p) => !["soap", "wsse", "wsu", "xml", "xmlns"].includes(p), "Reserved"),
+        z.string().regex(/^[^"<>&\s]+$/),
+      )
+      .default({}),
+    auth: z.discriminatedUnion("type", [...keyAuths]).optional(),
+    // WS-Security UsernameToken in the SOAP header, with or without other auth.
+    wsSecurity: z
+      .object({ username: slug, password: slug, digest: z.boolean().default(false) })
+      .strict()
+      .optional(),
+    // The call the connector's `operation` check makes: a tool, its arguments, what to show.
+    verify: z
+      .object({
+        tool: slug,
+        args: z.record(slug, z.union([z.string(), z.number(), z.boolean()])).default({}),
+        show: text,
+      })
+      .strict()
+      .optional(),
+    tools: z.array(soapToolSchema).min(1),
+    allowInsecureHttp: z.boolean().default(false),
+  })
+  .strict()
+  .refine((s) => s.auth || s.wsSecurity, { message: "A soap app needs auth or wsSecurity" })
+  .refine((s) => secure(s.allowInsecureHttp, s.endpoint), {
+    message: "endpoint must be https unless allowInsecureHttp is true",
+  })
+  .refine((s) => !s.verify || s.tools.some((t) => t.name === s.verify!.tool), {
+    message: "verify.tool names one of the soap tools",
+  });
+export type SoapApp = z.infer<typeof soapSchema>;
+export type SoapTool = SoapApp["tools"][number];
+
+// An OData service (v2 or v4: SAP Gateway, Dynamics, SuccessFactors) described here, run by
+// connectors/odata. Agents never write OData syntax: values are typed and made into literals.
+const odataName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_.]*$/);
+const odataValueSchema = z
+  .object({
+    type: z.enum([
+      "string",
+      "integer",
+      "number",
+      "decimal",
+      "boolean",
+      "guid",
+      "datetime",
+      "datetimeoffset",
+    ]),
+    description: text,
+    // The OData property (or function parameter) name, default the param's own. A field can
+    // bind a lookup, e.g. Dynamics' parentaccountid@odata.bind.
+    property: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_.]*(@odata\.bind)?$/)
+      .optional(),
+    // Keys are always required; fields default to required on create, never on update.
+    required: z.boolean().optional(),
+    limit: slug.optional(),
+  })
+  .strict();
+const odataFilterSchema = odataValueSchema
+  .extend({
+    op: z.enum(["eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith"]).default("eq"),
+  })
+  .strict()
+  .refine((f) => !f.limit || f.op === "eq", { message: "Only an eq filter can have a limit" })
+  .refine((f) => !["contains", "startswith"].includes(f.op) || f.type === "string", {
+    message: "contains and startswith filter strings",
+  });
+
+const ODATA_KINDS = {
+  list: { on: "entitySet", parts: ["filters"] },
+  get: { on: "entitySet", parts: ["key"] },
+  create: { on: "entitySet", parts: ["fields"] },
+  update: { on: "entitySet", parts: ["key", "fields"] },
+  function: { on: "function", parts: ["params"] },
+  action: { on: "function", parts: ["params"] },
+} as const;
+
+const odataToolSchema = z
+  .object({
+    name: slug,
+    description: text,
+    kind: z.enum(["list", "get", "create", "update", "function", "action"]),
+    entitySet: odataName.optional(),
+    // A function or action import's name.
+    function: odataName.optional(),
+    key: z.record(slug, odataValueSchema).default({}),
+    filters: z.record(slug, odataFilterSchema).default({}),
+    fields: z.record(slug, odataValueSchema).default({}),
+    params: z.record(slug, odataValueSchema).default({}),
+    // $select, and the only properties passed back.
+    select: z.array(odataName).default([]),
+    orderBy: z
+      .string()
+      .regex(/^[A-Za-z_][\w./]*( (asc|desc))?(,[A-Za-z_][\w./]*( (asc|desc))?)*$/)
+      .optional(),
+    // Most items per page: the agent's max_results is capped at it.
+    top: z.number().int().min(1).max(1000).default(50),
+    destructive: z.boolean().default(false),
+    answerLimits: answerLimitsSchema,
+  })
+  .strict()
+  .refine(
+    (t) => {
+      const kind = ODATA_KINDS[t.kind];
+      const parts = ["key", "filters", "fields", "params"] as const;
+      return (
+        Boolean(t[kind.on]) &&
+        !t[kind.on === "entitySet" ? "function" : "entitySet"] &&
+        parts.every(
+          (p) => (kind.parts as readonly string[]).includes(p) || !Object.keys(t[p]).length,
+        ) &&
+        (!(kind.parts as readonly string[]).includes("key") || Object.keys(t.key).length > 0) &&
+        (t.kind !== "create" || Object.keys(t.fields).length > 0) &&
+        (t.kind === "list" || !t.orderBy) &&
+        (kind.on !== "function" || !t.select.length)
+      );
+    },
+    {
+      message:
+        "A list names an entitySet and filters, get a key, create fields, update a key and fields, function and action a function and params; orderBy is for lists, select not for functions",
+    },
+  )
+  .refine((t) => !["create", "action"].includes(t.kind) || !t.answerLimits.length, {
+    message: "answerLimits are for reads and updates (checked before the change)",
+  })
+  .refine(
+    (t) => {
+      const names = [t.key, t.filters, t.fields, t.params].flatMap(Object.keys);
+      return (
+        new Set(names).size === names.length &&
+        !names.some((n) => n === "cursor" || n === "max_results")
+      );
+    },
+    { message: "Param names are unique in a tool, and cursor and max_results are taken" },
+  )
+  .refine(
+    (t) =>
+      !t.select.length ||
+      Object.entries(t.filters).every(([n, f]) => !f.limit || t.select.includes(f.property ?? n)),
+    { message: "A limited filter's property must be selected, so answers can be checked" },
+  );
+
+const odataSchema = z
+  .object({
+    // The service root, e.g. https://host/sap/opu/odata/sap/API_BUSINESS_PARTNER.
+    serviceRoot: z
+      .url({ protocol: /^https?$/ })
+      .refine((u) => !/[?#]/.test(u), "No query or fragment"),
+    version: z.enum(["2", "4"]),
+    auth: httpAuthSchema,
+    // Sent on every call, e.g. SAP's sap-client. Not secret: never credentials.
+    headers: z
+      .record(
+        headerName.refine(
+          (h) =>
+            !RESERVED_HEADERS.has(h.toLowerCase()) &&
+            !CREDENTIAL_LIKE.test(h) &&
+            !/^(accept|if-match|x-http-method|odata-.*|(max)?dataserviceversion|prefer)$/i.test(h),
+          "Set by the service, or a credential (use auth)",
+        ),
+        headerValue,
+      )
+      .default({}),
+    // Writes first fetch an x-csrf-token (SAP Gateway).
+    csrf: z.boolean().default(false),
+    // "skip": $top and $skip; "server": the service's own pages (odata.maxpagesize, v4), e.g.
+    // Dynamics, which has no $skip.
+    paging: z.enum(["skip", "server"]).default("skip"),
+    tools: z.array(odataToolSchema).min(1),
+    allowInsecureHttp: z.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (o) =>
+      secure(
+        o.allowInsecureHttp,
+        o.serviceRoot,
+        ...(o.auth.type === "oauth2" ? [o.auth.tokenUrl] : []),
+      ),
+    { message: "serviceRoot and tokenUrl must be https unless allowInsecureHttp is true" },
+  )
+  .refine((o) => o.paging === "skip" || o.version === "4", {
+    message: "Server paging is for OData v4",
+  });
+export type ODataApp = z.infer<typeof odataSchema>;
+export type ODataTool = ODataApp["tools"][number];
+
 export const connectorSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
@@ -499,39 +792,30 @@ export const connectorSchema = z
     discover: probeSchema.optional(),
     revoke: text,
     http: httpSchema.optional(),
+    soap: soapSchema.optional(),
+    odata: odataSchema.optional(),
   })
   .strict()
+  .refine((c) => [c.http, c.soap, c.odata].filter(Boolean).length <= 1, {
+    message: "A connector has at most one of http, soap and odata",
+  })
   .refine(
     (c) => {
-      if (!c.http) return true;
-      const field = (id: string, secret: boolean) =>
-        c.fields.some((f) => f.id === id && f.secret === secret && !f.options);
-      const a = c.http.auth;
-      const secretsOk =
-        a.type === "header"
-          ? field(a.value, true)
-          : a.type === "bearer"
-            ? field(a.token, true)
-            : a.type === "basic"
-              ? field(a.username, false) && field(a.password, true)
-              : a.type === "query"
-                ? field(a.value, true)
-                : field(a.clientId, false) && field(a.clientSecret, true);
+      const app = described(c);
+      if (!app) return true;
       const lists = new Set(c.limits.filter((l) => l.kind === "list").map((l) => l.id));
       return (
-        secretsOk &&
+        app.fields.every(([id, secret]) =>
+          c.fields.some((f) => f.id === id && f.secret === secret && !f.options),
+        ) &&
         !c.provider &&
         (c.accountKey === "host" || c.fields.some((f) => f.id === c.accountKey && !f.secret)) &&
-        c.http.tools.every(
-          (t) =>
-            Object.values(t.params).every((p) => !p.limit || lists.has(p.limit)) &&
-            t.answerLimits.every((a) => lists.has(a.limit)),
-        )
+        app.limits.every((l) => lists.has(l))
       );
     },
     {
       message:
-        "An http app's auth names its fields (secrets as secret fields), its accountKey is host or a plain field, a param's or answer's limit names a list limit, and it has no provider",
+        "An http, soap or odata app's auth names its fields (secrets as secret fields), its accountKey is host or a plain field, a param's or answer's limit names a list limit, and it has no provider",
     },
   )
   .refine(
@@ -570,9 +854,7 @@ export const connectorSchema = z
         fields.some((f) => f.id === o.field && f.options?.some((x) => x.value === o.value));
       return (
         [...c.setup, ...c.afterConnect].every((s) => !s.option || isOption(s.option, c.fields)) &&
-        c.fields.every(
-          (f, i) => !f.requires || isOption(f.requires, c.fields.slice(0, i)),
-        )
+        c.fields.every((f, i) => !f.requires || isOption(f.requires, c.fields.slice(0, i)))
       );
     },
     { message: "A step's option and a field's requires name an option of an earlier choice" },
@@ -587,6 +869,52 @@ export const connectorSchema = z
       ),
     { message: "A map limit's keys must be a list limit listed before it" },
   );
+
+// An app described in its connector.json (http, soap or odata): the connect form fields its
+// sign-in names, and the list limits its tools name.
+function described(c: {
+  http?: HttpApp;
+  soap?: SoapApp;
+  odata?: ODataApp;
+}): { fields: [string, boolean][]; limits: string[] } | null {
+  const limitsOf = (...sets: Record<string, { limit?: string }>[]) =>
+    sets.flatMap((s) => Object.values(s).flatMap((p) => (p.limit ? [p.limit] : [])));
+  if (c.http)
+    return {
+      fields: authFields(c.http.auth),
+      limits: c.http.tools.flatMap((t) => [
+        ...limitsOf(t.params),
+        ...t.answerLimits.map((a) => a.limit),
+      ]),
+    };
+  if (c.soap) {
+    const ws = c.soap.wsSecurity;
+    return {
+      fields: [
+        ...(c.soap.auth ? authFields(c.soap.auth) : []),
+        ...(ws
+          ? ([
+              [ws.username, false],
+              [ws.password, true],
+            ] as [string, boolean][])
+          : []),
+      ],
+      limits: c.soap.tools.flatMap((t) => [
+        ...limitsOf(t.params),
+        ...t.answerLimits.map((a) => a.limit),
+      ]),
+    };
+  }
+  if (c.odata)
+    return {
+      fields: authFields(c.odata.auth),
+      limits: c.odata.tools.flatMap((t) => [
+        ...limitsOf(t.key, t.filters, t.fields, t.params),
+        ...t.answerLimits.map((a) => a.limit),
+      ]),
+    };
+  return null;
+}
 
 export type Connector = z.infer<typeof connectorSchema>;
 /** A connector.json as written, before defaults and {brand.*} placeholders are filled. */

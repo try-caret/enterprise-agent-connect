@@ -12,18 +12,12 @@
   ceiling (the most any agent may get from it). Tools outside that are never listed, and a call
   to one is refused and audited.
 - **Limits** narrow a capability to values: mailboxes, SharePoint sites and folders, Jira
-  projects, Okta groups, Salesforce objects, ServiceNow assignment groups and companies, Workday
-  organizations and reports, account numbers, or any list an `http` connector declares. They are checked on every call, including
-  against ids the agent passes in and, for `http` connectors, against fields of the answer.
-  projects, Okta groups, Salesforce objects, NetSuite subsidiaries and locations, ServiceNow
-  assignment groups and companies, account numbers, or any list an `http` connector declares.
-  They are checked on every call, including against ids the agent passes in and, for `http`
-  connectors, against fields of the answer.
-- **Limits** narrow a capability to values: mailboxes, SharePoint sites and folders, Jira projects,
-  Okta groups, Dynamics 365 business units and teams, Salesforce objects, ServiceNow assignment
-  groups and companies, Workday organizations and reports, account numbers, or any list an `http`
-  connector declares. They are checked on every call, including against ids the agent passes in and,
-  for `http` connectors, against fields of the answer.
+  projects, Okta groups, Dynamics 365 business units and teams, Salesforce objects, NetSuite
+  subsidiaries and locations, ServiceNow assignment groups and companies, Workday organizations
+  and reports, account numbers, or any list an `http`, `soap` or `odata` connector declares. They
+  are checked on every call, including against ids the agent passes in and, for those connectors,
+  against fields of the answer (an OData update reads the record first and changes it only inside
+  the agent's values).
 - **Destructive capabilities** (anything that deletes or overwrites) are off unless the admin
   confirms a warning, and every tool that deletes must sit in one. The service refuses to start
   otherwise.
@@ -42,8 +36,13 @@
 ## Calls to apps
 
 - Each built-in connector reaches only its vendor's addresses. An `http` connector reaches only
-  its `baseUrl` (https unless `allowInsecureHttp` is set) and its token URL; redirects are not
+  its `baseUrl` (https unless `allowInsecureHttp` is set) and its token URL, a `soap` connector
+  only its endpoint, an `odata` connector only its service root and token URL; redirects are not
   followed. Request and answer sizes and call time are capped.
+- Agents never write the app's query language or markup: SOAP values are XML-escaped into a fixed
+  body, and OData filters, keys and literals are written by the service from typed values. SOAP
+  answers are read without any document type declaration, so XML entities cannot reach files or
+  expand.
 - Content from apps (emails, issues, messages) is passed to agents as data. Teams thread content
   is marked untrusted for the agent.
 - Microsoft Teams messages to agent bots are accepted only with a valid Bot Framework token for

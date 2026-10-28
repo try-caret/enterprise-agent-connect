@@ -11,7 +11,8 @@ import {
 // kept until a minute before its expires_in and minted again once after a 401. The token is
 // never logged or returned: refusals carry only the vendor's own error text.
 
-type Credentials = { tokenUrl: string; clientId: string; clientSecret: string };
+// `scope`: for token services that need one, e.g. Microsoft Entra's v2 endpoint.
+type Credentials = { tokenUrl: string; clientId: string; clientSecret: string; scope?: string };
 
 // FedEx: { errors: [{ code, message }] }; Dell and most others: { error, error_description }.
 export function vendorError(data: unknown): string {
@@ -34,7 +35,9 @@ export function vendorError(data: unknown): string {
 export function clientCredentials(name: string, fetchImpl: Fetch) {
   const tokens = new TokenCache();
   const key = (c: Credentials) =>
-    createHash("sha256").update(`${c.tokenUrl}\n${c.clientId}\n${c.clientSecret}`).digest("hex");
+    createHash("sha256")
+      .update(`${c.tokenUrl}\n${c.clientId}\n${c.clientSecret}\n${c.scope ?? ""}`)
+      .digest("hex");
 
   async function mint(c: Credentials) {
     const res = await fetchImpl(c.tokenUrl, {
@@ -44,6 +47,7 @@ export function clientCredentials(name: string, fetchImpl: Fetch) {
         grant_type: "client_credentials",
         client_id: c.clientId,
         client_secret: c.clientSecret,
+        ...(c.scope ? { scope: c.scope } : {}),
       }),
     });
     const raw = await res.text();
@@ -93,6 +97,9 @@ export function clientCredentials(name: string, fetchImpl: Fetch) {
   return {
     // Proves the credentials by minting a token (and keeps it for the calls that follow).
     signIn: (c: Credentials) => token(c).then(() => undefined),
+    // For a caller sending its own requests: the token, and dropping it after a 401.
+    token,
+    forget: (c: Credentials) => tokens.forget(key(c)),
     async call(
       c: Credentials,
       base: string,
