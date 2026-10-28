@@ -1,4 +1,5 @@
 import dellTechdirect from "../../../connectors/dell-techdirect/index.js";
+import dynamics365 from "../../../connectors/dynamics-365/index.js";
 import entra from "../../../connectors/entra/index.js";
 import fedex from "../../../connectors/fedex/index.js";
 import intune from "../../../connectors/intune/index.js";
@@ -38,4 +39,5 @@ export const builtinConnectors: ConnectorModule[] = [
   sapS4hana,
   workday,
   netsuite,
+  dynamics365,
 ];
