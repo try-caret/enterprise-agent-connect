@@ -22,7 +22,22 @@
         "Select Settings, then Users + permissions, then Security roles, and select New role.",
         "Name it {brand.microsoft.appName} agents, keep the root business unit and select Save.",
         "For each privilege above, find its table (Account, Contact, Opportunity, Case, Activity, Note, User) and set that privilege's access level. Leave everything else at None and select Save."
-      ]
+      ],
+      "copy": [
+        "# Needs the Azure CLI, signed in as a Dynamics 365 system administrator. Replace the address with your environment URL.",
+        "$environment = 'https://your-org.crm.dynamics.com'",
+        "$api = \"$environment/api/data/v9.2\"",
+        "$headers = @{ Authorization = \"Bearer $(az account get-access-token --resource $environment --query accessToken -o tsv)\"; 'Content-Type' = 'application/json' }",
+        "$root = (Invoke-RestMethod -Headers $headers \"$api/businessunits?`$filter=_parentbusinessunitid_value eq null&`$select=businessunitid\").value[0].businessunitid",
+        "$role = Invoke-RestMethod -Method Post -Headers ($headers + @{ Prefer = 'return=representation' }) \"$api/roles\" -Body (@{ name = '{brand.microsoft.appName} agents'; 'businessunitid@odata.bind' = \"/businessunits($root)\" } | ConvertTo-Json)",
+        "# Global is Organization access; use Local to keep agents to the business unit.",
+        "$names = @(",
+        "  '{scope}'",
+        ")",
+        "$privileges = foreach ($name in $names) { @{ PrivilegeId = (Invoke-RestMethod -Headers $headers \"$api/privileges?`$filter=name eq '$name'&`$select=privilegeid\").value[0].privilegeid; Depth = 'Global'; BusinessUnitId = $root } }",
+        "Invoke-RestMethod -Method Post -Headers $headers \"$api/roles($($role.roleid))/Microsoft.Dynamics.CRM.AddPrivilegesRole\" -Body (@{ Privileges = @($privileges) } | ConvertTo-Json -Depth 4)"
+      ],
+      "shell": "powershell"
     },
     {
       "title": "Add the app as an application user",
