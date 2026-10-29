@@ -331,6 +331,26 @@ test(
   },
 );
 
+test(
+  "when the app will not say who the connection is, a change naming its maker starts nothing",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner]);
+    t.answers.set("/me", { status: 401, data: null });
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({});
+    await t.deliver(subscription.id, secret!, item());
+    assert.equal(f.started.length, 0);
+    assert.ok(
+      (await t.audit()).some((l) => /Tracker did not say which account .*answered 401/.test(l)),
+    );
+    // A record that names no maker (as a poll's) still starts.
+    await t.deliver(subscription.id, secret!, item({ actor: undefined }));
+    assert.equal(f.started.length, 1);
+  },
+);
+
 test("a trigger's caps hold back runs past them", { skip: !sql }, async () => {
   const f = fakeRunner();
   const t = await setup([f.runner]);

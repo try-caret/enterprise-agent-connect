@@ -184,9 +184,13 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     ) as EventData;
     const triggers = await events.triggersFor(event.organizationId, event.connectorId);
     if (!triggers.length) return "no triggers";
-    const self = await selfId(event.organizationId, connector);
+    const fields = connector.events.self?.fields ?? [];
+    // Asked only when the event says who made it (a poll's records do not).
+    const self = fields.some((f) => data[f] != null)
+      ? await selfId(event.organizationId, connector)
+      : null;
     const fromSelf =
-      self !== null && (connector.events.self?.fields ?? []).some((f) => data[f] === self);
+      self instanceof Error ? self : self !== null && fields.some((f) => data[f] === self);
     let started = 0;
     for (const trigger of triggers) {
       try {
@@ -198,18 +202,20 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     return `${started} run(s) started`;
   }
 
-  // The app connection's own account id (connector `self`), cached an hour.
-  const selves = new Map<string, { id: string | null; at: number }>();
-  async function selfId(org: string, connector: Connector): Promise<string | null> {
-    const self = connector.events?.self;
-    if (!self) return null;
+  // The app connection's own account id (connector `self`), cached an hour. An Error when the
+  // app does not say: no run starts then, since an agent's own change would start it again.
+  const selves = new Map<string, { id: string; at: number }>();
+  async function selfId(org: string, connector: Connector): Promise<string | Error> {
+    const self = connector.events!.self!;
     const k = `${org}:${connector.id}`;
     const hit = selves.get(k);
     if (hit && Date.now() - hit.at < SELF_TTL_MS) return hit.id;
     const res = await deps.appCall(org, connector.id, self.request as VendorRequest);
     const id = res && res.status >= 200 && res.status < 300 ? rawAt(res.data, self.id) : null;
-    // Unknown, so nothing is mistaken for the app's own change; asked again next event.
-    if (typeof id !== "string") return null;
+    if (typeof id !== "string")
+      return new Error(
+        `${connector.name} did not say which account the connection is (${res ? `it answered ${res.status}` : "not connected"}), so an agent's own change cannot be told apart. Check the connection has every scope its setup lists.`,
+      );
     selves.set(k, { id, at: Date.now() });
     return id;
   }
@@ -220,7 +226,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     connector: Connector,
     data: EventData,
     trigger: EventTriggerRow,
-    fromSelf: boolean,
+    fromSelf: boolean | Error,
   ): Promise<boolean> {
     const state = await events.agentState(trigger.agentId, connector.id);
     const decide = async (decision: AuditEntry["decision"], reason: string) => {
@@ -238,6 +244,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     };
     if (!trigger.eventTypes.includes(event.eventType))
       return decide("denied", "Filtered: not one of the trigger's event types");
+    if (fromSelf instanceof Error) return decide("failed", `Not started: ${fromSelf.message}`);
     if (fromSelf)
       return decide("denied", `Filtered: made by ${connector.name}'s own connection (an agent)`);
     const capabilities =
