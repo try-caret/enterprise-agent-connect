@@ -30,7 +30,9 @@ app ◀──poll─────  every interval, from a cursor ─────�
 3. **Decision**, for every enabled trigger on that app in the organization, in this order:
    - the event type is one the trigger chose;
    - the change was not made by the app connection's own account (an agent's comment would
-     otherwise start the agent again);
+     otherwise start the agent again). When the app will not say which account that is (Jira
+     without the `read:jira-user` scope), an event that names who made it starts nothing, and
+     the audit says why;
    - the agent is active and holds a grant on the app (with the app connected);
    - the event is within the agent's limits on that app: an agent limited to the Jira project
      KAN is never started by an event in HELP (an event without the field is outside a set
