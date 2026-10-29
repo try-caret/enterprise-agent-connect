@@ -1,0 +1,127 @@
+{
+  "id": "gong",
+  "name": "Gong",
+  "description": "Let agents read your recorded customer calls in Gong: who was on them, what Gong summarized, the linked CRM account and opportunity, and, if you allow it, the transcript. For meeting prep, deal summaries and follow-ups.",
+  "logo": "/brand/registry/gong.svg",
+  "identity": "A Gong API access key. Gong gives an access key every call, transcript and user in your company, so keep each agent to the workspaces and customers it needs under API keys.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API access key",
+      "body": "You need a Gong technical administrator for this. Gong shows the access key secret only once, so keep both values for the form below.",
+      "link": {
+        "label": "Gong: get access to the API",
+        "href": "https://help.gong.io/docs/receive-access-to-the-api"
+      },
+      "click": [
+        "In Gong, go to Company Settings, then Ecosystem, then API.",
+        "Select Get API Key (or Create, if your company already has one).",
+        "Copy the Access Key and the Access Key Secret."
+      ]
+    },
+    {
+      "title": "Find your API address",
+      "body": "Gong gives each company its own address for API calls, such as https://us-12345.api.gong.io. It is shown on the same API page. You can test the key and address with the command below: it lists your workspaces and changes nothing.",
+      "click": [
+        "On the API page, copy the address shown for API calls (it ends in .api.gong.io)."
+      ],
+      "copy": [
+        "GONG=https://us-12345.api.gong.io",
+        "curl -s -u \"$GONG_ACCESS_KEY:$GONG_ACCESS_KEY_SECRET\" \"$GONG/v2/workspaces\""
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Check what people agreed to",
+      "body": "Calls and transcripts hold what customers and colleagues said, often with names, prices and plans. Agents can read them only as recorded under your Gong recording and consent settings, and anything an agent reads may end up in what it writes. Make sure your recording notices and customer agreements allow this use, and give transcripts only to agents that need them.",
+      "click": [
+        "In Gong, go to Company Settings, then Recording, and review the consent and notification settings.",
+        "Ask your privacy or legal team whether customer call content may be read by AI agents."
+      ],
+      "confirm": "gong-recording-consent"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "base_url",
+      "label": "API address",
+      "help": "Shown on Gong's API page, ending in .api.gong.io.",
+      "placeholder": "https://us-12345.api.gong.io",
+      "secret": false
+    },
+    {
+      "id": "access_key",
+      "label": "Access Key",
+      "secret": true
+    },
+    {
+      "id": "access_key_secret",
+      "label": "Access Key Secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read_calls",
+      "label": "Read calls",
+      "description": "List calls and meetings by date, customer or host, and read one call: participants, the linked CRM account and opportunity, and Gong's brief, key points, highlights, outline and topics. Lists workspaces.",
+      "required": true,
+      "note": "Reaches every call in Gong unless you keep a key to chosen workspaces or customers under API keys. Calls marked private in Gong are never shown. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["gong_list_calls", "gong_get_call", "gong_list_workspaces"]
+    },
+    {
+      "id": "read_transcripts",
+      "label": "Read transcripts",
+      "description": "Read what was said on a call, by speaker, whole or only a stretch of time or the sentences with a phrase.",
+      "note": "Transcripts are word for word, including whatever customers said. Same calls as Read calls.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["gong_get_transcript"]
+    },
+    {
+      "id": "read_users",
+      "label": "Look up Gong users",
+      "description": "Find the people in your company with Gong accounts by name or email: title, whether active, and manager.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["gong_list_users", "gong_get_user"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "workspaces",
+      "label": "Workspaces",
+      "help": "Optional: only calls in these Gong workspaces (their ids, shown under Workspaces after connecting). Leave empty for every workspace.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,25}$"
+    },
+    {
+      "id": "domains",
+      "label": "Customer email domains",
+      "help": "Optional: only calls with someone from these email domains, such as acme.com (its subdomains too). With CRM accounts as well, a call with either is allowed. Leave both empty for every customer.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+    },
+    {
+      "id": "crm_accounts",
+      "label": "CRM accounts",
+      "help": "Optional: only calls Gong linked to these CRM accounts, by the account's id in your CRM (for Salesforce the 18-character id, starting 001). With customer email domains as well, a call with either is allowed.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/v2/workspaces",
+    "label": "Gong workspaces",
+    "show": "workspaces[].name"
+  },
+  "revoke": "In Gong, go to Company Settings, then Ecosystem, then API, and delete the access key. Agents lose access to Gong at once."
+}

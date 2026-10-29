@@ -27,7 +27,8 @@ services:
       DATABASE_SSL: disable
       MIGRATE_ON_START: "true"
     # This machine only: /agent-connect/admin is behind the admin token alone. Expose the
-    # service through a reverse proxy that routes only /agent-connect/mcp and /agent-connect/teams.
+    # service through a reverse proxy that routes only /agent-connect/mcp, /agent-connect/teams
+    # and /agent-connect/events.
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

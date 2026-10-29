@@ -2,6 +2,9 @@
 
 export type Fetch = typeof fetch;
 
+// A grant's value limits by limit id: a list, a text or a map (e.g. a folder per site).
+export type Limits = Record<string, string[] | string | Record<string, string>>;
+
 export type VendorConnection = {
   config: Record<string, string>;
   secret: Record<string, string>;
@@ -16,7 +19,8 @@ export type VendorRequest = {
   responseType?: "text";
 };
 
-export type VendorResponse = { status: number; data: unknown };
+// `headers` (lower-case names): set by vendors whose tools read them, e.g. a Link header.
+export type VendorResponse = { status: number; data: unknown; headers?: Record<string, string> };
 
 export type CheckInput = {
   // The vendor scopes (or token roles) the connection's capabilities need.
@@ -41,13 +45,14 @@ export type Vendor = {
     // `write`: also prove the app may change files there.
     access(connection: VendorConnection, site: string, write: boolean): Promise<SiteAccess>;
   };
-  // Checks named by the connector's `{ check }` probes.
+  // Checks named by the connector's `{ check }` probes. `labels`: a label for the admin per
+  // value, e.g. a site's name for its id.
   checks?: Record<
     string,
     (
       connection: VendorConnection,
       input: CheckInput,
-    ) => Promise<{ values: string[]; warning?: string }>
+    ) => Promise<{ values: string[]; warning?: string; labels?: Record<string, string> }>
   >;
 };
 

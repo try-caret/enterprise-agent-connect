@@ -1,0 +1,317 @@
+{
+  "id": "netsuite",
+  "name": "Oracle NetSuite",
+  "description": "Let agents look up customers, orders, invoices and stock in NetSuite, and create the customers and sales orders you allow.",
+  "logo": "/brand/netsuite.svg",
+  "identity": "A NetSuite employee named \"{brand.microsoft.appName}\" with a role of its own. Agents never do more than that role allows.",
+  "accountKey": "accountId",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Turn on the features it uses",
+      "body": "In Enable Features, on the SuiteCloud tab, turn on REST Web Services, then OAuth 2.0 or Token-Based Authentication (whichever sign-in you pick below), and Server SuiteScript if agents will run saved searches. Accept the terms NetSuite shows and save.",
+      "click": [
+        "Setup > Company > Enable Features > SuiteCloud",
+        "SuiteTalk (Web Services): REST Web Services",
+        "Manage Authentication: OAuth 2.0 (or Token-Based Authentication)",
+        "SuiteScript: Server SuiteScript (only for saved searches) > Save"
+      ]
+    },
+    {
+      "title": "Create a role for agents",
+      "body": "Create a role named \"{brand.microsoft.appName}\" and tick Web Services Only Role. If your account has subsidiaries, set Accessible Subsidiaries to only those agents need: NetSuite then enforces it too. On the Permissions tab add REST Web Services (Full) and SuiteAnalytics Workbook (Edit) under Setup and Reports, the sign-in permission for your choice (Log in using OAuth 2.0 Access Tokens, or Log in using Access Tokens, both Full), and these:",
+      "click": [
+        "Setup > Users/Roles > User Management > Manage Roles > New",
+        "Name: {brand.microsoft.appName}, Web Services Only Role: ticked, Accessible Subsidiaries: the ones agents need",
+        "Permissions > Setup: REST Web Services (Full) and your sign-in permission (Full)",
+        "Permissions > Reports: SuiteAnalytics Workbook (Edit)",
+        "Permissions > Lists and Transactions: the permissions listed here > Save"
+      ],
+      "permissions": true
+    },
+    {
+      "title": "Give the role to an employee record",
+      "body": "Create an employee named \"{brand.microsoft.appName}\" (or pick an existing integration employee), give it access to NetSuite and only the role you just made.",
+      "click": [
+        "Lists > Employees > Employees > New",
+        "Name: {brand.microsoft.appName}, Subsidiary: your parent subsidiary",
+        "Access: Give Access ticked, Manually assign or change password, Role: {brand.microsoft.appName} > Save"
+      ]
+    },
+    {
+      "title": "Create an integration record",
+      "body": "Create an integration named \"{brand.microsoft.appName}\" with State Enabled. For OAuth 2.0 tick Client Credentials (Machine to Machine) Grant and the scope REST Web Services, plus RESTlets if agents will run saved searches; untick Authorization Code Grant. For token-based authentication tick Token-Based Authentication instead. Save, then copy the client ID (consumer key) and, for token-based authentication, the client secret. NetSuite shows them only once.",
+      "click": [
+        "Setup > Integration > Manage Integrations > New",
+        "Name: {brand.microsoft.appName}, State: Enabled",
+        "Authentication > OAuth 2.0: Client Credentials (Machine to Machine) Grant, scopes REST Web Services (and RESTlets for saved searches); or Token-Based Authentication",
+        "Save > copy the Client ID (Consumer Key) and Client Secret"
+      ]
+    },
+    {
+      "title": "OAuth 2.0: make a certificate and upload it",
+      "body": "Run this to make a key pair (NetSuite needs RSA of at least 3072 bits and accepts a certificate for up to two years). Upload public.pem in the client credentials setup, mapped to the employee, the role and the integration, and copy the Certificate ID it shows. Paste the whole content of private.pem in the Private key field below, then delete the file.",
+      "option": {
+        "field": "auth",
+        "value": "oauth2"
+      },
+      "shell": "bash",
+      "copy": [
+        "openssl req -new -x509 -newkey rsa:4096 -keyout private.pem -sigopt rsa_padding_mode:pss -sha256 -sigopt rsa_pss_saltlen:64 -out public.pem -nodes -days 730 -subj \"/CN={brand.microsoft.appName}\""
+      ],
+      "click": [
+        "Setup > Integration > Manage Authentication > OAuth 2.0 Client Credentials (M2M) Setup > Create New",
+        "Entity: {brand.microsoft.appName}, Role: {brand.microsoft.appName}, Application: {brand.microsoft.appName}",
+        "Certificate: choose public.pem > Save > copy the Certificate ID"
+      ]
+    },
+    {
+      "title": "Token-based authentication: create an access token",
+      "body": "Create an access token for the integration, the employee and the role, and copy the token ID and secret. NetSuite shows them only once.",
+      "option": {
+        "field": "auth",
+        "value": "tba"
+      },
+      "click": [
+        "Setup > Users/Roles > Access Tokens > New",
+        "Application Name: {brand.microsoft.appName}, User: {brand.microsoft.appName}, Role: {brand.microsoft.appName} > Save",
+        "Copy the Token ID and Token Secret"
+      ]
+    },
+    {
+      "title": "Find your account ID",
+      "body": "Company Information shows the account ID, for example 1234567, or 1234567_SB1 for a sandbox. It is also the first part of your NetSuite address.",
+      "click": ["Setup > Company > Company Information > Account ID"]
+    }
+  ],
+  "afterConnect": [
+    {
+      "title": "Add the saved search script",
+      "capabilities": ["saved_searches"],
+      "body": "Agents run saved searches through a small script. Save these lines as agent_saved_search.js, upload it as a RESTlet script with the ID _agent_saved_search, and deploy it with the ID _agent_saved_search, Status Released and Audience the role you made. Share each saved search agents may run with that role, add a Subsidiary or Location column (no join) to it if agents are limited to some, and add its ID to each agent's Saved searches.",
+      "click": [
+        "Customization > Scripting > Scripts > New > upload agent_saved_search.js > Create Script Record",
+        "ID: _agent_saved_search > Save",
+        "Deploy Script: ID _agent_saved_search, Status Released, Audience > Roles: {brand.microsoft.appName} > Save",
+        "Each saved search: Audience > Roles: {brand.microsoft.appName}"
+      ],
+      "copy": [
+        "/**",
+        " * @NApiVersion 2.1",
+        " * @NScriptType Restlet",
+        " */",
+        "define(['N/search'], (search) => ({",
+        "  post: (body) => {",
+        "    const paged = search.load({ id: body.search }).runPaged({ pageSize: body.size });",
+        "    const columns = paged.searchDefinition.columns.map((c) => ({ name: c.name, join: c.join || null, label: c.label || null }));",
+        "    const rows = body.page < paged.pageRanges.length",
+        "      ? paged.fetch({ index: body.page }).data.map((r) => r.columns.map((c) => ({ value: r.getValue(c), text: r.getText(c) || null })))",
+        "      : [];",
+        "    return { columns, rows, pages: paged.pageRanges.length, total: paged.count };",
+        "  },",
+        "}));"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "id": "account_id",
+      "label": "Account ID",
+      "help": "For example 1234567, or 1234567_SB1 for a sandbox.",
+      "placeholder": "1234567",
+      "secret": false
+    },
+    {
+      "id": "auth",
+      "label": "Sign-in",
+      "secret": false,
+      "options": [
+        {
+          "value": "oauth2",
+          "label": "OAuth 2.0 with a certificate",
+          "description": "Recommended. The service signs in with a certificate you upload to NetSuite; nothing expires until the certificate does."
+        },
+        {
+          "value": "tba",
+          "label": "Token-based authentication",
+          "description": "For accounts that already use access tokens: a consumer key and secret plus a token ID and secret."
+        }
+      ]
+    },
+    {
+      "id": "client_id",
+      "label": "Client ID (consumer key)",
+      "secret": false
+    },
+    {
+      "id": "certificate_id",
+      "label": "Certificate ID",
+      "secret": false,
+      "requires": {
+        "field": "auth",
+        "value": "oauth2"
+      }
+    },
+    {
+      "id": "private_key",
+      "label": "Private key",
+      "help": "The whole content of private.pem.",
+      "placeholder": "-----BEGIN PRIVATE KEY-----",
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "oauth2"
+      }
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret (consumer secret)",
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "tba"
+      }
+    },
+    {
+      "id": "token_id",
+      "label": "Token ID",
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "tba"
+      }
+    },
+    {
+      "id": "token_secret",
+      "label": "Token secret",
+      "secret": true,
+      "requires": {
+        "field": "auth",
+        "value": "tba"
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Look up customers and vendors",
+      "description": "Find customers and vendors by name, number or email.",
+      "required": true,
+      "scopes": ["rest_webservices"],
+      "permissions": [
+        "Lists > Customers: View",
+        "Lists > Vendors: View",
+        "Lists > Subsidiaries: View"
+      ],
+      "forbidden": "The agents' NetSuite role needs Customers, Vendors and Subsidiaries (View).",
+      "tools": ["netsuite_find_customers", "netsuite_find_vendors"]
+    },
+    {
+      "id": "sales",
+      "label": "Read sales orders and invoices",
+      "description": "Find sales orders and invoices with their status, totals, amounts due and lines.",
+      "scopes": ["rest_webservices"],
+      "permissions": [
+        "Transactions > Sales Order: View",
+        "Transactions > Invoice: View",
+        "Transactions > Find Transaction: View"
+      ],
+      "forbidden": "The agents' NetSuite role needs Sales Order, Invoice and Find Transaction (View).",
+      "tools": ["netsuite_find_sales_orders", "netsuite_find_invoices"]
+    },
+    {
+      "id": "purchasing",
+      "label": "Read purchase orders",
+      "description": "Find purchase orders with their status, totals and lines.",
+      "scopes": ["rest_webservices"],
+      "permissions": [
+        "Transactions > Purchase Order: View",
+        "Transactions > Find Transaction: View"
+      ],
+      "forbidden": "The agents' NetSuite role needs Purchase Order and Find Transaction (View).",
+      "tools": ["netsuite_find_purchase_orders"]
+    },
+    {
+      "id": "inventory",
+      "label": "Check stock",
+      "description": "See how many of an item are available, on hand and on order at each location.",
+      "scopes": ["rest_webservices"],
+      "permissions": ["Lists > Items: View", "Lists > Locations: View"],
+      "forbidden": "The agents' NetSuite role needs Items and Locations (View).",
+      "tools": ["netsuite_item_availability"]
+    },
+    {
+      "id": "create_customers",
+      "label": "Create customers",
+      "description": "Add new company customers.",
+      "scopes": ["rest_webservices"],
+      "permissions": ["Lists > Customers: Create"],
+      "forbidden": "The agents' NetSuite role needs Customers (Create).",
+      "tools": ["netsuite_create_customer"]
+    },
+    {
+      "id": "create_sales_orders",
+      "label": "Create sales orders",
+      "description": "Place sales orders for existing customers. Your approval and fulfillment rules in NetSuite still apply.",
+      "scopes": ["rest_webservices"],
+      "permissions": ["Transactions > Sales Order: Create", "Lists > Items: View"],
+      "forbidden": "The agents' NetSuite role needs Sales Order (Create) and Items (View).",
+      "tools": ["netsuite_create_sales_order"]
+    },
+    {
+      "id": "saved_searches",
+      "label": "Run saved searches",
+      "description": "Run the saved searches you list on each agent, and only those.",
+      "scopes": ["restlets"],
+      "permissions": [
+        "Lists > Perform Search: Full",
+        "View on the records each saved search reads"
+      ],
+      "note": "Needs the search script from the steps after connecting, and the RESTlets scope on the integration.",
+      "forbidden": "The agents' NetSuite role needs Perform Search, the records the search reads, and the search shared with it.",
+      "tools": ["netsuite_run_saved_search"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "subsidiaries",
+      "label": "Subsidiaries",
+      "help": "Internal ids. Agents then see only customers, vendors, orders, invoices and stock of these subsidiaries. Leave empty for every subsidiary the role can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9]{1,12}$"
+    },
+    {
+      "id": "locations",
+      "label": "Locations",
+      "help": "Internal ids. Agents then see only orders, invoices and stock at these locations, and must name one of them on a new sales order. Leave empty for every location.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9]{1,12}$"
+    },
+    {
+      "id": "saved_searches",
+      "label": "Saved searches",
+      "help": "The ids of the saved searches this agent may run, such as customsearch_open_orders. With none, it runs no saved search.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^(customsearch[a-z0-9_]{1,80}|[0-9]{1,12})$"
+    }
+  ],
+  "verify": {
+    "label": "Connected NetSuite account",
+    "check": "account"
+  },
+  "discover": {
+    "method": "POST",
+    "path": "/services/rest/query/v1/suiteql?limit=1000",
+    "body": {
+      "q": "SELECT id, name FROM subsidiary WHERE isinactive = 'F' ORDER BY id"
+    },
+    "label": "Subsidiaries the role can see",
+    "show": "items[].id",
+    "name": "items[].name",
+    "ifEmpty": "No subsidiaries were found. Either your account has none, or the role lacks Subsidiaries (View)."
+  },
+  "revoke": "In NetSuite, open Setup > Integration > Manage Integrations > {brand.microsoft.appName} and set State to Blocked, then revoke its certificate or access token."
+}

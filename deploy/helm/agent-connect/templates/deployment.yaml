@@ -1,6 +1,8 @@
 {{- if not .Values.image.repository }}{{ fail "image.repository is required" }}{{ end }}
 {{- if not .Values.image.tag }}{{ fail "image.tag is required" }}{{ end }}
 {{- if not .Values.existingSecret }}{{ fail "existingSecret is required" }}{{ end }}
+{{- if and .Values.caBundle.configMap .Values.caBundle.secret }}{{ fail "caBundle: set configMap or secret, not both" }}{{ end }}
+{{- $ca := or .Values.caBundle.configMap .Values.caBundle.secret }}
 {{- if ne (int .Values.replicaCount) 1 }}{{ fail "replicaCount must be 1: Teams run limits are admitted by a single process" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -53,6 +55,10 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            {{- if $ca }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/agent-connect/ca/{{ .Values.caBundle.key }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /agent-connect/healthz
@@ -66,3 +72,23 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- if $ca }}
+          volumeMounts:
+            - name: ca-bundle
+              mountPath: /etc/agent-connect/ca
+              readOnly: true
+          {{- end }}
+      {{- if $ca }}
+      volumes:
+        - name: ca-bundle
+          {{- if .Values.caBundle.configMap }}
+          configMap:
+            name: {{ .Values.caBundle.configMap | quote }}
+          {{- else }}
+          secret:
+            secretName: {{ .Values.caBundle.secret | quote }}
+          {{- end }}
+            items:
+              - key: {{ .Values.caBundle.key | quote }}
+                path: {{ .Values.caBundle.key | quote }}
+      {{- end }}

@@ -5,6 +5,7 @@ import { signInNonce, signState, verifyState } from "./consent.js";
 import {
   effectiveCapabilities,
   pickDisplay,
+  pickLabels,
   providerSettings,
   tokenRolesFor,
   type Connector,
@@ -26,6 +27,7 @@ import type {
 } from "./store.js";
 import { argumentsTarget, type ToolContext, type Toolset } from "../../connector-kit/src/common.js";
 import type { TeamsAccess } from "./teams/runtime.js";
+import type { TeamsToolContext } from "../../../connectors/teams/tools.js";
 import type { BotRow } from "./teams/store.js";
 import {
   type AgentAccess,
@@ -33,6 +35,7 @@ import {
   type ProviderClient,
   type Vendor,
   type VendorConnection,
+  type VendorRequest,
 } from "../../connector-kit/src/types.js";
 
 export type App = { connector: Connector; vendor: Vendor; toolset: Toolset };
@@ -51,7 +54,12 @@ export type PublicProvider = Omit<
   apps: string[];
 };
 
-export type CheckResult = { label: string; values: string[]; warning?: string };
+export type CheckResult = {
+  label: string;
+  values: string[];
+  warning?: string;
+  labels?: Record<string, string>;
+};
 
 export class InvalidInput extends Error {}
 
@@ -503,12 +511,17 @@ export function createService(deps: {
     const results: CheckResult[] = [];
     for (const p of probes(connector)) {
       if ("check" in p) {
-        const { values, warning } = await vendor.checks![p.check](conn, {
+        const { values, warning, labels } = await vendor.checks![p.check](conn, {
           expected: tokenRolesFor(connector, ceiling, conn.config),
         });
         // The vendor's own warning says more than the generic "nothing yet".
         const shown = warning || (values.length === 0 ? p.ifEmpty : undefined);
-        results.push({ label: p.label, values, ...(shown ? { warning: shown } : {}) });
+        results.push({
+          label: p.label,
+          values,
+          ...(shown ? { warning: shown } : {}),
+          ...(labels ? { labels } : {}),
+        });
         continue;
       }
       // {name} in a probe path is the connection's config value, e.g. the signed-in user's id.
@@ -525,6 +538,7 @@ export function createService(deps: {
         label: p.label,
         values,
         ...(values.length === 0 && p.ifEmpty ? { warning: p.ifEmpty } : {}),
+        ...(p.name ? { labels: pickLabels(res.data, p.show, p.name, p.match) } : {}),
       });
     }
     return results;
@@ -1064,6 +1078,16 @@ export function createService(deps: {
       return { capabilities: caps, limits: checked };
     },
 
+    /** A call with the organization's own connection, no agent's (an event poll or a webhook
+     *  registration). Null when the app is not connected. */
+    async appCall(org: string, connectorId: string, request: VendorRequest) {
+      const target = app(connectorId);
+      const row = await store.getConnection(org, connectorId);
+      if (!row || row.status !== "connected") return null;
+      const providerRows = row.providerId ? await store.listProviders(org) : [];
+      return target.vendor.call(resolve(row, providerRows), request);
+    },
+
     // Resolves an agent key to the tools that agent may call right now.
     async agentSession(rawKey: string) {
       if (!looksLikeAgentKey(rawKey)) return null;
@@ -1127,7 +1151,7 @@ export function createService(deps: {
       const asBot = target.connector.signsInAs === "agentBot";
       if (asBot && (bot?.status !== "connected" || !bot.botAppId)) return [];
       let conn: VendorConnection | null = null;
-      const ctx: ToolContext = {
+      const ctx: TeamsToolContext = {
         limits: grant.limits,
         config: provider ? { ...provider.config, ...row.config } : row.config,
         call: (request) => {

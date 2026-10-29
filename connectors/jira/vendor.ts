@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { vendorFetch } from "../../packages/connector-kit/src/fetch.js";
 import {
   ConnectError,
   TokenCache,
@@ -29,7 +30,8 @@ export function normalizeSite(input: string): string {
   return host;
 }
 
-export function jiraVendor(fetchImpl: Fetch = fetch): Vendor {
+export function jiraVendor(unguarded: Fetch = fetch): Vendor {
+  const fetchImpl = vendorFetch("Jira", unguarded);
   const tokens = new TokenCache();
 
   const token = (clientId: string, clientSecret: string) =>
@@ -98,7 +100,11 @@ export function jiraVendor(fetchImpl: Fetch = fetch): Vendor {
         body: request.body === undefined ? undefined : JSON.stringify(request.body),
       });
       const raw = await res.text();
-      return { status: res.status, data: raw ? safeJson(raw) : null };
+      return {
+        status: res.status,
+        data: raw ? safeJson(raw) : null,
+        headers: Object.fromEntries(res.headers),
+      };
     },
   };
 }

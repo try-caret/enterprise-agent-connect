@@ -3,7 +3,7 @@
   "info": {
     "title": "Agent Connect admin API",
     "version": "1",
-    "description": "Server to server only: a bearer token (AGENT_CONNECT_ADMIN_TOKEN), and requests carrying X-Forwarded-For are refused. Routes tagged teams are served only where Teams is set up."
+    "description": "Server to server only: a bearer token (AGENT_CONNECT_ADMIN_TOKEN), and requests carrying X-Forwarded-For are refused. Routes tagged teams are served only where Teams is set up, routes tagged events only where app events are."
   },
   "servers": [
     {
@@ -5346,6 +5346,927 @@
         }
       }
     },
+    "/orgs/{org}/event-subscriptions": {
+      "get": {
+        "operationId": "eventSubscriptions",
+        "summary": "The apps whose events reach this organization, by webhook or by polling",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventSubscription"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "subscribeEvents",
+        "summary": "Starts receiving an app's events: a webhook (answers its address and secret, shown once) or a poll on an interval",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "app": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9-]+$"
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "webhook",
+                      "poll"
+                    ]
+                  },
+                  "filter": {
+                    "default": "",
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "intervalSeconds": {
+                    "default": 300,
+                    "type": "integer",
+                    "minimum": 60,
+                    "maximum": 86400
+                  },
+                  "register": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "app",
+                  "source",
+                  "by"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSubscribed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/event-subscriptions/{subscription}/secret": {
+      "post": {
+        "operationId": "rotateEventSecret",
+        "summary": "A new secret for a webhook, shown once; the old one stops working at once",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "subscription",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "by"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscription": {
+                      "$ref": "#/components/schemas/EventSubscription"
+                    },
+                    "secret": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "subscription",
+                    "secret"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/event-subscriptions/{subscription}": {
+      "delete": {
+        "operationId": "unsubscribeEvents",
+        "summary": "Stops receiving an app's events (remove the webhook in the app too)",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "subscription",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "by"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/agents/{agent}/event-triggers": {
+      "get": {
+        "operationId": "eventTriggers",
+        "summary": "The app events that start the agent",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventTrigger"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/agents/{agent}/event-triggers/{app}": {
+      "put": {
+        "operationId": "setEventTrigger",
+        "summary": "Sets which of an app's events start the agent and how, checked by its runner first",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "eventTypes": {
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  },
+                  "conditions": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "field": {
+                              "type": "string"
+                            },
+                            "in": {
+                              "minItems": 1,
+                              "maxItems": 100,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "maxLength": 500
+                              }
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "in"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "field": {
+                              "type": "string"
+                            },
+                            "notIn": {
+                              "minItems": 1,
+                              "maxItems": 100,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "maxLength": 500
+                              }
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "notIn"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "runner": {
+                    "default": "claude-managed-agents",
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{1,40}$"
+                  },
+                  "managedAgentId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                  },
+                  "environmentId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                  },
+                  "vaultIds": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                    }
+                  },
+                  "settings": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  },
+                  "signingSecret": {
+                    "type": "string",
+                    "minLength": 32,
+                    "maxLength": 256
+                  },
+                  "budgetCents": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2000
+                  },
+                  "maxRunsPerHour": {
+                    "default": 20,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "maxCentsPerDay": {
+                    "default": 500,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000
+                  },
+                  "maxConcurrent": {
+                    "default": 2,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10
+                  },
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "eventTypes",
+                  "prompt",
+                  "budgetCents",
+                  "by"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventTrigger"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeEventTrigger",
+        "summary": "Stops an app's events starting the agent, stopping its live runs",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "by"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/agents/{agent}/event-runs": {
+      "get": {
+        "operationId": "eventRuns",
+        "summary": "The agent's recent runs started by app events, newest first",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "1 to 200, default 20",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventRun"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/orgs/{org}/claude-key": {
       "get": {
         "operationId": "claudeKey",
@@ -5994,6 +6915,15 @@
           },
           "warning": {
             "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -6426,6 +7356,14 @@
                     "value"
                   ],
                   "additionalProperties": false
+                },
+                "capabilities": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  }
                 }
               },
               "required": [
@@ -6568,6 +7506,14 @@
                     "value"
                   ],
                   "additionalProperties": false
+                },
+                "capabilities": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  }
                 }
               },
               "required": [
@@ -6652,12 +7598,17 @@
                     "value"
                   ],
                   "additionalProperties": false
+                },
+                "optional": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
                 "id",
                 "label",
-                "secret"
+                "secret",
+                "optional"
               ],
               "additionalProperties": false
             }
@@ -7093,6 +8044,10 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
                   "match": {
                     "type": "object",
                     "propertyNames": {
@@ -7172,6 +8127,10 @@
                     "minLength": 1
                   },
                   "show": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
                     "type": "string",
                     "minLength": 1
                   },
@@ -7259,6 +8218,10 @@
                       "value": {
                         "type": "string",
                         "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "prefix": {
+                        "type": "string",
+                        "pattern": "^[\\x20-\\x7E]*$"
                       }
                     },
                     "required": [
@@ -7327,6 +8290,10 @@
                       "clientSecret": {
                         "type": "string",
                         "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "scope": {
+                        "type": "string",
+                        "pattern": "^[\\x21-\\x7e]+( [\\x21-\\x7e]+)*$"
                       }
                     },
                     "required": [
@@ -7336,8 +8303,43 @@
                       "clientSecret"
                     ],
                     "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "query"
+                      },
+                      "param": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.-]+$"
+                      },
+                      "value": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "param",
+                      "value"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
+              },
+              "headers": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9-]+$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[\\x20-\\x7E]*$"
+                }
               },
               "tools": {
                 "minItems": 1,
@@ -7383,7 +8385,8 @@
                               "string",
                               "number",
                               "integer",
-                              "boolean"
+                              "boolean",
+                              "array"
                             ]
                           },
                           "description": {
@@ -7398,9 +8401,59 @@
                               "body"
                             ]
                           },
+                          "name": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_.\\-[\\]]+$"
+                          },
                           "required": {
                             "default": true,
                             "type": "boolean"
+                          },
+                          "default": {
+                            "anyOf": [
+                              {
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": [
+                                    "string",
+                                    "number",
+                                    "boolean"
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          "enum": {
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            }
+                          },
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "number",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "join": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 3
                           },
                           "limit": {
                             "type": "string",
@@ -7428,7 +8481,7 @@
                         "properties": {
                           "field": {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$"
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
                           },
                           "limit": {
                             "type": "string",
@@ -7441,6 +8494,82 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                        },
+                        "fields": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "paging": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "param": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "body": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "body"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "param": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "header": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9-]+$"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "header"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "param": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "link": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "link"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -7463,8 +8592,1502 @@
             "required": [
               "baseUrl",
               "auth",
+              "headers",
               "tools",
               "allowInsecureHttp"
+            ],
+            "additionalProperties": false
+          },
+          "soap": {
+            "type": "object",
+            "properties": {
+              "endpoint": {
+                "type": "string",
+                "format": "uri"
+              },
+              "version": {
+                "default": "1.1",
+                "type": "string",
+                "enum": [
+                  "1.1",
+                  "1.2"
+                ]
+              },
+              "namespaces": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][\\w.-]*$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[^\"<>&\\s]+$"
+                }
+              },
+              "auth": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "header"
+                      },
+                      "header": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9-]+$"
+                      },
+                      "value": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "prefix": {
+                        "type": "string",
+                        "pattern": "^[\\x20-\\x7E]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "header",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "bearer"
+                      },
+                      "token": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "token"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "basic"
+                      },
+                      "username": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "password": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "username",
+                      "password"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "wsSecurity": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "digest": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "username",
+                  "password",
+                  "digest"
+                ],
+                "additionalProperties": false
+              },
+              "verify": {
+                "type": "object",
+                "properties": {
+                  "tool": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "args": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "show": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "tool",
+                  "args",
+                  "show"
+                ],
+                "additionalProperties": false
+              },
+              "tools": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "operation": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z_][\\w.-]*$"
+                    },
+                    "soapAction": {
+                      "type": "string",
+                      "pattern": "^[^\"\\r\\n]*$"
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "params": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "number",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "required": {
+                            "default": true,
+                            "type": "boolean"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description",
+                          "required"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "result": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z_][\\w.-]*(\\.[A-Za-z_][\\w.-]*)*(\\[\\])?$"
+                    },
+                    "fields": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][\\w.-]*$"
+                      }
+                    },
+                    "readOnly": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "destructive": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "answerLimits": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "field",
+                          "limit"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "description",
+                    "operation",
+                    "body",
+                    "params",
+                    "readOnly",
+                    "destructive",
+                    "answerLimits"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "allowInsecureHttp": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "endpoint",
+              "version",
+              "namespaces",
+              "tools",
+              "allowInsecureHttp"
+            ],
+            "additionalProperties": false
+          },
+          "odata": {
+            "type": "object",
+            "properties": {
+              "serviceRoot": {
+                "type": "string",
+                "format": "uri"
+              },
+              "version": {
+                "type": "string",
+                "enum": [
+                  "2",
+                  "4"
+                ]
+              },
+              "auth": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "header"
+                      },
+                      "header": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9-]+$"
+                      },
+                      "value": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "prefix": {
+                        "type": "string",
+                        "pattern": "^[\\x20-\\x7E]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "header",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "bearer"
+                      },
+                      "token": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "token"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "basic"
+                      },
+                      "username": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "password": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "username",
+                      "password"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "oauth2"
+                      },
+                      "tokenUrl": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "clientId": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "clientSecret": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "scope": {
+                        "type": "string",
+                        "pattern": "^[\\x21-\\x7e]+( [\\x21-\\x7e]+)*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "tokenUrl",
+                      "clientId",
+                      "clientSecret"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "query"
+                      },
+                      "param": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_.-]+$"
+                      },
+                      "value": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "param",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "headers": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9-]+$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[\\x20-\\x7E]*$"
+                }
+              },
+              "csrf": {
+                "default": false,
+                "type": "boolean"
+              },
+              "paging": {
+                "default": "skip",
+                "type": "string",
+                "enum": [
+                  "skip",
+                  "server"
+                ]
+              },
+              "tools": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "list",
+                        "get",
+                        "create",
+                        "update",
+                        "function",
+                        "action"
+                      ]
+                    },
+                    "entitySet": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"
+                    },
+                    "function": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"
+                    },
+                    "key": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "integer",
+                              "number",
+                              "decimal",
+                              "boolean",
+                              "guid",
+                              "datetime",
+                              "datetimeoffset"
+                            ]
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "property": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z_][A-Za-z0-9_.]*(@odata\\.bind)?$"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "filters": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "integer",
+                              "number",
+                              "decimal",
+                              "boolean",
+                              "guid",
+                              "datetime",
+                              "datetimeoffset"
+                            ]
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "property": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z_][A-Za-z0-9_.]*(@odata\\.bind)?$"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "op": {
+                            "default": "eq",
+                            "type": "string",
+                            "enum": [
+                              "eq",
+                              "ne",
+                              "gt",
+                              "ge",
+                              "lt",
+                              "le",
+                              "contains",
+                              "startswith"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description",
+                          "op"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "fields": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "integer",
+                              "number",
+                              "decimal",
+                              "boolean",
+                              "guid",
+                              "datetime",
+                              "datetimeoffset"
+                            ]
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "property": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z_][A-Za-z0-9_.]*(@odata\\.bind)?$"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "params": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "integer",
+                              "number",
+                              "decimal",
+                              "boolean",
+                              "guid",
+                              "datetime",
+                              "datetimeoffset"
+                            ]
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "property": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z_][A-Za-z0-9_.]*(@odata\\.bind)?$"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "select": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"
+                      }
+                    },
+                    "orderBy": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z_][\\w./]*( (asc|desc))?(,[A-Za-z_][\\w./]*( (asc|desc))?)*$"
+                    },
+                    "top": {
+                      "default": 50,
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1000
+                    },
+                    "destructive": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "answerLimits": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "field",
+                          "limit"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "description",
+                    "kind",
+                    "key",
+                    "filters",
+                    "fields",
+                    "params",
+                    "select",
+                    "top",
+                    "destructive",
+                    "answerLimits"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "allowInsecureHttp": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "serviceRoot",
+              "version",
+              "auth",
+              "headers",
+              "csrf",
+              "paging",
+              "tools",
+              "allowInsecureHttp"
+            ],
+            "additionalProperties": false
+          },
+          "sql": {
+            "type": "object",
+            "properties": {
+              "engine": {
+                "type": "string",
+                "enum": [
+                  "postgres",
+                  "sqlserver",
+                  "mysql",
+                  "oracle"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "database": {
+                "type": "string",
+                "minLength": 1
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "user": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  }
+                },
+                "required": [
+                  "user",
+                  "password"
+                ],
+                "additionalProperties": false
+              },
+              "tls": {
+                "default": "verify",
+                "type": "string",
+                "enum": [
+                  "verify",
+                  "insecure",
+                  "off"
+                ]
+              },
+              "timeoutSeconds": {
+                "default": 30,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300
+              },
+              "maxRows": {
+                "default": 200,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "tools": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sql": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "params": {
+                      "default": {},
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "string",
+                              "number",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "required": {
+                            "default": true,
+                            "type": "boolean"
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description",
+                          "required"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "write": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "destructive": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "answerLimits": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "column": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": [
+                          "column",
+                          "limit"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "description",
+                    "sql",
+                    "params",
+                    "write",
+                    "destructive",
+                    "answerLimits"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "engine",
+              "host",
+              "database",
+              "auth",
+              "tls",
+              "timeoutSeconds",
+              "maxRows",
+              "tools"
+            ],
+            "additionalProperties": false
+          },
+          "events": {
+            "type": "object",
+            "properties": {
+              "types": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.:-]{1,100}$"
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "fields": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                }
+              },
+              "limits": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                }
+              },
+              "webhook": {
+                "type": "object",
+                "properties": {
+                  "verify": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "hmac-sha256"
+                          },
+                          "header": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9-]+$"
+                          },
+                          "prefix": {
+                            "default": "",
+                            "type": "string",
+                            "maxLength": 20
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "header",
+                          "prefix"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "token"
+                          },
+                          "header": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9-]+$"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "header"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "none"
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "allowInsecure": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "type": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "field": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                          }
+                        },
+                        "required": [
+                          "field"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "header": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9-]+$"
+                          }
+                        },
+                        "required": [
+                          "header"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "deliveryId": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "field": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                          }
+                        },
+                        "required": [
+                          "field"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "header": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9-]+$"
+                          }
+                        },
+                        "required": [
+                          "header"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "timestamp": {
+                    "type": "object",
+                    "properties": {
+                      "at": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                              }
+                            },
+                            "required": [
+                              "field"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "header": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9-]+$"
+                              }
+                            },
+                            "required": [
+                              "header"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "unit": {
+                        "type": "string",
+                        "enum": [
+                          "s",
+                          "ms",
+                          "iso"
+                        ]
+                      },
+                      "toleranceSeconds": {
+                        "default": 300,
+                        "type": "integer",
+                        "minimum": 60,
+                        "maximum": 604800
+                      }
+                    },
+                    "required": [
+                      "at",
+                      "unit",
+                      "toleranceSeconds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "setup": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "body": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "link": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "href": {
+                              "type": "string",
+                              "format": "uri"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "href"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "copy": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "shell": {
+                          "type": "string",
+                          "enum": [
+                            "bash",
+                            "powershell"
+                          ]
+                        },
+                        "permissions": {
+                          "type": "boolean"
+                        },
+                        "certificate": {
+                          "type": "boolean"
+                        },
+                        "click": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "clickUnavailable": {
+                          "type": "boolean",
+                          "const": true
+                        },
+                        "siteRole": {
+                          "type": "string",
+                          "enum": [
+                            "read",
+                            "write"
+                          ]
+                        },
+                        "agentCheck": {
+                          "type": "boolean"
+                        },
+                        "confirm": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9-]+$"
+                        },
+                        "live": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9-]+$"
+                        },
+                        "settings": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "^[a-z][A-Za-z]+$"
+                              },
+                              "label": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "help": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "placeholder": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "pattern": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "pattern"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "option": {
+                          "type": "object",
+                          "properties": {
+                            "field": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "title",
+                        "body"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "register": {
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "type": "string",
+                        "enum": [
+                          "GET",
+                          "POST",
+                          "PUT"
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "format": "starts_with",
+                        "pattern": "^\\/.*"
+                      },
+                      "body": {},
+                      "location": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                      }
+                    },
+                    "required": [
+                      "method",
+                      "path",
+                      "location"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "verify",
+                  "allowInsecure",
+                  "type",
+                  "setup"
+                ],
+                "additionalProperties": false
+              },
+              "self": {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "type": "string",
+                        "enum": [
+                          "GET",
+                          "POST",
+                          "PUT"
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "format": "starts_with",
+                        "pattern": "^\\/.*"
+                      },
+                      "body": {}
+                    },
+                    "required": [
+                      "method",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                  },
+                  "fields": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    }
+                  }
+                },
+                "required": [
+                  "request",
+                  "id",
+                  "fields"
+                ],
+                "additionalProperties": false
+              },
+              "poll": {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "type": "string",
+                        "enum": [
+                          "GET",
+                          "POST",
+                          "PUT"
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "format": "starts_with",
+                        "pattern": "^\\/.*"
+                      },
+                      "body": {}
+                    },
+                    "required": [
+                      "method",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "filter": {
+                    "type": "string",
+                    "format": "includes",
+                    "pattern": "\\{value\\}"
+                  },
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_$@-]+(\\.[A-Za-z0-9_$@-]+)*$"
+                  },
+                  "wrap": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                  },
+                  "deliveryId": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                    }
+                  },
+                  "types": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.:-]{1,100}$"
+                        },
+                        "since": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "request",
+                  "items",
+                  "cursor",
+                  "deliveryId",
+                  "types"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "types",
+              "fields",
+              "limits"
             ],
             "additionalProperties": false
           }
@@ -7515,6 +10138,503 @@
         },
         "required": [
           "error"
+        ],
+        "additionalProperties": false
+      },
+      "EventRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "triggerId": {
+            "type": "string"
+          },
+          "connectorId": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "deliveryId": {
+            "type": "string"
+          },
+          "runner": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "running",
+              "ended",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "costCents": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "ISO 8601, UTC"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601, UTC"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "agentId",
+          "triggerId",
+          "connectorId",
+          "eventType",
+          "deliveryId",
+          "runner",
+          "sessionId",
+          "state",
+          "error",
+          "costCents",
+          "startedAt",
+          "finishedAt"
+        ],
+        "additionalProperties": false
+      },
+      "EventSubscribed": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/components/schemas/EventSubscription"
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "setup": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "body": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "link": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "href": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "href"
+                  ],
+                  "additionalProperties": false
+                },
+                "copy": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "shell": {
+                  "type": "string",
+                  "enum": [
+                    "bash",
+                    "powershell"
+                  ]
+                },
+                "permissions": {
+                  "type": "boolean"
+                },
+                "certificate": {
+                  "type": "boolean"
+                },
+                "click": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "clickUnavailable": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "siteRole": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write"
+                  ]
+                },
+                "agentCheck": {
+                  "type": "boolean"
+                },
+                "confirm": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+$"
+                },
+                "live": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+$"
+                },
+                "settings": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z][A-Za-z]+$"
+                      },
+                      "label": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "help": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "placeholder": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "pattern": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "label",
+                      "pattern"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "option": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "value": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "title",
+                "body"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "registration": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ok",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "subscription",
+          "secret",
+          "setup",
+          "registration"
+        ],
+        "additionalProperties": false
+      },
+      "EventSubscription": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "connectorId": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "webhook",
+              "poll"
+            ]
+          },
+          "filter": {
+            "type": "string"
+          },
+          "intervalSeconds": {
+            "type": "number"
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "polledAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601, UTC"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "registered": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO 8601, UTC"
+          }
+        },
+        "required": [
+          "id",
+          "connectorId",
+          "source",
+          "filter",
+          "intervalSeconds",
+          "cursor",
+          "polledAt",
+          "lastError",
+          "registered",
+          "url",
+          "createdBy",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "EventTrigger": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "connectorId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "eventTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "in"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "notIn": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "notIn"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "runner": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "hasSigningSecret": {
+            "type": "boolean"
+          },
+          "managedAgentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vaultIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "budgetCents": {
+            "type": "number"
+          },
+          "maxRunsPerHour": {
+            "type": "number"
+          },
+          "maxCentsPerDay": {
+            "type": "number"
+          },
+          "maxConcurrent": {
+            "type": "number"
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "ISO 8601, UTC"
+          }
+        },
+        "required": [
+          "id",
+          "agentId",
+          "connectorId",
+          "enabled",
+          "eventTypes",
+          "conditions",
+          "prompt",
+          "runner",
+          "settings",
+          "hasSigningSecret",
+          "managedAgentId",
+          "environmentId",
+          "vaultIds",
+          "budgetCents",
+          "maxRunsPerHour",
+          "maxCentsPerDay",
+          "maxConcurrent",
+          "updatedBy",
+          "updatedAt"
         ],
         "additionalProperties": false
       },

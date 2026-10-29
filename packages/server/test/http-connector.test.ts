@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { fileURLToPath } from "node:url";
 import { after, before, test } from "node:test";
 import type { McpServer } from "@modelcontextprotocol/server";
+import type { ZodType } from "zod";
 import { connectorSchema, type Connector } from "../../connector-kit/src/connector.ts";
 import type { ToolContext } from "../../connector-kit/src/common.ts";
 import { assertToolsImplemented } from "../src/service.ts";
@@ -65,8 +68,10 @@ async function run(
 ) {
   const vendor = httpVendor(connector);
   const handlers = new Map<string, (a: Record<string, unknown>) => Promise<unknown>>();
+  // Parses the arguments as the MCP server does before calling the tool.
   const recorder = {
-    registerTool: (name: string, _c: unknown, h: never) => handlers.set(name, h),
+    registerTool: (name: string, c: { inputSchema: ZodType }, h: (a: unknown) => unknown) =>
+      handlers.set(name, async (a) => h(c.inputSchema.parse(a))),
   } as unknown as McpServer;
   const audit: { decision: string; reason: string | null; vendorStatus: number | null }[] = [];
   const conn = { config: { host: "x", ...config }, secret };
@@ -351,4 +356,342 @@ test("an empty success answers the agent, and an over-long address is refused", 
   assert.equal(result.isError, true);
   assert.equal(audit[0].decision, "denied");
   assert.equal(seen.length, 0);
+});
+
+// The example's tools plus these, so a test can try a feature on a tool of its own.
+const withTools = (tools: unknown[], http: Record<string, unknown> = {}) =>
+  orders({ tools: [...example.http.tools, ...tools], ...http });
+const search = (extra: Record<string, unknown> = {}) => ({
+  name: "orders_search",
+  description: "Search orders.",
+  method: "GET",
+  path: "/orders",
+  ...extra,
+});
+
+test("fixed headers are sent with every call, and cannot carry credentials", async () => {
+  respond = ok({});
+  seen.length = 0;
+  const connector = orders({
+    headers: { "X-Api-Version": "2022-11-28", Accept: "application/vnd.example+json" },
+  });
+  await run(connector, "orders_get", { id: "1" });
+  assert.equal(seen[0].headers["x-api-version"], "2022-11-28");
+  assert.equal(seen[0].headers.accept, "application/vnd.example+json");
+  assert.equal(seen[0].headers["x-api-key"], "k1");
+  for (const headers of [
+    { Authorization: "Bearer x" },
+    { "X-Api-Key": "k" },
+    { "x-auth-token": "t" },
+    { "Content-Type": "text/plain" },
+    { "X-Version": "1\r\nX-Injected: 1" },
+  ])
+    assert.throws(() => orders({ headers }), /headers|Invalid/);
+});
+
+test("a header auth prefix and query auth sign the call", async () => {
+  respond = ok({});
+  seen.length = 0;
+  await run(
+    orders({
+      auth: { type: "header", header: "Authorization", value: "api_key", prefix: "SSWS " },
+    }),
+    "orders_get",
+    { id: "1" },
+  );
+  assert.equal(seen[0].headers.authorization, "SSWS k1");
+  const query = orders({ auth: { type: "query", param: "api_key", value: "api_key" } });
+  await run(query, "orders_list", { customer: "acme" });
+  assert.equal(seen[1].url, "/api/orders?customer=acme&api_key=k1");
+  assert.equal(seen[1].headers["x-api-key"], undefined);
+
+  // The key stays out of what the agent and the audit see.
+  respond = (_q, res) => (
+    res.writeHead(400, { "content-type": "application/json" }),
+    res.end('{"error":"bad"}')
+  );
+  const { text, audit } = await run(
+    query,
+    "orders_get",
+    { id: "1" },
+    { secret: { api_key: "secret-value" } },
+  );
+  assert.doesNotMatch(text + JSON.stringify(audit), /secret-value/);
+
+  // A query key must be a secret field, and no tool param may be sent under its name.
+  assert.throws(
+    () =>
+      orders(
+        { auth: { type: "query", param: "key", value: "api_key" } },
+        { fields: [{ id: "api_key", label: "Key", secret: false }] },
+      ),
+    /auth names its fields/,
+  );
+  assert.throws(
+    () => orders({ auth: { type: "query", param: "customer", value: "api_key" } }),
+    /query auth param/,
+  );
+});
+
+test("array, enum and default params, and a param sent under another name", async () => {
+  respond = ok([]);
+  seen.length = 0;
+  const connector = withTools([
+    search({
+      params: {
+        status: {
+          type: "array",
+          items: "string",
+          enum: ["open", "shipped"],
+          description: "Statuses",
+          in: "query",
+          default: ["open"],
+        },
+        tags: {
+          type: "array",
+          items: "string",
+          description: "Tags",
+          in: "query",
+          join: ",",
+          required: false,
+        },
+        page_size: { type: "integer", description: "Page size", in: "query", default: 20 },
+        page_token: {
+          type: "string",
+          description: "Cursor",
+          in: "query",
+          name: "pageToken",
+          required: false,
+        },
+      },
+    }),
+  ]);
+  await run(connector, "orders_search", {});
+  assert.equal(seen[0].url, "/api/orders?status=open&page_size=20");
+  await run(connector, "orders_search", {
+    status: ["open", "shipped"],
+    tags: ["a", "b"],
+    page_size: 5,
+    page_token: "c2",
+  });
+  assert.equal(
+    seen[1].url,
+    "/api/orders?status=open&status=shipped&tags=a%2Cb&page_size=5&pageToken=c2",
+  );
+  // Outside the enum, or the wrong type: refused before the tool runs.
+  await assert.rejects(run(connector, "orders_search", { status: ["lost"] }));
+  await assert.rejects(run(connector, "orders_search", { page_size: 2.5 }));
+  assert.equal(seen.length, 2);
+
+  const param = (p: Record<string, unknown>) => () =>
+    withTools([search({ params: { x: { description: "X", in: "query", ...p } } })]);
+  assert.throws(param({ type: "array" }), /item type/);
+  assert.throws(param({ type: "string", items: "string" }), /item type/);
+  assert.throws(param({ type: "integer", enum: ["a"] }), /enum and default/);
+  assert.throws(param({ type: "string", enum: ["a"], default: "b" }), /enum and default/);
+  assert.throws(param({ type: "array", items: "string", default: "a" }), /enum and default/);
+  assert.throws(param({ type: "string", join: "," }), /join/);
+  assert.throws(
+    () =>
+      withTools([
+        {
+          ...example.http.tools[1],
+          name: "orders_get_default",
+          params: { id: { type: "string", description: "Id", in: "path", default: "1" } },
+        },
+      ]),
+    /no default/,
+  );
+  assert.throws(
+    () =>
+      withTools([
+        search({
+          params: {
+            a: { type: "string", description: "A", in: "query", name: "q" },
+            b: { type: "string", description: "B", in: "query", name: "q" },
+          },
+        }),
+      ]),
+    /same name/,
+  );
+});
+
+test("a limited array param needs every value within the agent's values", async () => {
+  respond = ok([]);
+  seen.length = 0;
+  const connector = withTools([
+    search({
+      params: {
+        customer: {
+          type: "array",
+          items: "string",
+          description: "Customers",
+          in: "query",
+          required: false,
+          limit: "customers",
+        },
+      },
+    }),
+  ]);
+  const limits = { customers: ["acme", "initech"] };
+  const allowed = await run(
+    connector,
+    "orders_search",
+    { customer: ["acme", "initech"] },
+    { limits },
+  );
+  assert.equal(allowed.result.isError, undefined);
+  for (const args of [{ customer: ["acme", "globex"] }, { customer: [] }, {}]) {
+    const { result, audit } = await run(connector, "orders_search", args, { limits });
+    assert.equal(result.isError, true);
+    assert.equal(audit[0].decision, "denied");
+  }
+  assert.equal(seen.length, 1);
+});
+
+test("a result keeps only the fields named, and answer limits see the whole answer", async () => {
+  const connector = withTools([
+    search({
+      result: { items: "data.orders", fields: ["id", "owner.name", "lines.sku"] },
+      answerLimits: [{ field: "data.orders.customer", limit: "customers" }],
+    }),
+  ]);
+  const answer = {
+    data: {
+      orders: [
+        {
+          id: "1",
+          customer: "acme",
+          secret_note: "x",
+          owner: { name: "Ann", email: "a@x" },
+          lines: [{ sku: "s1", price: 1 }, { sku: "s2" }],
+        },
+        { id: "2", customer: "acme" },
+      ],
+    },
+    total: 2,
+  };
+  respond = ok(answer);
+  const { result, text } = await run(
+    connector,
+    "orders_search",
+    {},
+    {
+      limits: { customers: ["acme"] },
+    },
+  );
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(JSON.parse(text), [
+    { id: "1", "owner.name": "Ann", "lines.sku": ["s1", "s2"] },
+    { id: "2" },
+  ]);
+
+  // customer is trimmed away, but still checked.
+  respond = ok({ data: { orders: [{ id: "3", customer: "globex" }] } });
+  const refused = await run(connector, "orders_search", {}, { limits: { customers: ["acme"] } });
+  assert.equal(refused.result.isError, true);
+  assert.doesNotMatch(refused.text, /globex|"3"/);
+
+  // An app leaving an empty list out answers an empty list.
+  respond = ok({ data: {} });
+  assert.equal((await run(connector, "orders_search", {})).text, "[]");
+
+  // Text where JSON was expected is refused rather than passed on untrimmed.
+  respond = (_q, res) => (res.writeHead(200, { "content-type": "text/plain" }), res.end("hi"));
+  assert.equal((await run(connector, "orders_search", {})).result.isError, true);
+  assert.throws(() => withTools([search({ result: {} })]), /names items, fields or both/);
+});
+
+test("paging hands the agent the next cursor from the body, a header or the Link header", async () => {
+  const cursor = { type: "string", description: "Cursor", in: "query", required: false };
+  const page = { type: "integer", description: "Page", in: "query", required: false };
+  const connector = withTools([
+    search({
+      name: "orders_page_body",
+      params: { cursor },
+      paging: { param: "cursor", body: "meta.next" },
+      result: { items: "orders", fields: ["id"] },
+    }),
+    search({
+      name: "orders_page_header",
+      params: { cursor },
+      paging: { param: "cursor", header: "X-Next-Cursor" },
+    }),
+    search({ name: "orders_page_link", params: { page }, paging: { param: "page", link: true } }),
+  ]);
+  seen.length = 0;
+  respond = ok({ orders: [{ id: "1", customer: "acme" }], meta: { next: "c2" } });
+  let { text } = await run(connector, "orders_page_body", { cursor: "c1" });
+  assert.deepEqual(JSON.parse(text), { items: [{ id: "1" }], next: "c2" });
+  assert.equal(seen[0].url, "/api/orders?cursor=c1");
+  respond = ok({ orders: [], meta: {} });
+  ({ text } = await run(connector, "orders_page_body", {}));
+  assert.deepEqual(JSON.parse(text), { items: [], next: null });
+
+  respond = (_q, res) => (
+    res.writeHead(200, { "content-type": "application/json", "x-next-cursor": "h2" }),
+    res.end("[]")
+  );
+  ({ text } = await run(connector, "orders_page_header", {}));
+  assert.deepEqual(JSON.parse(text), { items: [], next: "h2" });
+
+  // Only the cursor is taken from the Link address; the service never calls it.
+  respond = (_q, res) => (
+    res.writeHead(200, {
+      "content-type": "application/json",
+      link: '<https://elsewhere.example/orders?page=1>; rel="prev", <https://elsewhere.example/orders?page=3&x=1>; rel="next"',
+    }),
+    res.end("[]")
+  );
+  seen.length = 0;
+  ({ text } = await run(connector, "orders_page_link", { page: 2 }));
+  assert.deepEqual(JSON.parse(text), { items: [], next: 3 });
+  assert.equal(seen.length, 1);
+  respond = ok([]);
+  ({ text } = await run(connector, "orders_page_link", {}));
+  assert.deepEqual(JSON.parse(text), { items: [], next: null });
+
+  for (const paging of [
+    { param: "nope", body: "next" },
+    { param: "cursor", body: "next", header: "X" },
+  ])
+    assert.throws(() => withTools([search({ params: { cursor }, paging })]));
+});
+
+test("the example app pages through its orders with the example connector", async () => {
+  const free = createServer();
+  await new Promise<void>((done) => free.listen(0, "127.0.0.1", done));
+  const port = (free.address() as AddressInfo).port;
+  free.close();
+  const app = spawn(
+    process.execPath,
+    [fileURLToPath(new URL("../../../examples/internal-app/server.mjs", import.meta.url))],
+    { env: { ...process.env, PORT: String(port), API_KEY: "k1" }, stdio: "ignore" },
+  );
+  try {
+    const connector = connectorSchema.parse({
+      ...example,
+      http: { ...example.http, baseUrl: `http://localhost:${port}/api` },
+    });
+    for (let up = false; !up; await new Promise((r) => setTimeout(r, 50)))
+      up = await fetch(`http://localhost:${port}/api/health`).then(
+        () => true,
+        () => false,
+      );
+    const page1 = JSON.parse((await run(connector, "orders_list", {})).text);
+    assert.deepEqual(page1, {
+      items: [
+        { id: "1001", customer: "acme", status: "shipped" },
+        { id: "1002", customer: "globex", status: "open" },
+      ],
+      next: "2",
+    });
+    const page2 = JSON.parse((await run(connector, "orders_list", { cursor: page1.next })).text);
+    assert.deepEqual(page2, {
+      items: [{ id: "1003", customer: "acme", status: "open" }],
+      next: null,
+    });
+  } finally {
+    app.kill();
+  }
 });

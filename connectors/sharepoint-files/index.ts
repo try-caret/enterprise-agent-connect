@@ -1,4 +1,4 @@
-import type { ConnectorModule } from "../../packages/connector-kit/src/connector.js";
+import type { BuiltinModule } from "../microsoft/client.js";
 import { toolsets } from "../../packages/connector-kit/src/common.js";
 import { excelTools } from "./excel.js";
 import { graphTools } from "./tools.js";
@@ -10,4 +10,4 @@ export default {
     vendor: sitesVendor(microsoft),
     toolset: toolsets(graphTools, excelTools),
   }),
-} satisfies ConnectorModule;
+} satisfies BuiltinModule;

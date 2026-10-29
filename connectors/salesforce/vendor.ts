@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { vendorFetch, vendorUrl } from "../../packages/connector-kit/src/fetch.js";
 import {
   ConnectError,
   TokenCache,
@@ -37,7 +38,8 @@ function instanceUrl(raw: unknown): string {
   return url.origin;
 }
 
-export function salesforceVendor(fetchImpl: Fetch = fetch): Vendor {
+export function salesforceVendor(unguarded: Fetch = fetch): Vendor {
+  const fetchImpl = vendorFetch("Salesforce", unguarded);
   const tokens = new TokenCache();
 
   async function mint(myDomain: string, clientId: string, clientSecret: string) {
@@ -77,7 +79,7 @@ export function salesforceVendor(fetchImpl: Fetch = fetch): Vendor {
     }));
 
   async function send(base: string, access: string, request: VendorRequest) {
-    const res = await fetchImpl(`${base}${request.path}`, {
+    const res = await fetchImpl(vendorUrl(base, request.path), {
       method: request.method,
       headers: {
         authorization: `Bearer ${access}`,
@@ -88,7 +90,11 @@ export function salesforceVendor(fetchImpl: Fetch = fetch): Vendor {
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
     });
     const raw = await res.text();
-    return { status: res.status, data: raw ? safeJson(raw) : null };
+    return {
+      status: res.status,
+      data: raw ? safeJson(raw) : null,
+      headers: Object.fromEntries(res.headers),
+    };
   }
 
   return {

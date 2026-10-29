@@ -3,8 +3,11 @@ import { test } from "node:test";
 import { ADMIN_TOKEN, connectors, harness, ORG } from "../../server/test/helpers.ts";
 import {
   AgentConnectError,
+  chosenSteps,
   CLAUDE_RUNNER,
   createClient,
+  discovered,
+  discoveredChoices,
   triggerForm,
   triggerInput,
   type TeamsTrigger,
@@ -162,4 +165,21 @@ test("the trigger form keeps another runner and its settings, asking Claude's fi
   assert.equal(fresh.runner, CLAUDE_RUNNER);
   const claude = triggerInput({ ...fresh, anyoneInOrganization: true });
   assert.deepEqual(claude, { ok: false, error: "Enter the Claude agent's ID" });
+});
+
+test("steps for a capability show only while it is ticked; discover labels are offered", () => {
+  const netsuite = connectors.find((c) => c.id === "netsuite")!;
+  const script = (ticked?: string[]) =>
+    chosenSteps(netsuite, netsuite.afterConnect, {}, ticked).some((s) => s.capabilities);
+  assert.equal(script(["read"]), false);
+  assert.equal(script(["read", "saved_searches"]), true);
+  assert.equal(script(), true);
+  const checks = [
+    { label: netsuite.discover!.label, values: ["1", "2"], labels: { "1": "Parent Co" } },
+  ];
+  assert.deepEqual(discovered(netsuite, checks), ["1", "2"]);
+  assert.deepEqual(discoveredChoices(netsuite, checks), [
+    { value: "1", label: "Parent Co" },
+    { value: "2", label: "2" },
+  ]);
 });
