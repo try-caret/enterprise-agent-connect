@@ -8,7 +8,12 @@ import { documentTools, MAX_ANSWER_CHARS, pieces } from "./documents.ts";
 import { fillDocx, readDocx } from "./docx.ts";
 import { openZip, W } from "./ooxml.ts";
 import { readPdf } from "./pdf.ts";
-import { liveParses, sandboxed, sibling } from "./sandbox.ts";
+import { liveParses, parsePids, sandboxed, sibling } from "./sandbox.ts";
+import { fork, spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadConnectors } from "../../packages/connector-kit/src/connector.ts";
 import type { ToolContext } from "../../packages/connector-kit/src/common.ts";
 import type { Limits, VendorRequest, VendorResponse } from "../../packages/connector-kit/src/types.ts";
@@ -1115,4 +1120,74 @@ test("review p6: forged markers in a cell and markup in a fill value stay text, 
   const text: string = back.items.find((i) => i.section === "paragraphs")!.obj.text;
   assert.equal(text.match(/\[\[\/field\]\]/g)!.length, 1, text);
   assert.ok(text.startsWith("Fixed. [[field:t]]</w:t><w:p>]]>&amp;\tx\n[ [/field]]y"), text);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Final re-check (2026-11-01): the parse process never outlives the server, and its answer is
+// checked
+
+const fixtures = mkdtempSync(join(tmpdir(), "eac-parse-"));
+const parser = (name: string, code: string) => {
+  const file = join(fixtures, name);
+  writeFileSync(file, code);
+  return pathToFileURL(file);
+};
+const LOOP = parser("loop-worker.mjs", "for (;;) {}\n");
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+async function goneWithin(pid: number, ms: number) {
+  const until = Date.now() + ms;
+  while (alive(pid) && Date.now() < until) await new Promise((done) => setTimeout(done, 50));
+  return !alive(pid);
+}
+
+test("a parse process exits when the server is killed, even mid-parse", async () => {
+  const sandbox = new URL("./sandbox.ts", import.meta.url).href;
+  const server = parser(
+    "server.mjs",
+    `import { sandboxed, parsePids } from ${JSON.stringify(sandbox)};
+     sandboxed("pdf", new URL(${JSON.stringify(LOOP.href)}), {}, { timeoutMs: 60000 }).catch(() => {});
+     setTimeout(() => console.log(JSON.stringify(parsePids())), 500);\n`,
+  );
+  const proc = spawn(process.execPath, ["--import", "tsx", server.pathname], { stdio: ["ignore", "pipe", "inherit"] });
+  const line = await new Promise<string>((done) => proc.stdout.once("data", (d: Buffer) => done(d.toString())));
+  const [pid] = JSON.parse(line) as number[];
+  assert.ok(pid && alive(pid), "the parse process runs");
+  proc.kill("SIGKILL");
+  assert.ok(await goneWithin(pid, 5_000), "the parse process outlived the server");
+});
+
+test("a parse process stops on its own clock, a little after the server's", async () => {
+  const host = fork(new URL("./parse-host.mjs", import.meta.url), [], {
+    serialization: "advanced",
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  const exit = new Promise<number | null>((done) => host.once("exit", (code) => done(code)));
+  host.send({ file: LOOP.href, typescript: false, data: {}, maxOldGenerationSizeMb: 64, memoryCapMb: 512, timeoutMs: 200 });
+  const started = Date.now();
+  assert.equal(await exit, 6);
+  assert.ok(Date.now() - started < 5_000, `${Date.now() - started} ms`);
+});
+
+test("an answer of the wrong shape or a huge one is refused, never believed", async () => {
+  const cases: [string, string][] = [
+    ["shape.mjs", "parentPort.postMessage({ hello: 1 });"],
+    ["denied.mjs", "parentPort.postMessage({ ok: false, denied: 42 });"],
+    ["novalue.mjs", "parentPort.postMessage({ ok: true });"],
+    ["huge.mjs", "parentPort.postMessage({ ok: true, value: 'x'.repeat(81 * 1024 * 1024) });"],
+  ];
+  for (const [name, body] of cases) {
+    const file = parser(name, `import { parentPort } from "node:worker_threads";\n${body}\n`);
+    await assert.rejects(sandboxed("pdf", file, {}, {}), /could not be read/, name);
+  }
+  const ok = parser("ok.mjs", 'import { parentPort } from "node:worker_threads";\nparentPort.postMessage({ ok: true, value: { fine: true } });\n');
+  assert.deepEqual(await sandboxed("pdf", ok, {}, {}), { fine: true });
+  assert.equal(liveParses(), 0);
+  assert.deepEqual(parsePids(), []);
 });

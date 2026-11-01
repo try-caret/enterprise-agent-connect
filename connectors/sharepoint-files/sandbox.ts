@@ -1,4 +1,5 @@
 import { fork, type ChildProcess } from "node:child_process";
+import { serialize } from "node:v8";
 import { Denied } from "../../packages/connector-kit/src/common.js";
 
 // Untrusted documents are parsed in a process of their own (parse-host.mjs, through
@@ -27,6 +28,25 @@ const DEFAULTS: Record<Kind, Required<SandboxLimits>> = {
 export const PLACES = 2;
 // Exit codes from parse-host.mjs.
 const MEMORY = 3;
+// The largest answer taken from a parse process.
+const MAX_ANSWER_BYTES = 80 * 1024 * 1024;
+
+type Answer<T> = { ok: true; value: T } | { ok: false; denied: string };
+
+// A parse process's message, checked before it is believed: an object with ok true and a value,
+// or ok false and a refusal, within the size cap. Anything else is null.
+function checked<T>(m: unknown): Answer<T> | null {
+  if (typeof m !== "object" || m === null) return null;
+  const a = m as { ok?: unknown; value?: unknown; denied?: unknown };
+  try {
+    if (serialize(m).byteLength > MAX_ANSWER_BYTES) return null;
+  } catch {
+    return null;
+  }
+  if (a.ok === true && "value" in a && a.value !== undefined) return { ok: true, value: a.value as T };
+  if (a.ok === false && typeof a.denied === "string") return { ok: false, denied: a.denied };
+  return null;
+}
 
 /** File-controlled text (part names, tags, parser messages) cut to fit an error or audit row. */
 export const clip = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}...` : s);
@@ -82,6 +102,8 @@ const live = new Set<ChildProcess>();
 
 /** Parse processes still running (tests: none is left once a call has answered). */
 export const liveParses = () => live.size;
+/** Their process ids (tests). */
+export const parsePids = () => [...live].map((c) => c.pid).filter((p): p is number => p !== undefined);
 
 /** A worker module beside this one: .ts from the sources (tests, through tsx), .js from dist. */
 export function sibling(name: string): URL {
@@ -124,9 +146,15 @@ function run<T>(file: URL, data: unknown, limits: Required<SandboxLimits>, what:
     live.delete(child);
     ended(signal ? null : code);
   });
-  let answer: { ok?: boolean; value?: T; denied?: string } | null = null;
+  let answer: Answer<T> | null = null;
+  let messages = 0;
   let timedOut = false;
-  child.once("message", (m) => (answer = m as typeof answer));
+  child.on("message", (m) => {
+    // One answer only; a second, or one of the wrong shape, voids it.
+    messages++;
+    answer = messages === 1 ? checked<T>(m) : null;
+    if (messages > 1) child.kill("SIGKILL");
+  });
   child.on("error", () => {
     // A process that never started has no exit to wait for.
     if (child.pid === undefined) {
@@ -144,14 +172,15 @@ function run<T>(file: URL, data: unknown, limits: Required<SandboxLimits>, what:
     data,
     maxOldGenerationSizeMb: limits.maxOldGenerationSizeMb,
     memoryCapMb: limits.memoryCapMb,
+    timeoutMs: limits.timeoutMs,
   });
   // Every path waits for the process to be gone before answering, so its place and its memory
   // are given back together.
   return exited.then((code) => {
     clearTimeout(timer);
-    const got = answer as { ok?: boolean; value?: T; denied?: string } | null;
-    if (got?.ok) return got.value as T;
-    if (got && !got.ok) throw new Denied(clip(got.denied ?? `${what} could not be read`, 300));
+    const got = answer as Answer<T> | null;
+    if (got?.ok) return got.value;
+    if (got && !got.ok) throw new Denied(clip(got.denied, 300));
     if (timedOut) throw new Denied(`${what} took too long to read, so it was stopped`);
     if (code === MEMORY) throw new Denied(`${what} needs too much memory to read, so it was stopped`);
     throw new Denied(`${what} could not be read`);

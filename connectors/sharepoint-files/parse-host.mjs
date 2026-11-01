@@ -4,14 +4,26 @@
 // stream pdf.js inflates) count there though the worker's heap limit misses them, and nothing
 // another request allocates in the server does. Past the cap the process exits at once with
 // code 3, which takes the parser and all its memory with it. Plain JavaScript, so it runs the
-// same from the sources and from dist/.
+// same from the sources and from dist/. It never outlives the server: it exits when the IPC
+// channel closes (the server went away) and on a clock of its own, a little past the server's.
+import { serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 
 const MEMORY = 3;
 const FAILED = 4;
+const GONE = 5;
+const CLOCK = 6;
 const WATCH_MS = 5;
+// The largest answer relayed to the server.
+const MAX_ANSWER_BYTES = 80 * 1024 * 1024;
 
-process.once("message", ({ file, typescript, data, maxOldGenerationSizeMb, memoryCapMb }) => {
+process.on("disconnect", () => process.exit(GONE));
+// No job within this long: nothing is coming.
+const idle = setTimeout(() => process.exit(CLOCK), 10_000);
+
+process.once("message", ({ file, typescript, data, maxOldGenerationSizeMb, memoryCapMb, timeoutMs }) => {
+  clearTimeout(idle);
+  setTimeout(() => process.exit(CLOCK), timeoutMs + 2_000).unref?.();
   const base = process.memoryUsage.rss();
   const watch = setInterval(() => {
     if (process.memoryUsage.rss() - base > memoryCapMb * 1024 * 1024) process.exit(MEMORY);
@@ -33,7 +45,18 @@ process.once("message", ({ file, typescript, data, maxOldGenerationSizeMb, memor
   let answered = false;
   worker.once("message", (m) => {
     answered = true;
-    process.send(m, () => finish(0));
+    let size;
+    try {
+      size = serialize(m).byteLength;
+    } catch {
+      return finish(FAILED);
+    }
+    if (size > MAX_ANSWER_BYTES) return finish(FAILED);
+    try {
+      process.send(m, (error) => finish(error ? FAILED : 0));
+    } catch {
+      finish(FAILED);
+    }
   });
   worker.once("error", (error) => {
     if (!answered) finish(error?.code === "ERR_WORKER_OUT_OF_MEMORY" ? MEMORY : FAILED);
