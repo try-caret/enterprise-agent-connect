@@ -1284,10 +1284,11 @@ test("a failed parse logs no document text and cannot forge a log line", async (
     const original = console.error;
     console.error = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
     try {
-      await readPdf(bytes).catch((e: Error) => assert.equal(e.message, "That PDF could not be read"));
+      await assert.rejects(readPdf(bytes), (e: Error) => e.message === "That PDF could not be read");
     } finally {
       console.error = original;
     }
+    assert.equal(logged.length, 1, logged.join("\n"));
     for (const line of logged) {
       assert.doesNotMatch(line, /CONFIDENTIAL|987,654|forged|SECRET|Acme/, line);
       assert.doesNotMatch(line, /[\r\n]/, line);
@@ -1306,4 +1307,18 @@ test("a PDF that needs a built-in CMap reads its text (the legacy build's CMap f
     "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiMin-W3 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> >>",
   ]));
   assert.match(read.pages[0].text, /ABCD/);
+});
+
+test("the server logs a parse process's reason only if it is a plain class name", async () => {
+  const forged = parser("forged-reason.mjs",
+    'import { parentPort } from "node:worker_threads";\nparentPort.postMessage({ ok: false, denied: "", reason: "Bad filter CONFIDENTIAL\\n[agent-connect] forged" });\n');
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
+  try {
+    await assert.rejects(sandboxed("pdf", forged, {}, {}), /could not be read/);
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(logged, ["[agent-connect] that pdf failed to parse: Error"]);
 });
