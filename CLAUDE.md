@@ -586,8 +586,9 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
 - SharePoint (`sharepoint-files`, shown as "SharePoint"; the id stays for compatibility):
   files and Excel spreadsheets, one app with one site list, one site access check, one setup
   and one status. Capabilities, reads before writes so any write tick's `site_role` fill wins:
-  `read_files` (graph_list_sites, graph_list_files, graph_read_file), `read_sheets` (the five
-  excel_* reads), `write_files` (graph_upload_file, destructive), `write_sheets`
+  `read_files` (graph_list_sites, graph_list_files, graph_read_file, graph_get_download_link),
+  `read_sheets` (the five excel_* reads), `write_files` (graph_upload_file,
+  graph_create_upload_link, destructive), `write_sheets`
   (excel_update_range, excel_add_table_rows), `read_directory` (graph_list_users). None is
   required, so a key can have spreadsheets without files. Both write capabilities are
   `siteAccess.write` (the access check then proves write). Through the Microsoft
@@ -632,9 +633,33 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   (case-insensitive, NFC). An item read by id must have `parentReference.siteId` of the site,
   `driveId` of the site's default library (`GET /sites/{id}/drive`, the only one paths reach) and,
   with a folder limit, a parent path (percent-encoded, split before decoding) inside the folder;
-  a missing or unreadable one is refused. Downloads only text types up to 1 MB, and uploads up to
-  3 MB (the MCP endpoint takes 4 MiB bodies), never replacing a file unless asked (so it is
-  marked destructive; base64 content is validated, never silently repaired). A key's sites are
+  a missing or unreadable one is refused. graph_read_file downloads only text types up to 1 MB,
+  and graph_upload_file uploads up to 3 MB (the MCP endpoint takes 4 MiB bodies), never
+  replacing a file unless asked (so it is marked destructive; base64 content is validated, never
+  silently repaired). Any other file goes through Graph's pre-authenticated links, so its bytes
+  move in the agent's own workspace and never through the MCP endpoint or the model's context:
+  `graph_get_download_link` (same site, library and folder checks as graph_read_file) answers
+  the item's `@microsoft.graph.downloadUrl` (about an hour, no token; read without `$select`, since
+  Microsoft documents no `$select` form for it), and
+  `graph_create_upload_link` (same path and folder checks as graph_upload_file) opens an upload
+  session (`createUploadSession` on `root:/<path>:`, the form the access check uses; conflictBehavior
+  `fail` unless `replace`, so a name taken fails the last PUT with 409) and answers its
+  `uploadUrl`, which the agent PUTs the file to in one request under 60 MiB (Microsoft's limit
+  per PUT; an empty file goes through graph_upload_file). Only https links on a
+  `*.sharepoint.com` host are handed out (sites are only ever that); the audit target is the
+  file, never the link, and the upload link's row names the folder actually opened plus
+  `(replace)` when it may overwrite, since the PUT itself is never seen here. The agent's
+  environment must allow the tenant's SharePoint host. Anyone holding a link reaches that one
+  file until it expires: it sits in the Managed Agents session transcript (tool result and
+  curl line), and Microsoft says removing permissions might not invalidate a download link at
+  once, so revoking a key does not cut off a link already handed out. The tool descriptions say
+  to use a link only as a curl address, never in another tool, a file or a reply, and to cancel
+  an unused upload session (DELETE on its link), since SharePoint can hold the name as an empty
+  file while it is open. Replacing a sensitivity-labelled file is not supported app-only.
+  To check on a real tenant: that a link's `tempauth` binds its `UniqueId` (download) and
+  `overwrite` (upload) values. Graph shapes from learn.microsoft.com/graph/api/driveitem-get
+  (downloadUrl) and driveitem-createuploadsession; tested against a fake Graph only
+  (`connectors/sharepoint-files/tools.test.ts`), not yet against a real tenant. A key's sites are
   also kept to the connection's `config.sites`, so a stale or typed-in address is never reached
   even if the app holds a wider permission. `graph_list_users` returns name, email, title and
   department only, and pages with `cursor`.
