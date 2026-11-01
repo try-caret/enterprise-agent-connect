@@ -188,6 +188,37 @@ export function microsoftClient(
       )
       .digest("hex");
 
+  // A download read only up to `max` bytes: a file larger than its details said is stopped
+  // while it streams, never held whole.
+  async function readCapped(res: Response, max: number): Promise<Uint8Array> {
+    const tooLarge = () =>
+      new ConnectError(`The file is larger than ${max} bytes, so it was not downloaded`);
+    if (Number(res.headers.get("content-length") ?? 0) > max) {
+      await res.body?.cancel();
+      throw tooLarge();
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    const reader = res.body?.getReader();
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) {
+        await reader.cancel();
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+    const data = new Uint8Array(total);
+    let at = 0;
+    for (const c of chunks) {
+      data.set(c, at);
+      at += c.byteLength;
+    }
+    return data;
+  }
+
   async function send(token: string, request: VendorRequest, origin = GRAPH) {
     // Uploads send the file's bytes; everything else is JSON.
     const raw = request.body instanceof Uint8Array;
@@ -219,7 +250,7 @@ export function microsoftClient(
     if (request.responseType === "bytes" && res.ok)
       return {
         status: res.status,
-        data: new Uint8Array(await res.arrayBuffer()),
+        data: await readCapped(res, request.maxBytes ?? Infinity),
         headers: Object.fromEntries(res.headers),
       };
     const text = await res.text();

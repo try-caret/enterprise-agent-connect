@@ -277,3 +277,38 @@ test("a binary file's content follows the same download address and comes back a
   to.location = "https://evil.example/x";
   await assert.rejects(ms.call(microsoftConn, read), /not SharePoint: evil\.example/);
 });
+
+test("a binary download stops reading past maxBytes, whatever the file's details said", async () => {
+  let pulled = 0;
+  const to = { location: "https://acme.sharepoint.com/_layouts/15/download.aspx?x=1" };
+  const fake = (async (input: string) => {
+    if (input.includes("/oauth2/")) return Response.json(TOKEN);
+    if (!input.includes("sharepoint.com")) return new Response(null, { status: 302, headers: to });
+    // An endless body, 64 KB a chunk, with no content-length.
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 65_536;
+        controller.enqueue(new Uint8Array(65_536));
+      },
+    });
+    return new Response(body);
+  }) as typeof fetch;
+  const ms = microsoftClient({ sharedApp: null }, fake);
+  const read = { method: "GET", path: "/v1.0/drives/d/items/i/content", responseType: "bytes", maxBytes: 1_000_000 } as const;
+  await assert.rejects(ms.call(microsoftConn, read), /larger than 1000000 bytes/);
+  assert.ok(pulled < 1_500_000, `${pulled} bytes pulled`);
+  // A declared content-length past the cap is refused before reading.
+  const declared = (async (input: string) => {
+    if (input.includes("/oauth2/")) return Response.json(TOKEN);
+    if (!input.includes("sharepoint.com")) return new Response(null, { status: 302, headers: to });
+    return new Response(new Uint8Array(10), { headers: { "content-length": "5000000" } });
+  }) as typeof fetch;
+  await assert.rejects(microsoftClient({ sharedApp: null }, declared).call(microsoftConn, read), /larger than/);
+  // Under the cap, the bytes come back whole.
+  const small = (async (input: string) => {
+    if (input.includes("/oauth2/")) return Response.json(TOKEN);
+    if (!input.includes("sharepoint.com")) return new Response(null, { status: 302, headers: to });
+    return new Response(new Uint8Array([1, 2, 3]));
+  }) as typeof fetch;
+  assert.deepEqual([...((await microsoftClient({ sharedApp: null }, small).call(microsoftConn, read)).data as Uint8Array)], [1, 2, 3]);
+});
