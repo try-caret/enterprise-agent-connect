@@ -1,5 +1,6 @@
-// Reads a PDF's text with pdf.js, inside a worker_thread started by pdf.ts with memory limits, an
-// empty environment and a wall clock. Plain JavaScript, so it runs the same from the sources
+// Reads a PDF's text with pdf.js, inside a worker_thread started through sandbox.ts with memory
+// limits, an empty environment, a wall clock and its memory watched. Answers {ok, value} or
+// {ok: false, denied}. Plain JavaScript, so it runs the same from the sources
 // (tests) and from dist/ (the build copies it). Settings from the library vetting (2026-11-01).
 import module from "node:module";
 import { fileURLToPath } from "node:url";
@@ -27,6 +28,7 @@ console.warn = () => {};
 const { data, maxPages, maxChars, noAssets } = workerData;
 
 let needsPassword = false;
+const ENCRYPTED = "That PDF is encrypted or has a password, so it is not read";
 const dir = (rel) => fileURLToPath(new URL(rel, import.meta.resolve("pdfjs-dist/build/pdf.mjs")));
 
 try {
@@ -62,7 +64,7 @@ try {
   const pdf = await task.promise;
   const { info } = await pdf.getMetadata();
   if (info?.EncryptFilterName) {
-    parentPort.postMessage({ ok: false, reason: "encrypted" });
+    parentPort.postMessage({ ok: false, denied: ENCRYPTED });
   } else {
     const pages = [];
     let chars = 0;
@@ -82,14 +84,16 @@ try {
       pages.push({ page: n, text });
       if (cut) break;
     }
-    parentPort.postMessage({ ok: true, pages, pageCount: pdf.numPages, cut, canvasBlocked });
+    parentPort.postMessage({
+      ok: true,
+      value: { pages, pageCount: pdf.numPages, cut, canvasBlocked },
+    });
   }
   await pdf.destroy();
 } catch (error) {
   const name = error?.name ?? "";
   parentPort.postMessage({
     ok: false,
-    reason: needsPassword || name === "PasswordException" ? "encrypted" : "unreadable",
-    detail: String(error?.message ?? error).slice(0, 200),
+    denied: needsPassword || name === "PasswordException" ? ENCRYPTED : "That PDF could not be read",
   });
 }

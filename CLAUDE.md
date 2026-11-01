@@ -664,24 +664,40 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   also kept to the connection's `config.sites`, so a stale or typed-in address is never reached
   even if the app holds a wider permission. `graph_list_users` returns name, email, title and
   department only, and pages with `cursor`.
-  Word files and PDFs (`documents.ts`, `docx.ts`, `ooxml.ts`, `pdf.ts` + `pdf-worker.mjs`; spec
+  Word files and PDFs (`documents.ts`, `docx.ts` + `docx-worker.ts`, `ooxml.ts`, `paging.ts`,
+  `pdf.ts` + `pdf-worker.mjs`, `sandbox.ts`; spec
   CONNECT-WORD-TOOLS-SPEC, library settings from the 2026-11-01 security vetting): the bytes are
-  downloaded here (`responseType: "bytes"`, the same 302 to SharePoint as `"text"`), with the
+  downloaded here (`responseType: "bytes"`, the same 302 to SharePoint as `"text"`, read only up
+  to `maxBytes`: past it the download stops and fails, whatever the item's size said), with the
   files tools' site, library and folder checks. `document_read`: .docx/.docm (10 MB) as
   paragraphs, tables, fields (content controls with a `w:tag`; `mark_fields` wraps their text as
-  `[[field:<tag>]]...[[/field]]`, look-alike text in the document becomes `[ [`), hidden text
-  (vanish, white FFFFFF/FEFEFE, size <= 4 half-points) only in `hidden`, headers and footers,
+  `[[field:<tag>]]...[[/field]]`; every `[` followed by `[` in the document's own text, on the
+  assembled paragraph, becomes `[ ` so no split run forges one; a tag that is not
+  `^[A-Za-z0-9_.-]{1,64}$` refuses a marked read), hidden text, best effort (vanish, white or
+  near-white: every channel >= F0 or theme background1/light1, the colour of its own shading,
+  size <= 5 half-points, character scale <= 10%; through docDefaults, the paragraph style or the
+  default paragraph style, the character style, each with basedOn, and both branches of
+  mc:AlternateContent) only in `hidden`, headers and footers,
   comments with their anchor text, tracked change counts (insertions shown, deletions left out);
   .pdf (20 MB, 300 pages) as page text; anything else its details. Answers hold at most 300,000
   characters and continue with `more`/`next` (`<item index>.<hash of id, modified, size,
   mark_fields>`, so a changed file is read again from the start; an item too large is split into
-  `part`/`parts`). Zips through fflate's `unzipSync` only, with a filter checking every size
+  `part`/`parts`, iteratively; tables over 64 cells in a row or 10,000 rows are refused).
+  Every parse runs in a worker_thread (`sandbox.ts`): one Word file and one PDF at a time per
+  server (another waits up to 5 s, then "busy, try again"), resourceLimits, `env: {}`, 20 s, and
+  the process's resident memory polled every 20 ms and the worker terminated past a cap (768 MB
+  PDF, 1 GB Word): resourceLimits do not count ArrayBuffers, so a 2 MB PDF of one FlateDecode
+  stream once grew the process 2.7 GB (review 2026-11-01); now stopped near 0.8 GB in about a
+  second. Anything but a refusal inside a worker becomes "could not be read"; file-controlled
+  text in refusals is cut to about 100 characters. Zips through fflate's `unzipSync` only, with a filter checking every size
   from the directory before anything is inflated (2,000 entries, 50 MB in all, a ratio over 200
   past 1 MB, compression 0 or 8, no `..` or rooted names, no repeated names), then each part's
   length and CRC-32 against the directory (fflate checks neither: a header that lies about a
   size otherwise cuts a part short silently, seen 2026-11-01); ZIP64 refused. XML through xmldom
-  after refusing `<!DOCTYPE`/`<!ENTITY` in the text, `onError` throwing, one root, depth 256, 20
-  MB a part. PDFs in a `worker_thread` (512/64/4 MB limits, `env: {}`, `execArgv: []`, 20 s then
+  after refusing `<!DOCTYPE`/`<!ENTITY` in the text, `onError` throwing, one root, depth 256, 5
+  MB a part (xmldom needs about 100 times a dense part's size; a SOW's document.xml is well
+  under 1 MB). A fill parses the template's document.xml once and the output's once (the guard
+  checks the bytes to be uploaded). PDFs in a `worker_thread` (512/64/4 MB limits, `env: {}`, `execArgv: []`, 20 s then
   `terminate()`, no fetch, the vetting's `getDocument` options, local fonts/CMaps/wasm read from
   `node_modules/pdfjs-dist`; module hooks refuse to load any canvas package); encrypted ones
   refused. `word_fill_template`: a .docx template (never written) to a new .docx through the
@@ -691,8 +707,9 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   repeats its last per row; every filled field loses `w:showingPlcHdr` and any `dataBinding`.
   Before upload the guard re-opens the output and refuses unless every other zip part is
   byte-identical and the document with every filled field's content taken out serializes
-  identically (text and markup). Audit `${site} ${template} -> ${folder}/${name}`, then
-  `-> <new id>`. The image installs with `--ignore-scripts --omit=optional`, so pdfjs-dist's
+  identically (text and markup). A target that is the template itself (same folder and name) is
+  refused, replace or not. Audit `${site} ${template} -> ${folder}/${name}`, then
+  `-> <folder>/<name> (<new id>)` plus ` (replace)`. The image installs with `--ignore-scripts --omit=optional`, so pdfjs-dist's
   optional native `@napi-rs/canvas` (in the lockfile, as npm always records optionals) is never
   installed there. Tests: `connectors/sharepoint-files/documents.test.ts`, fake Graph only.
 

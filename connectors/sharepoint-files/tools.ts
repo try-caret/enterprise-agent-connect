@@ -112,7 +112,7 @@ export function fileName(raw: string): string {
 
 // SharePoint compares names without case. Both foldings must agree, so a character JavaScript
 // folds into another (the Kelvin sign into k) does not pass for the folder's own name.
-const sameName = (a: string, b: string) => {
+export const sameName = (a: string, b: string) => {
   const [x, y] = [a.normalize("NFC"), b.normalize("NFC")];
   return x.toLowerCase() === y.toLowerCase() && x.toUpperCase() === y.toUpperCase();
 };

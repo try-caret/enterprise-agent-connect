@@ -2,6 +2,7 @@ import { crc32 } from "node:zlib";
 import { DOMParser, XMLSerializer, type Document, type Element, type Node } from "@xmldom/xmldom";
 import { unzipSync, zipSync, type Zippable } from "fflate";
 import { Denied } from "../../packages/connector-kit/src/common.js";
+import { clip } from "./sandbox.js";
 
 // Untrusted Office files (zip of XML parts), opened with the limits of the library vetting
 // (LIBRARY-SECURITY-VETTING, 2026-11-01): sizes are read from the zip's own directory and
@@ -11,7 +12,11 @@ import { Denied } from "../../packages/connector-kit/src/common.js";
 
 export const MAX_ENTRIES = 2_000;
 export const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
-export const MAX_XML_BYTES = 20 * 1024 * 1024;
+// A part's XML, before parsing. xmldom needs about 100 times a dense part's size in memory (a
+// 19.5 MB document.xml of tiny paragraphs took 1.9 GB, review 2026-11-01), and a real
+// document's parts are far smaller: a SOW's document.xml is well under 1 MB, a long report's a
+// few MB. 5 MB keeps the DOM inside the docx worker's heap.
+export const MAX_XML_BYTES = 5 * 1024 * 1024;
 const MAX_RATIO = 200;
 // Below this a part cannot be a bomb, whatever its ratio (a run of spaces compresses well).
 const RATIO_FLOOR = 1024 * 1024;
@@ -73,7 +78,7 @@ export function openZip(
         if (index > MAX_ENTRIES)
           throw new Denied(`That file has more than ${MAX_ENTRIES} parts, so it is not read`);
         if (seen.has(file.name))
-          throw new Denied(`That file holds ${file.name} twice, so it is not read`);
+          throw new Denied(`That file holds ${clip(file.name, 100)} twice, so it is not read`);
         seen.add(file.name);
         if (/(^|[/\\])\.\.([/\\]|$)/.test(file.name) || /^[/\\]/.test(file.name))
           throw new Denied("That file has a part outside the document, so it is not read");
@@ -106,9 +111,9 @@ export function openZip(
   for (const [name, bytes] of Object.entries(files)) {
     const want = expected.get(name)!;
     if (bytes.length !== want.size)
-      throw new Denied(`That file's zip directory disagrees with ${name}, so it is not read`);
+      throw new Denied(`That file's zip directory disagrees with ${clip(name, 100)}, so it is not read`);
     if ((crc32(bytes) >>> 0) !== want.crc)
-      throw new Denied(`That file is damaged: ${name} does not match its checksum`);
+      throw new Denied(`That file is damaged: ${clip(name, 100)} does not match its checksum`);
     parts.set(name, bytes);
   }
   return parts;
@@ -122,21 +127,21 @@ export function makeZip(parts: Map<string, Uint8Array>): Uint8Array {
 }
 
 const stop = (level: string, message: string): never => {
-  throw new Denied(`That file has XML that could not be read (${level}: ${message.split("\n")[0]})`);
+  throw new Denied(`That file has XML that could not be read (${level}: ${clip(message.split("\n")[0], 150)})`);
 };
 
 /** One XML part, parsed without any DTD, with one root and a bounded depth. */
 export function parseXml(bytes: Uint8Array, name: string): Document {
   if (bytes.length > MAX_XML_BYTES)
-    throw new Denied(`${name} is larger than ${MAX_XML_BYTES / 1024 / 1024} MB, so it is not read`);
+    throw new Denied(`${clip(name, 100)} is larger than ${MAX_XML_BYTES / 1024 / 1024} MB, so it is not read`);
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    throw new Denied(`${name} is not UTF-8 XML, so it is not read`);
+    throw new Denied(`${clip(name, 100)} is not UTF-8 XML, so it is not read`);
   }
   if (/<!DOCTYPE|<!ENTITY/i.test(text))
-    throw new Denied(`${name} declares a DOCTYPE or an entity, so it is not read`);
+    throw new Denied(`${clip(name, 100)} declares a DOCTYPE or an entity, so it is not read`);
   let doc: Document;
   try {
     doc = new DOMParser({ locator: false, onError: stop }).parseFromString(
@@ -147,15 +152,15 @@ export function parseXml(bytes: Uint8Array, name: string): Document {
     if (error instanceof Denied) throw error;
     const cause = (error as { cause?: unknown }).cause;
     if (cause instanceof Denied) throw cause;
-    throw new Denied(`${name} is not well-formed XML, so it is not read`);
+    throw new Denied(`${clip(name, 100)} is not well-formed XML, so it is not read`);
   }
   const roots = Array.from(doc.childNodes).filter((n) => n.nodeType === 1);
-  if (roots.length !== 1) throw new Denied(`${name} must have exactly one root element`);
+  if (roots.length !== 1) throw new Denied(`${clip(name, 100)} must have exactly one root element`);
   // Iterative, so a deep document cannot exhaust the stack here.
   const stack: [Node, number][] = [[roots[0], 1]];
   while (stack.length) {
     const [node, depth] = stack.pop()!;
-    if (depth > MAX_DEPTH) throw new Denied(`${name} is nested too deeply, so it is not read`);
+    if (depth > MAX_DEPTH) throw new Denied(`${clip(name, 100)} is nested too deeply, so it is not read`);
     for (let c = node.firstChild; c; c = c.nextSibling) if (c.nodeType === 1) stack.push([c, depth + 1]);
   }
   return doc;
