@@ -713,10 +713,16 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   after refusing `<!DOCTYPE`/`<!ENTITY` in the text, `onError` throwing, one root, depth 256, 5
   MB a part (xmldom needs about 100 times a dense part's size; a SOW's document.xml is well
   under 1 MB). A fill parses the template's document.xml once and the output's once (the guard
-  checks the bytes to be uploaded). PDFs in a `worker_thread` (512/64/4 MB limits, `env: {}`, `execArgv: []`, 20 s then
-  `terminate()`, no fetch, the vetting's `getDocument` options, local fonts/CMaps/wasm read from
-  `node_modules/pdfjs-dist`; module hooks refuse to load any canvas package); encrypted ones
-  refused. `word_fill_template`: a .docx template (never written) to a new .docx through the
+  checks the bytes to be uploaded). PDFs through pdf.js's legacy build
+  (`pdfjs-dist/legacy/build/pdf.mjs` and its worker): the modern build calls `Promise.try`, which
+  Node 22 (the image's node:22-alpine) lacks, so every PDF failed on staging while the suite passed
+  on Node 26 (2026-11-01); the legacy bundle has no `isEvalSupported`, `new Function` or `eval`.
+  Run the suite on Node 22 before shipping a pdf.js change. 512/64/4 MB limits, `env: {}`, no
+  fetch, the vetting's `getDocument` options, local fonts/CMaps/wasm read from
+  `node_modules/pdfjs-dist`; module hooks refuse to load any canvas package; encrypted ones
+  refused. A parse that fails tells the agent only "could not be read"; the error's class and
+  message (200 characters, never document text) come back as a separate `reason` that the server
+  writes to its log and never returns. `word_fill_template`: a .docx template (never written) to a new .docx through the
   same PUT as graph_upload_file (conflict `fail` unless `replace`); text takes the first run's
   and first paragraph's formatting (Word's PlaceholderText style dropped), newlines are
   paragraphs in a block field and breaks in an inline one, a table field keeps its first row and

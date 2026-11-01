@@ -59,7 +59,16 @@ process.once("message", ({ file, typescript, data, maxOldGenerationSizeMb, memor
     }
   });
   worker.once("error", (error) => {
-    if (!answered) finish(error?.code === "ERR_WORKER_OUT_OF_MEMORY" ? MEMORY : FAILED);
+    if (answered) return;
+    answered = true;
+    if (error?.code === "ERR_WORKER_OUT_OF_MEMORY") return finish(MEMORY);
+    // An uncaught error in the parser: its class and message go to the server's log.
+    const reason = `${error?.name ?? "Error"}: ${String(error?.message ?? error).slice(0, 200)}`;
+    try {
+      process.send({ ok: false, denied: "", reason }, () => finish(FAILED));
+    } catch {
+      finish(FAILED);
+    }
   });
   worker.once("exit", () => {
     if (!answered) finish(FAILED);

@@ -936,7 +936,9 @@ test("review p3: Word XML is parsed off the main thread, and a dense part over 5
   const over = await read(build(5.5 * 1024 * 1024));
   assert.equal(over.isError, true);
   assert.match(over.text, /larger than 5 MB/);
-  // Just under the cap: read in a worker, so the event loop keeps ticking meanwhile.
+  // Just under the cap: read in a worker, so the event loop keeps ticking meanwhile. The file is
+  // built first: making it is this test's own work on this thread, not the parse's.
+  const near = build(4.5 * 1024 * 1024);
   let longest = 0;
   let last = Date.now();
   const timer = setInterval(() => {
@@ -944,7 +946,7 @@ test("review p3: Word XML is parsed off the main thread, and a dense part over 5
     last = Date.now();
   }, 20);
   const heap = process.memoryUsage().heapUsed;
-  const res = await read(build(4.5 * 1024 * 1024));
+  const res = await read(near);
   clearInterval(timer);
   assert.equal(res.isError, false, res.text);
   assert.ok(longest < 1_000, `event loop blocked for ${longest} ms`);
@@ -1190,4 +1192,62 @@ test("an answer of the wrong shape or a huge one is refused, never believed", as
   assert.deepEqual(await sandboxed("pdf", ok, {}, {}), { fine: true });
   assert.equal(liveParses(), 0);
   assert.deepEqual(parsePids(), []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Staging (2026-11-01): every PDF failed on Node 22, since pdf.js's modern build calls
+// Promise.try. These run on whatever Node runs the suite; run it on Node 22 too (the image's).
+
+function flatePdf(lines: string[]): Uint8Array {
+  const content = deflateSync(Buffer.from(lines.map((l, i) => `BT /F1 12 Tf 72 ${720 - i * 20} Td (${l}) Tj ET`).join("\n")));
+  const parts: Buffer[] = [Buffer.from("%PDF-1.7\n")];
+  let at = parts[0].length;
+  const offsets: number[] = [];
+  const add = (b: Buffer) => {
+    parts.push(b);
+    at += b.length;
+  };
+  for (const [i, o] of [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>",
+  ].entries()) {
+    offsets.push(at);
+    add(Buffer.from(`${i + 1} 0 obj\n${o}\nendobj\n`));
+  }
+  offsets.push(at);
+  add(Buffer.concat([Buffer.from(`5 0 obj\n<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`), content, Buffer.from("\nendstream\nendobj\n")]));
+  const xref = at;
+  add(Buffer.from(`xref\n0 6\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`));
+  return new Uint8Array(Buffer.concat(parts));
+}
+
+test("a compressed text PDF is read end to end, on the Node running the suite", async () => {
+  const read = await readPdf(flatePdf(["Payment terms: net 45 days.", "Governing law: Delaware."]));
+  assert.equal(read.pageCount, 1);
+  assert.match(read.pages[0].text, /Payment terms: net 45 days\./);
+  assert.match(read.pages[0].text, /Governing law: Delaware\./);
+  // The worker uses pdf.js's legacy build, the one that runs on Node 22.
+  const { readFileSync } = await import("node:fs");
+  const worker = readFileSync(new URL("./pdf-worker.mjs", import.meta.url), "utf8");
+  assert.match(worker, /pdfjs-dist\/legacy\/build\/pdf\.mjs/);
+  assert.match(worker, /pdfjs-dist\/legacy\/build\/pdf\.worker\.mjs/);
+  assert.doesNotMatch(worker, /"pdfjs-dist\/build\//);
+});
+
+test("a parse failure tells the caller only that, and logs its cause for the operator", async () => {
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
+  try {
+    await assert.rejects(readPdf(new TextEncoder().encode("%PDF-1.4\nnot really a pdf")), (e: Error) => {
+      assert.equal(e.message, "That PDF could not be read");
+      return true;
+    });
+  } finally {
+    console.error = original;
+  }
+  assert.equal(logged.length, 1, logged.join("\n"));
+  assert.match(logged[0], /failed to parse: [A-Za-z]+(Error|Exception): /);
 });

@@ -21,7 +21,7 @@ if (canvasBlocked)
 globalThis.fetch = async () => {
   throw new Error("no network in the PDF reader");
 };
-// pdf.js warns on import that Node should use its legacy build; nothing reads that.
+// pdf.js logs warnings about the documents it reads; nothing reads them here.
 console.log = () => {};
 console.warn = () => {};
 
@@ -29,12 +29,17 @@ const { data, maxPages, maxChars, noAssets } = workerData;
 
 let needsPassword = false;
 const ENCRYPTED = "That PDF is encrypted or has a password, so it is not read";
-const dir = (rel) => fileURLToPath(new URL(rel, import.meta.resolve("pdfjs-dist/build/pdf.mjs")));
+// The legacy build: the modern one calls Promise.try, which Node 22 (the image's node:22-alpine)
+// does not have, so every PDF failed there (staging, 2026-11-01) while tests on Node 26 passed.
+// The legacy bundle has no eval path either (no isEvalSupported, new Function or eval, checked
+// 2026-11-01). Its fonts, CMaps and wasm are the package's own folders, two levels up.
+const BUILD = "pdfjs-dist/legacy/build/pdf.mjs";
+const dir = (rel) => fileURLToPath(new URL(rel, import.meta.resolve(BUILD)));
 
 try {
-  const pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+  const pdfjs = await import(BUILD);
   // The parser runs in this thread (pdf.js's "fake worker"), under this worker's limits.
-  globalThis.pdfjsWorker = await import("pdfjs-dist/build/pdf.worker.mjs");
+  globalThis.pdfjsWorker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
   const task = pdfjs.getDocument({
     data: new Uint8Array(data),
     disableFontFace: true,
@@ -50,10 +55,10 @@ try {
     ...(noAssets
       ? {}
       : {
-          standardFontDataUrl: dir("../standard_fonts/"),
-          cMapUrl: dir("../cmaps/"),
+          standardFontDataUrl: dir("../../standard_fonts/"),
+          cMapUrl: dir("../../cmaps/"),
           cMapPacked: true,
-          wasmUrl: dir("../wasm/"),
+          wasmUrl: dir("../../wasm/"),
         }),
   });
   // A password is never tried.
@@ -95,5 +100,7 @@ try {
   parentPort.postMessage({
     ok: false,
     denied: needsPassword || name === "PasswordException" ? ENCRYPTED : "That PDF could not be read",
+    // For the server's log only, never the caller: the error's class and message, cut short.
+    reason: `${name || "Error"}: ${String(error?.message ?? error).slice(0, 200)}`,
   });
 }

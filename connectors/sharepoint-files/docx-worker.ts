@@ -43,8 +43,13 @@ try {
     parentPort!.postMessage({ ok: true, value: fillDocx(job.bytes, job.fields) });
   }
 } catch (error) {
+  const failure = error as Error;
   parentPort!.postMessage({
     ok: false,
     denied: error instanceof Denied ? error.message : "That file could not be read",
+    // For the server's log only, never the caller: the error's class and message, cut short.
+    ...(error instanceof Denied
+      ? {}
+      : { reason: `${failure?.name ?? "Error"}: ${String(failure?.message ?? error).slice(0, 200)}` }),
   });
 }

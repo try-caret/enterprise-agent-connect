@@ -31,20 +31,26 @@ const MEMORY = 3;
 // The largest answer taken from a parse process.
 const MAX_ANSWER_BYTES = 80 * 1024 * 1024;
 
-type Answer<T> = { ok: true; value: T } | { ok: false; denied: string };
+// `reason`: why a parse failed (the error's class and message), for the server's log only.
+type Answer<T> = { ok: true; value: T } | { ok: false; denied: string; reason?: string };
 
 // A parse process's message, checked before it is believed: an object with ok true and a value,
 // or ok false and a refusal, within the size cap. Anything else is null.
 function checked<T>(m: unknown): Answer<T> | null {
   if (typeof m !== "object" || m === null) return null;
-  const a = m as { ok?: unknown; value?: unknown; denied?: unknown };
+  const a = m as { ok?: unknown; value?: unknown; denied?: unknown; reason?: unknown };
   try {
     if (serialize(m).byteLength > MAX_ANSWER_BYTES) return null;
   } catch {
     return null;
   }
   if (a.ok === true && "value" in a && a.value !== undefined) return { ok: true, value: a.value as T };
-  if (a.ok === false && typeof a.denied === "string") return { ok: false, denied: a.denied };
+  if (a.ok === false && typeof a.denied === "string")
+    return {
+      ok: false,
+      denied: a.denied,
+      ...(typeof a.reason === "string" ? { reason: a.reason } : {}),
+    };
   return null;
 }
 
@@ -180,7 +186,10 @@ function run<T>(file: URL, data: unknown, limits: Required<SandboxLimits>, what:
     clearTimeout(timer);
     const got = answer as Answer<T> | null;
     if (got?.ok) return got.value;
-    if (got && !got.ok) throw new Denied(clip(got.denied, 300));
+    if (got && !got.ok) {
+      if (got.reason) console.error(`[agent-connect] ${what.toLowerCase()} failed to parse: ${clip(got.reason, 300)}`);
+      throw new Denied(clip(got.denied || `${what} could not be read`, 300));
+    }
     if (timedOut) throw new Denied(`${what} took too long to read, so it was stopped`);
     if (code === MEMORY) throw new Denied(`${what} needs too much memory to read, so it was stopped`);
     throw new Denied(`${what} could not be read`);
