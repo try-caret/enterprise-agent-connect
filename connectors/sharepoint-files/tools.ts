@@ -19,9 +19,9 @@ import {
 export const MAX_READ_BYTES = 1_000_000;
 // The MCP endpoint takes request bodies up to 4 MiB, and base64 grows a file by a third.
 export const MAX_UPLOAD_BYTES = 3_000_000;
-const ITEM_ID = /^[A-Za-z0-9!_-]{1,256}$/;
+export const ITEM_ID = /^[A-Za-z0-9!_-]{1,256}$/;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ITEM_FIELDS =
+export const ITEM_FIELDS =
   "id,name,size,file,folder,webUrl,lastModifiedDateTime,parentReference,remoteItem";
 const TEXT_TYPES =
   /^(text\/|application\/(json|xml|csv|x-yaml|yaml|javascript|sql)\b|[^;]*\+(json|xml)\b)/;
@@ -104,7 +104,7 @@ export function folderPath(raw: string): string {
   return pathSegments(raw).map(encodeURIComponent).join("/");
 }
 
-function fileName(raw: string): string {
+export function fileName(raw: string): string {
   if (!raw || raw.includes("/") || badName(raw))
     throw new Denied("Give a file name without slashes or special characters");
   return encodeURIComponent(raw);

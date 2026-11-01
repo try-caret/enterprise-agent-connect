@@ -587,9 +587,10 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   files and Excel spreadsheets, one app with one site list, one site access check, one setup
   and one status. Capabilities, reads before writes so any write tick's `site_role` fill wins:
   `read_files` (graph_list_sites, graph_list_files, graph_read_file, graph_get_download_link),
-  `read_sheets` (the five excel_* reads), `write_files` (graph_upload_file,
+  `read_sheets` (the five excel_* reads), `read_documents` (document_read), `write_files` (graph_upload_file,
   graph_create_upload_link, destructive), `write_sheets`
-  (excel_update_range, excel_add_table_rows), `read_directory` (graph_list_users). None is
+  (excel_update_range, excel_add_table_rows), `edit_documents` (word_fill_template, destructive:
+  `replace`), `read_directory` (graph_list_users). None is
   required, so a key can have spreadsheets without files. Both write capabilities are
   `siteAccess.write` (the access check then proves write). Through the Microsoft
   connection. Tokens are client credentials for `graph.microsoft.com/.default`, cached per
@@ -663,6 +664,37 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   also kept to the connection's `config.sites`, so a stale or typed-in address is never reached
   even if the app holds a wider permission. `graph_list_users` returns name, email, title and
   department only, and pages with `cursor`.
+  Word files and PDFs (`documents.ts`, `docx.ts`, `ooxml.ts`, `pdf.ts` + `pdf-worker.mjs`; spec
+  CONNECT-WORD-TOOLS-SPEC, library settings from the 2026-11-01 security vetting): the bytes are
+  downloaded here (`responseType: "bytes"`, the same 302 to SharePoint as `"text"`), with the
+  files tools' site, library and folder checks. `document_read`: .docx/.docm (10 MB) as
+  paragraphs, tables, fields (content controls with a `w:tag`; `mark_fields` wraps their text as
+  `[[field:<tag>]]...[[/field]]`, look-alike text in the document becomes `[ [`), hidden text
+  (vanish, white FFFFFF/FEFEFE, size <= 4 half-points) only in `hidden`, headers and footers,
+  comments with their anchor text, tracked change counts (insertions shown, deletions left out);
+  .pdf (20 MB, 300 pages) as page text; anything else its details. Answers hold at most 300,000
+  characters and continue with `more`/`next` (`<item index>.<hash of id, modified, size,
+  mark_fields>`, so a changed file is read again from the start; an item too large is split into
+  `part`/`parts`). Zips through fflate's `unzipSync` only, with a filter checking every size
+  from the directory before anything is inflated (2,000 entries, 50 MB in all, a ratio over 200
+  past 1 MB, compression 0 or 8, no `..` or rooted names, no repeated names), then each part's
+  length and CRC-32 against the directory (fflate checks neither: a header that lies about a
+  size otherwise cuts a part short silently, seen 2026-11-01); ZIP64 refused. XML through xmldom
+  after refusing `<!DOCTYPE`/`<!ENTITY` in the text, `onError` throwing, one root, depth 256, 20
+  MB a part. PDFs in a `worker_thread` (512/64/4 MB limits, `env: {}`, `execArgv: []`, 20 s then
+  `terminate()`, no fetch, the vetting's `getDocument` options, local fonts/CMaps/wasm read from
+  `node_modules/pdfjs-dist`; module hooks refuse to load any canvas package); encrypted ones
+  refused. `word_fill_template`: a .docx template (never written) to a new .docx through the
+  same PUT as graph_upload_file (conflict `fail` unless `replace`); text takes the first run's
+  and first paragraph's formatting (Word's PlaceholderText style dropped), newlines are
+  paragraphs in a block field and breaks in an inline one, a table field keeps its first row and
+  repeats its last per row; every filled field loses `w:showingPlcHdr` and any `dataBinding`.
+  Before upload the guard re-opens the output and refuses unless every other zip part is
+  byte-identical and the document with every filled field's content taken out serializes
+  identically (text and markup). Audit `${site} ${template} -> ${folder}/${name}`, then
+  `-> <new id>`. The image installs with `--ignore-scripts --omit=optional`, so pdfjs-dist's
+  optional native `@napi-rs/canvas` (in the lockfile, as npm always records optionals) is never
+  installed there. Tests: `connectors/sharepoint-files/documents.test.ts`, fake Graph only.
 
 - Outlook calendar (`outlook-calendar`): the mail model applied to calendars: no Graph
   Calendars permission, Exchange RBAC roles
