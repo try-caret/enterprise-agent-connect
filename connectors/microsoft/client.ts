@@ -193,7 +193,7 @@ export function microsoftClient(
     const raw = request.body instanceof Uint8Array;
     // A file's content answers 302 to a pre-authenticated SharePoint download address, fetched
     // without the token; any other redirect is refused.
-    const download = request.responseType === "text" ? unguarded : fetchImpl;
+    const download = request.responseType ? unguarded : fetchImpl;
     let res = await download(vendorUrl(origin, request.path), {
       redirect: "manual",
       method: request.method,
@@ -216,6 +216,12 @@ export function microsoftClient(
       await res.body?.cancel();
       res = await fetchImpl(sharePointUrl(res.headers.get("location") ?? ""));
     }
+    if (request.responseType === "bytes" && res.ok)
+      return {
+        status: res.status,
+        data: new Uint8Array(await res.arrayBuffer()),
+        headers: Object.fromEntries(res.headers),
+      };
     const text = await res.text();
     const asText = request.responseType === "text" && res.ok;
     return {

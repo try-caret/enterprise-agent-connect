@@ -252,3 +252,28 @@ test("a file's content follows Graph's download address only to SharePoint, with
     /redirect \(302\)/,
   );
 });
+
+test("a binary file's content follows the same download address and comes back as bytes", async () => {
+  const seen: { url: string; auth?: string }[] = [];
+  const to = { location: "https://acme.sharepoint.com/_layouts/15/download.aspx?x=1" };
+  const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff]);
+  const fake = (async (input: string, init?: RequestInit) => {
+    seen.push({ url: input, auth: (init?.headers as Record<string, string>)?.authorization });
+    if (input.includes("/oauth2/")) return Response.json(TOKEN);
+    if (input.includes("sharepoint.com")) return new Response(bytes);
+    return new Response(null, { status: 302, headers: to });
+  }) as typeof fetch;
+  const ms = microsoftClient({ sharedApp: null }, fake);
+  const read = {
+    method: "GET",
+    path: "/v1.0/drives/d/items/i/content",
+    responseType: "bytes",
+  } as const;
+  const res = await ms.call(microsoftConn, read);
+  assert.equal(res.status, 200);
+  assert.ok(res.data instanceof Uint8Array);
+  assert.deepEqual([...(res.data as Uint8Array)], [...bytes]);
+  assert.deepEqual(seen.at(-1), { url: to.location, auth: undefined });
+  to.location = "https://evil.example/x";
+  await assert.rejects(ms.call(microsoftConn, read), /not SharePoint: evil\.example/);
+});
