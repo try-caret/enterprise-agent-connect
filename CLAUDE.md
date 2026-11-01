@@ -720,9 +720,9 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   Run the suite on Node 22 before shipping a pdf.js change. 512/64/4 MB limits, `env: {}`, no
   fetch, the vetting's `getDocument` options, local fonts/CMaps/wasm read from
   `node_modules/pdfjs-dist`; module hooks refuse to load any canvas package; encrypted ones
-  refused. A parse that fails tells the agent only "could not be read"; the error's class and
-  message (200 characters, never document text) come back as a separate `reason` that the server
-  writes to its log and never returns. `word_fill_template`: a .docx template (never written) to a new .docx through the
+  refused. A parse that fails tells the agent only "could not be read"; the error's class name
+  alone (never its message: pdf.js puts document strings in messages) comes back as a separate
+  `reason` that the server checks is a plain name, writes to its log and never returns. `word_fill_template`: a .docx template (never written) to a new .docx through the
   same PUT as graph_upload_file (conflict `fail` unless `replace`); text takes the first run's
   and first paragraph's formatting (Word's PlaceholderText style dropped), newlines are
   paragraphs in a block field and breaks in an inline one, a table field keeps its first row and

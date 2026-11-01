@@ -1149,7 +1149,7 @@ async function goneWithin(pid: number, ms: number) {
   return !alive(pid);
 }
 
-test("a parse process exits when the server is killed, even mid-parse", async () => {
+test("a parse process exits when the server is killed, even mid-parse", { timeout: 20_000 }, async () => {
   const sandbox = new URL("./sandbox.ts", import.meta.url).href;
   const server = parser(
     "server.mjs",
@@ -1165,7 +1165,7 @@ test("a parse process exits when the server is killed, even mid-parse", async ()
   assert.ok(await goneWithin(pid, 5_000), "the parse process outlived the server");
 });
 
-test("a parse process stops on its own clock, a little after the server's", async () => {
+test("a parse process stops on its own clock, a little after the server's", { timeout: 20_000 }, async () => {
   const host = fork(new URL("./parse-host.mjs", import.meta.url), [], {
     serialization: "advanced",
     stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -1249,5 +1249,61 @@ test("a parse failure tells the caller only that, and logs its cause for the ope
     console.error = original;
   }
   assert.equal(logged.length, 1, logged.join("\n"));
-  assert.match(logged[0], /failed to parse: [A-Za-z]+(Error|Exception): /);
+  assert.match(logged[0], /failed to parse: [A-Za-z]+(Error|Exception)$/);
+});
+
+// Review (2026-11-01): pdf.js puts document strings in its error messages, so only the class name
+// is logged; a CMap PDF proves the fonts/CMaps folders resolve for the legacy build.
+
+function rawPdf(objects: (string | Buffer)[]): Uint8Array {
+  const parts: Buffer[] = [Buffer.from("%PDF-1.7\n")];
+  let at = parts[0].length;
+  const offsets: number[] = [];
+  objects.forEach((o, i) => {
+    offsets.push(at);
+    const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), Buffer.isBuffer(o) ? o : Buffer.from(o, "latin1"), Buffer.from("\nendobj\n")]);
+    parts.push(b);
+    at += b.length;
+  });
+  parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+  return new Uint8Array(Buffer.concat(parts));
+}
+const pdfStream = (dict: string, body: string) => Buffer.concat([Buffer.from(`<< ${dict} /Length ${body.length} >>\nstream\n`), Buffer.from(body, "latin1"), Buffer.from("\nendstream")]);
+const pdfPage = (contents: string) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contents} >>`;
+
+test("a failed parse logs no document text and cannot forge a log line", async () => {
+  const leaky = [
+    // pdf.js answers 'Bad filter name "<the string>"' for both.
+    rawPdf(["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [4 0 R] /Count 1 >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", pdfPage("5 0 R"),
+      pdfStream("/Filter [(CONFIDENTIAL: price is $987,654\\n[agent-connect] forged log line)]", "BT /F1 12 Tf (hi) Tj ET")]),
+    rawPdf(["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [4 0 R] /Count 1 >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", pdfPage("[5 0 R 6 0 R]"),
+      pdfStream("", "BT /F1 12 Tf (hi) Tj ET"), pdfStream("/Filter [(SECRET-IN-SECOND-STREAM: the client is Acme)]", "BT (x) Tj ET")]),
+  ];
+  for (const bytes of leaky) {
+    const logged: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
+    try {
+      await readPdf(bytes).catch((e: Error) => assert.equal(e.message, "That PDF could not be read"));
+    } finally {
+      console.error = original;
+    }
+    for (const line of logged) {
+      assert.doesNotMatch(line, /CONFIDENTIAL|987,654|forged|SECRET|Acme/, line);
+      assert.doesNotMatch(line, /[\r\n]/, line);
+      assert.match(line, /failed to parse: [A-Za-z][A-Za-z0-9_]*$/, line);
+    }
+  }
+});
+
+test("a PDF that needs a built-in CMap reads its text (the legacy build's CMap folder resolves)", async () => {
+  const read = await readPdf(rawPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+    "<< /Type /Font /Subtype /Type0 /BaseFont /HeiseiMin-W3 /Encoding /UniJIS-UCS2-H /DescendantFonts [6 0 R] >>",
+    pdfPage("5 0 R"),
+    pdfStream("", "BT /F1 12 Tf <0041004200430044> Tj ET"),
+    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiMin-W3 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> >>",
+  ]));
+  assert.match(read.pages[0].text, /ABCD/);
 });

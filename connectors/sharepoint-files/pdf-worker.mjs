@@ -31,8 +31,9 @@ let needsPassword = false;
 const ENCRYPTED = "That PDF is encrypted or has a password, so it is not read";
 // The legacy build: the modern one calls Promise.try, which Node 22 (the image's node:22-alpine)
 // does not have, so every PDF failed there (staging, 2026-11-01) while tests on Node 26 passed.
-// The legacy bundle has no eval path either (no isEvalSupported, new Function or eval, checked
-// 2026-11-01). Its fonts, CMaps and wasm are the package's own folders, two levels up.
+// The legacy bundle has no eval path either (no isEvalSupported, `new Function` or `eval(`,
+// checked 2026-11-01; its one `Function('return this')()` is core-js's globalThis fallback, never
+// reached on Node). Its fonts, CMaps and wasm are the package's own folders, two levels up.
 const BUILD = "pdfjs-dist/legacy/build/pdf.mjs";
 const dir = (rel) => fileURLToPath(new URL(rel, import.meta.resolve(BUILD)));
 
@@ -100,7 +101,8 @@ try {
   parentPort.postMessage({
     ok: false,
     denied: needsPassword || name === "PasswordException" ? ENCRYPTED : "That PDF could not be read",
-    // For the server's log only, never the caller: the error's class and message, cut short.
-    reason: `${name || "Error"}: ${String(error?.message ?? error).slice(0, 200)}`,
+    // For the server's log only, never the caller: the error's class name alone. pdf.js puts
+    // document strings (filter, font and CMap names) into its messages, so the message stays out.
+    reason: /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) ? name : "Error",
   });
 }

@@ -47,9 +47,10 @@ try {
   parentPort!.postMessage({
     ok: false,
     denied: error instanceof Denied ? error.message : "That file could not be read",
-    // For the server's log only, never the caller: the error's class and message, cut short.
+    // For the server's log only, never the caller: the error's class name alone (a message can
+    // carry document text).
     ...(error instanceof Denied
       ? {}
-      : { reason: `${failure?.name ?? "Error"}: ${String(failure?.message ?? error).slice(0, 200)}` }),
+      : { reason: /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(String(failure?.name ?? "")) ? String(failure.name) : "Error" }),
   });
 }

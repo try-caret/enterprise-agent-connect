@@ -31,7 +31,7 @@ const MEMORY = 3;
 // The largest answer taken from a parse process.
 const MAX_ANSWER_BYTES = 80 * 1024 * 1024;
 
-// `reason`: why a parse failed (the error's class and message), for the server's log only.
+// `reason`: why a parse failed (the error's class name only), for the server's log only.
 type Answer<T> = { ok: true; value: T } | { ok: false; denied: string; reason?: string };
 
 // A parse process's message, checked before it is believed: an object with ok true and a value,
@@ -187,7 +187,12 @@ function run<T>(file: URL, data: unknown, limits: Required<SandboxLimits>, what:
     const got = answer as Answer<T> | null;
     if (got?.ok) return got.value;
     if (got && !got.ok) {
-      if (got.reason) console.error(`[agent-connect] ${what.toLowerCase()} failed to parse: ${clip(got.reason, 300)}`);
+      // Only a plain class name is logged: anything else from the parse process (document text,
+      // a newline that forges a log line) becomes "Error".
+      if (got.reason) {
+        const name = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(got.reason) ? got.reason : "Error";
+        console.error(`[agent-connect] ${what.toLowerCase()} failed to parse: ${name}`);
+      }
       throw new Denied(clip(got.denied || `${what} could not be read`, 300));
     }
     if (timedOut) throw new Denied(`${what} took too long to read, so it was stopped`);
