@@ -162,6 +162,7 @@ export function documentTools(limits: PdfLimits & SandboxLimits = {}): Toolset {
                   DOCX_WORKER,
                   { op: "read", bytes, markFields: mark_fields },
                   limits,
+                  ctx.agentId,
                 );
                 items = doc.items;
                 extra = { tracked_changes: doc.tracked_changes };
@@ -170,7 +171,7 @@ export function documentTools(limits: PdfLimits & SandboxLimits = {}): Toolset {
               } else {
                 if (!/^%PDF-/.test(Buffer.from(bytes.subarray(0, 1024)).toString("latin1").trimStart()))
                   throw new Denied("That file is not a PDF");
-                const pdf = await readPdf(bytes, limits);
+                const pdf = await readPdf(bytes, limits, ctx.agentId);
                 items = pieces("pages", pdf.pages);
                 extra = {
                   page_count: pdf.pageCount,
@@ -254,6 +255,7 @@ export function documentTools(limits: PdfLimits & SandboxLimits = {}): Toolset {
                   DOCX_WORKER,
                   { op: "fill", bytes, fields: fields as Record<string, FillValue> },
                   limits,
+                  ctx.agentId,
                 );
                 const conflict = replace ? "replace" : "fail";
                 const item: DriveItem = await ok(ctx, mark, {

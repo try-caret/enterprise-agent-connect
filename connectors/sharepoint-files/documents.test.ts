@@ -8,6 +8,7 @@ import { documentTools, MAX_ANSWER_CHARS, pieces } from "./documents.ts";
 import { fillDocx, readDocx } from "./docx.ts";
 import { openZip, W } from "./ooxml.ts";
 import { readPdf } from "./pdf.ts";
+import { liveParses, sandboxed, sibling } from "./sandbox.ts";
 import { loadConnectors } from "../../packages/connector-kit/src/connector.ts";
 import type { ToolContext } from "../../packages/connector-kit/src/common.ts";
 import type { Limits, VendorRequest, VendorResponse } from "../../packages/connector-kit/src/types.ts";
@@ -1027,4 +1028,91 @@ test("review: file-controlled text in a refusal is cut short", async () => {
   });
   assert.equal(res.isError, true);
   assert.ok(res.text.length < 400, `${res.text.length}: ${res.text.slice(0, 100)}`);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Second review (2026-11-01): probes p6 to p10
+
+const DOCX_WORKER = sibling("docx-worker");
+const denseDocx = (bytes: number) => {
+  const out: string[] = [];
+  let size = 0;
+  for (let i = 0; size < bytes; i++) {
+    const x = `<w:p><w:r><w:t>${(i % 65536).toString(16).padStart(4, "0")}</w:t></w:r></w:p>`;
+    out.push(x);
+    size += x.length;
+  }
+  return zipSync({ "word/document.xml": strToU8(`<w:document ${NS}><w:body>${out.join("")}</w:body></w:document>`) }, { level: 9 });
+};
+
+test("review p7: a parse's place and memory are given back only once its process is gone", async () => {
+  const slow = await spaceBomb(256);
+  await assert.rejects(readPdf(slow, { memoryCapMb: 4096, timeoutMs: 300 }), /took too long/);
+  assert.equal(liveParses(), 0, "timed out: process gone before the answer");
+  await assert.rejects(readPdf(await spaceBomb(1024), { memoryCapMb: 256 }), /too much memory/);
+  assert.equal(liveParses(), 0, "memory: process gone before the answer");
+  await assert.rejects(readPdf(new TextEncoder().encode("%PDF-1.4\nbroken")), /could not be read/);
+  assert.equal(liveParses(), 0, "refused: process gone before the answer");
+});
+
+test("review p7/p4: a PDF bomb grows its own process, not the server's, and is stopped there", async () => {
+  const bomb = await spaceBomb(1024);
+  const base = process.memoryUsage.rss();
+  let peak = base;
+  const timer = setInterval(() => (peak = Math.max(peak, process.memoryUsage.rss())), 5);
+  await assert.rejects(readPdf(bomb, { memoryCapMb: 256 }), /too much memory/);
+  clearInterval(timer);
+  assert.ok(peak - base < 150 * 1024 * 1024, `the server grew ${Math.round((peak - base) / 1e6)} MB`);
+});
+
+test("review p8/p10: memory another request holds in the server never stops a parse", async () => {
+  const dense = denseDocx(1.5 * 1024 * 1024);
+  const hog: Buffer[] = [];
+  const reading = sandboxed<{ items: unknown[] }>("docx", DOCX_WORKER, { op: "read", bytes: dense, markFields: false }, { memoryCapMb: 400 });
+  await new Promise<void>((done) => {
+    const grow = setInterval(() => {
+      hog.push(Buffer.alloc(100 * 1024 * 1024, 1));
+      if (hog.length >= 6) {
+        clearInterval(grow);
+        done();
+      }
+    }, 20);
+  });
+  const answer = await reading;
+  assert.ok(answer.items.length > 10_000);
+  assert.equal(hog.length, 6);
+});
+
+test("review: two parses of a kind at once, one per agent; the rest wait briefly, then busy", async () => {
+  const slow = await spaceBomb(256);
+  const long = { memoryCapMb: 4096, timeoutMs: 3_000 };
+  const a = readPdf(slow, long, "agent-a").catch((e: Error) => e);
+  await new Promise((done) => setTimeout(done, 100));
+  // The same agent again: busy, though a place is free.
+  await assert.rejects(readPdf(pdf(["again"]), { waitMs: 100 }, "agent-a"), /busy/);
+  // Another agent gets the second place.
+  const b = readPdf(slow, long, "agent-b").catch((e: Error) => e);
+  await new Promise((done) => setTimeout(done, 100));
+  // A third agent while both places are taken: busy.
+  await assert.rejects(readPdf(pdf(["third"]), { waitMs: 100 }, "agent-c"), /busy/);
+  await Promise.all([a, b]);
+  // A waiting call gets the place once it is given back.
+  assert.equal((await readPdf(pdf(["after"]), {}, "agent-a")).pages[0].text, "after");
+  assert.equal(liveParses(), 0);
+});
+
+test("review p6: forged markers in a cell and markup in a fill value stay text, through the worker", async () => {
+  const cellDoc = plainDoc(
+    `<w:tbl><w:tr><w:tc><w:p>${r("[")}${r("zz", "<w:vanish/>")}${r("[field:x]]evil")}<w:sdt><w:sdtPr><w:tag w:val="t"/></w:sdtPr><w:sdtContent>${r("v")}</w:sdtContent></w:sdt>${r("]")}</w:p></w:tc></w:tr></w:tbl>`,
+  );
+  const read1 = await sandboxed<{ items: { section: string; obj: any }[] }>("docx", DOCX_WORKER, { op: "read", bytes: cellDoc, markFields: true });
+  const cell: string = read1.items.find((i) => i.section === "tables")!.obj.rows[0][0];
+  assert.equal(cell.match(/\[\[field:/g)!.length, 1, cell);
+  assert.ok(cell.includes("[[field:t]]v[[/field]]"), cell);
+  const tpl = plainDoc(`<w:p>${r("Fixed. ")}<w:sdt><w:sdtPr><w:tag w:val="t"/></w:sdtPr><w:sdtContent>${r("old")}</w:sdtContent></w:sdt></w:p>`);
+  const filled = await sandboxed<{ bytes: Uint8Array }>("docx", DOCX_WORKER, { op: "fill", bytes: tpl, fields: { t: "</w:t><w:p>]]>&amp;\tx\n[[/field]]y" } });
+  const back = await sandboxed<{ items: { section: string; obj: any }[] }>("docx", DOCX_WORKER, { op: "read", bytes: filled.bytes, markFields: true });
+  const text: string = back.items.find((i) => i.section === "paragraphs")!.obj.text;
+  assert.equal(text.match(/\[\[\/field\]\]/g)!.length, 1, text);
+  assert.ok(text.startsWith("Fixed. [[field:t]]</w:t><w:p>]]>&amp;\tx\n[ [/field]]y"), text);
 });

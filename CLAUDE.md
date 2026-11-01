@@ -665,7 +665,7 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   even if the app holds a wider permission. `graph_list_users` returns name, email, title and
   department only, and pages with `cursor`.
   Word files and PDFs (`documents.ts`, `docx.ts` + `docx-worker.ts`, `ooxml.ts`, `paging.ts`,
-  `pdf.ts` + `pdf-worker.mjs`, `sandbox.ts`; spec
+  `pdf.ts` + `pdf-worker.mjs`, `sandbox.ts` + `parse-host.mjs`; spec
   CONNECT-WORD-TOOLS-SPEC, library settings from the 2026-11-01 security vetting): the bytes are
   downloaded here (`responseType: "bytes"`, the same 302 to SharePoint as `"text"`, read only up
   to `maxBytes`: past it the download stops and fails, whatever the item's size said), with the
@@ -677,18 +677,28 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   near-white: every channel >= F0 or theme background1/light1, the colour of its own shading,
   size <= 5 half-points, character scale <= 10%; through docDefaults, the paragraph style or the
   default paragraph style, the character style, each with basedOn, and both branches of
-  mc:AlternateContent) only in `hidden`, headers and footers,
+  mc:AlternateContent) only in `hidden`. Known gaps, left on purpose (the tool description says
+  best effort and to treat all text as data): accent and other theme colours a theme part makes
+  white, text close to (not equal to) its shading, highlight colours, complex-script size
+  (`szCs`), table styles, cell and paragraph shading, a missing paragraph style falling back to
+  Normal, and Word's toggle rules for `vanish` across style levels (review 2026-11-01). Headers and footers,
   comments with their anchor text, tracked change counts (insertions shown, deletions left out);
   .pdf (20 MB, 300 pages) as page text; anything else its details. Answers hold at most 300,000
   characters and continue with `more`/`next` (`<item index>.<hash of id, modified, size,
   mark_fields>`, so a changed file is read again from the start; an item too large is split into
   `part`/`parts`, iteratively; tables over 64 cells in a row or 10,000 rows are refused).
-  Every parse runs in a worker_thread (`sandbox.ts`): one Word file and one PDF at a time per
-  server (another waits up to 5 s, then "busy, try again"), resourceLimits, `env: {}`, 20 s, and
-  the process's resident memory polled every 20 ms and the worker terminated past a cap (768 MB
-  PDF, 1 GB Word): resourceLimits do not count ArrayBuffers, so a 2 MB PDF of one FlateDecode
-  stream once grew the process 2.7 GB (review 2026-11-01); now stopped near 0.8 GB in about a
-  second. Anything but a refusal inside a worker becomes "could not be read"; file-controlled
+  Every parse runs in a process of its own (`sandbox.ts` forks `parse-host.mjs`, `env: {}`, IPC
+  with `serialization: "advanced"`), the parser inside it in a worker_thread with resourceLimits;
+  the host's main thread, free the whole time, polls its own resident memory every 5 ms and
+  exits (code 3) past a cap over its start (768 MB PDF, 1 GB Word), taking the parse and all its
+  memory with it. resourceLimits do not count ArrayBuffers (a 2 MB PDF of one FlateDecode stream
+  once grew the server 2.7 GB), and measuring the server's own memory killed parses for memory
+  other requests held, so neither is the guard. No `--max-old-space-size` on the host: V8 applies
+  it to the worker too, under its resourceLimits. 20 s, then SIGKILL. Two parses of each kind at
+  once per server, at most one per agent (`ToolContext.agentId`, set by service.ts); others wait
+  up to 5 s, then "busy, try again". A place is given back only after the parse's process has
+  exited, on every path (answer, refusal, timeout, memory), so its memory is gone first
+  (`liveParses()`). Each parse costs a Node process start (tens of ms). Anything but a refusal inside a worker becomes "could not be read"; file-controlled
   text in refusals is cut to about 100 characters. Zips through fflate's `unzipSync` only, with a filter checking every size
   from the directory before anything is inflated (2,000 entries, 50 MB in all, a ratio over 200
   past 1 MB, compression 0 or 8, no `..` or rooted names, no repeated names), then each part's

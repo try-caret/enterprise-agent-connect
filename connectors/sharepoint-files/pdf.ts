@@ -2,8 +2,8 @@ import { sandboxed, type SandboxLimits } from "./sandbox.js";
 
 // A PDF's text, read by pdf.js in a worker_thread (pdf-worker.mjs) through sandbox.ts: the
 // vetting's limits (512 MB old generation, 64 MB young, 4 MB stack, an empty environment, no
-// network, a 20 s wall clock, then terminate()), one PDF at a time, and the process's memory
-// watched, since pdf.js inflates streams into ArrayBuffers the heap limit does not count.
+// network, a 20 s wall clock), in a process of its own whose memory is watched, since pdf.js
+// inflates streams into ArrayBuffers the heap limit does not count.
 // Encrypted PDFs are refused; at most 300 pages are read.
 
 export const MAX_PAGES = 300;
@@ -23,12 +23,17 @@ export type PdfLimits = SandboxLimits & { noAssets?: boolean };
 
 type Raw = { pages: PdfText["pages"]; pageCount: number; cut: boolean; canvasBlocked: boolean };
 
-export async function readPdf(bytes: Uint8Array, limits: PdfLimits = {}): Promise<PdfText> {
+export async function readPdf(
+  bytes: Uint8Array,
+  limits: PdfLimits = {},
+  owner?: string,
+): Promise<PdfText> {
   const m = await sandboxed<Raw>(
     "pdf",
     new URL("./pdf-worker.mjs", import.meta.url),
     { data: bytes, maxPages: MAX_PAGES, maxChars: MAX_PDF_CHARS, noAssets: Boolean(limits.noAssets) },
     limits,
+    owner,
   );
   const notes: string[] = [];
   if (m.pageCount > MAX_PAGES) notes.push(`Only the first ${MAX_PAGES} of ${m.pageCount} pages are read.`);
