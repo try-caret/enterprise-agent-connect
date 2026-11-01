@@ -2,7 +2,9 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
-RUN npm ci
+# No install scripts, and no optional packages: pdfjs-dist's optional native @napi-rs/canvas
+# stays out (text extraction never draws).
+RUN npm ci --ignore-scripts --omit=optional
 COPY packages/server/src ./packages/server/src
 COPY packages/server/migrations ./packages/server/migrations
 COPY packages/connector-kit/src ./packages/connector-kit/src
@@ -16,7 +18,7 @@ COPY package.json package-lock.json ./
 # The database drivers are optional peers of the npm package; the image carries all of them, at
 # the versions the lockfile pins for development.
 RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));for(const n in p.peerDependencies){p.dependencies[n]=p.peerDependencies[n];delete p.devDependencies[n]}fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
-  && npm ci --omit=dev
+  && npm ci --omit=dev --ignore-scripts --omit=optional
 # npm is not used at runtime and its bundled tar carries CVEs.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/dist ./dist
