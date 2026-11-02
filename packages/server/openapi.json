@@ -8857,8 +8857,54 @@
                       "value"
                     ],
                     "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "oauth2_jwt"
+                      },
+                      "tokenUrl": {
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "subject": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "privateKey": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      },
+                      "audience": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[\\x20-\\x7E]*$"
+                      },
+                      "scope": {
+                        "type": "string",
+                        "pattern": "^[\\x21-\\x7e]+( [\\x21-\\x7e]+)*$"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "tokenUrl",
+                      "issuer",
+                      "subject",
+                      "privateKey",
+                      "audience"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
+              },
+              "contentType": {
+                "type": "string",
+                "pattern": "^application\\/(json|[A-Za-z0-9.-]+\\+json)$"
               },
               "headers": {
                 "default": {},
@@ -9117,6 +9163,17 @@
                           "additionalProperties": false
                         }
                       ]
+                    },
+                    "body": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    "contentType": {
+                      "type": "string",
+                      "pattern": "^application\\/(json|[A-Za-z0-9.-]+\\+json)$"
                     }
                   },
                   "required": [
