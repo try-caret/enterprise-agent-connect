@@ -185,6 +185,9 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
   wordpress: {
     conn: { config: { host: "blog.example.com", username: "u" }, secret: { app_password: "p" } },
     request: { method: "GET", path: "/users/me" },
+  lusha: {
+    conn: { config: { host: "api.lusha.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/v3/account/usage" },
   },
 };
 for (const id of [

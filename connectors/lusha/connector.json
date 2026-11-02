@@ -1,0 +1,59 @@
+{
+  "id": "lusha",
+  "name": "Lusha",
+  "description": "Let agents look up business contacts and companies in Lusha: job title, work email and phone, company size, industry and funding. For account research, call lists and matching event delegates to sponsors.",
+  "logo": "/brand/registry/lusha.svg",
+  "identity": "A Lusha API key. Every lookup that reveals an email or phone number spends your company's Lusha credits, so give the key its own credit limit.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API key with a credit limit",
+      "body": "You need a Lusha admin or manager for this, so the key can carry a credit limit of its own. The key acts as the person who made it and spends from your company's shared credits. Lusha shows the key on the API page; copy it for the form below.",
+      "link": {
+        "label": "Lusha: manage API keys",
+        "href": "https://dashboard.lusha.com/api/manage-api-keys"
+      },
+      "click": [
+        "In Lusha, open API & connectors in the left sidebar, then the Manage API Keys tab.",
+        "Create a key for agents and set its credit limit to what agents may spend.",
+        "Copy the key."
+      ],
+      "copy": [
+        "curl -s -H \"api_key: $LUSHA_API_KEY\" https://api.lusha.com/v3/account/usage"
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [{ "id": "api_key", "label": "API key", "secret": true }],
+  "capabilities": [
+    {
+      "id": "contacts",
+      "label": "Look up contacts",
+      "description": "Find one person by email, LinkedIn address, Lusha id, or name and company: job title, seniority, department, start date and previous job, location, work email and phone.",
+      "required": true,
+      "note": "Each search, and each email or phone number revealed, spends Lusha credits, up to the key's credit limit.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["lusha_find_contact"]
+    },
+    {
+      "id": "companies",
+      "label": "Look up companies",
+      "description": "Find one company by domain, name or Lusha id: size, revenue, industry, location, description and funding.",
+      "note": "Spends Lusha credits.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["lusha_find_company"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/v3/account/usage",
+    "label": "Lusha credits remaining",
+    "show": "credits.remaining"
+  },
+  "revoke": "In Lusha, open API & connectors, then Manage API Keys, and delete the key. Agents lose access to Lusha at once."
+}
