@@ -311,7 +311,8 @@ packages/server/src/index.ts # createAgentConnect(options): checks and wires eve
                       # while its module is passed;
                       # a module may carry its connector.json inline as `connector`) and
                       # http-only definitions; checked like a folder's. Teams may be left out
-packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<id>/index.ts)
+packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<id>/index.ts);
+                      # describedApp(id): a built-in with only a connector.json `http` block
 packages/connector-kit/src/branding.ts # names shown and created in tenants (BRANDING), {brand.*} placeholders
 packages/server/src/server.ts # the container's entry: env (old names for one release) → createAgentConnect, listen
 packages/server/src/app.ts # HTTP routing, agent auth, admin API handlers (typed against api.ts)
@@ -343,7 +344,9 @@ scripts/openapi-to-connector.ts # drafts an http connector.json from an OpenAPI 
 packages/server/src/consent.ts # signed approval state (org, app, capability ceiling, return address, tenant once
                       # approved, nonce, 15 min expiry)
 connectors/http/      # the generic module for a connector.json `http` block; exports guardedFetch,
-                      # authHeaders, formValues, paramLimits and answerWithin for its siblings
+                      # authHeaders, formValues, paramLimits, answerWithin and connectionAddress
+                      # (an address's {field}s filled per connection, connector-kit fillAddress,
+                      # held to allowedHosts, one guarded fetch per origin) for its siblings
 connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
                       # templates with XML-escaped values, faults, result path), xml.ts (the XML
                       # reader: no DTD, five entities, depth 100; also used by the scripts)

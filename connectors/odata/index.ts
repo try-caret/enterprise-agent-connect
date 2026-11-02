@@ -26,6 +26,7 @@ import {
   answerWithin,
   authHeaders,
   formValues,
+  connectionAddress,
   guardedFetch,
   MAX_BODY_BYTES,
   MAX_TARGET_BYTES,
@@ -174,14 +175,19 @@ function option(link: string, name: string): string | null {
 
 export function odataVendor(connector: Connector, fetchImpl: Fetch = fetch): Vendor {
   const od = connector.odata!;
-  const root = new URL(od.serviceRoot);
-  const prefix = root.pathname.replace(/\/+$/, "");
   const auth = od.auth;
-  const safe = guardedFetch(
-    [root.origin, ...(auth.type === "oauth2" ? [new URL(auth.tokenUrl).origin] : [])],
+  const tokenUrl = auth.type === "oauth2" ? auth.tokenUrl : null;
+  const addressOf = connectionAddress(
+    connector,
+    od.serviceRoot,
+    od.allowedHosts,
+    tokenUrl,
     fetchImpl,
   );
-  const oauth = auth.type === "oauth2" ? clientCredentials(connector.name, safe) : null;
+  // Only ever fetches the token, so one client serves every connection's address.
+  const oauth = tokenUrl
+    ? clientCredentials(connector.name, guardedFetch([new URL(tokenUrl).origin], fetchImpl))
+    : null;
   const creds = (c: VendorConnection) =>
     auth.type === "oauth2"
       ? {
@@ -189,6 +195,8 @@ export function odataVendor(connector: Connector, fetchImpl: Fetch = fetch): Ven
           clientId: c.config[auth.clientId],
           clientSecret: c.secret[auth.clientSecret],
           scope: auth.scope,
+          clientAuth: auth.clientAuth,
+          audience: auth.audience,
         }
       : null!;
   const versionHeaders: Record<string, string> =
@@ -197,6 +205,8 @@ export function odataVendor(connector: Connector, fetchImpl: Fetch = fetch): Ven
       : { dataserviceversion: "2.0", maxdataserviceversion: "2.0" };
 
   async function send(c: VendorConnection, request: VendorRequest) {
+    const { url: root, safe } = addressOf(c);
+    const prefix = root.pathname.replace(/\/+$/, "");
     // The path is the tool's, already encoded; it must stay under the service root.
     const url = new URL(`${root.origin}${prefix}${request.path}`);
     if (url.origin !== root.origin || !`${url.pathname}/`.startsWith(`${prefix}/`))
@@ -244,6 +254,7 @@ export function odataVendor(connector: Connector, fetchImpl: Fetch = fetch): Ven
   return {
     async connect(fields) {
       const { config, secret } = formValues(connector, fields);
+      const root = addressOf({ config }).url;
       const conn: VendorConnection = { config: { host: root.host, ...config }, secret };
       if (oauth) await oauth.signIn(creds(conn));
       return { ...conn, accountLabel: conn.config[connector.accountKey] ?? root.host };

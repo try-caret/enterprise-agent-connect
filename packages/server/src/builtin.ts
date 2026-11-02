@@ -3,6 +3,7 @@ import dynamics365 from "../../../connectors/dynamics-365/index.js";
 import entra from "../../../connectors/entra/index.js";
 import fedex from "../../../connectors/fedex/index.js";
 import gong from "../../../connectors/gong/index.js";
+import httpConnector from "../../../connectors/http/index.js";
 import intune from "../../../connectors/intune/index.js";
 import jamf from "../../../connectors/jamf/index.js";
 import jira from "../../../connectors/jira/index.js";
@@ -21,6 +22,10 @@ import type { BuiltinModule } from "../../../connectors/microsoft/client.js";
 
 export type { BuiltinContext, BuiltinModule } from "../../../connectors/microsoft/client.js";
 export type { ConnectorContext, ConnectorModule } from "../../connector-kit/src/connector.js";
+
+/** A built-in app described only in its connector.json `http` block: the generic module under
+ *  the folder's id. */
+export const describedApp = (id: string): BuiltinModule => ({ ...httpConnector, id });
 
 /** The code behind each connector folder in connectors/ (index.ts beside its connector.json). */
 export const builtinConnectors: BuiltinModule[] = [

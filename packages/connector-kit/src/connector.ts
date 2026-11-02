@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { fillBrandDeep } from "./branding.js";
 import type { Toolset } from "./common.js";
-import type { Vendor } from "./types.js";
+import { ConnectError, type Vendor } from "./types.js";
 
 // A connector describes one app agents can use: how an admin connects it, the capabilities
 // they can grant (each a set of tools), the value limits a grant can carry, and how a
@@ -170,6 +170,99 @@ const vendorProbeSchema = z
 const probeSchema = z.union([httpProbeSchema, vendorProbeSchema]);
 export type Probe = z.infer<typeof probeSchema>;
 
+// An app's address may hold {field} placeholders, filled per connection from plain connect form
+// fields, e.g. https://{host}/api/v4 for an app each company runs itself. Each stands for the
+// whole host, one label of it (https://{tenant}.example.com) or one path segment
+// (https://api.example.com/customers/{customer}), and nothing else.
+const WHOLE = /^\{([a-z][a-z0-9_]*)\}$/;
+const HOST_NAME =
+  /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:\d{1,5})?$/;
+const HOST_LABEL = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+type Place = "host" | "label" | "segment";
+
+function fillPlaces(address: string, fill: (id: string, place: Place) => string): string {
+  const m = /^(https?:\/\/)([^/?#]*)([^?#]*)([?#].*)?$/.exec(address);
+  if (!m || /[{}]/.test(m[4] ?? "")) throw new Error(`Not an address: ${address}`);
+  const one = (part: string, place: Place) => {
+    const id = WHOLE.exec(part)?.[1];
+    if (id) return fill(id, place);
+    if (/[{}]/.test(part))
+      throw new Error(`A {field} is a whole host, label or segment: ${address}`);
+    return part;
+  };
+  const host = WHOLE.test(m[2])
+    ? one(m[2], "host")
+    : m[2]
+        .split(".")
+        .map((label) => one(label, "label"))
+        .join(".");
+  const path = m[3]
+    .split("/")
+    .map((segment) => one(segment, "segment"))
+    .join("/");
+  return `${m[1]}${host}${path}${m[4] ?? ""}`;
+}
+
+/** The connect form fields an address's placeholders name. */
+export function addressFields(address: string): string[] {
+  const ids: string[] = [];
+  fillPlaces(address, (id) => (ids.push(id), "x"));
+  return ids;
+}
+
+const validAddress = (address: string) => {
+  try {
+    return URL.canParse(fillPlaces(address, () => "x"));
+  } catch {
+    return false;
+  }
+};
+// Hosts a filled-in address may reach: exact, or "*.<domain>" for any host under that domain.
+const allowedHostsSchema = z
+  .array(z.string().regex(/^(\*\.)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/))
+  .min(1)
+  .optional();
+
+/** Refuses a filled-in address whose host is not one of `allowed` (when there is a list). */
+export function checkHost(url: URL, allowed: string[] | undefined) {
+  const host = url.hostname.toLowerCase();
+  const fits = (entry: string) => {
+    const e = entry.toLowerCase();
+    return e.startsWith("*.") ? host.endsWith(e.slice(1)) : host === e;
+  };
+  if (allowed && !allowed.some(fits))
+    throw new ConnectError(
+      `${url.host} is not an address this app may use (${allowed.join(", ")})`,
+    );
+}
+
+const addressSchema = z
+  .string()
+  .refine(validAddress, "An http(s) address; a {field} in it is a whole host, label or segment");
+
+/** The address filled with the connection's values; a value that does not fit its place is
+ *  refused, so it can never move the call to another host or path. */
+export function fillAddress(
+  address: string,
+  config: Record<string, string>,
+  label: (id: string) => string = (id) => id,
+): string {
+  return fillPlaces(address, (id, place) => {
+    const value = config[id] ?? "";
+    if (place === "host" && HOST_NAME.test(value)) return value;
+    if (place === "label" && HOST_LABEL.test(value)) return value;
+    if (place === "segment" && value && !value.includes("/") && value !== "." && value !== "..")
+      return encodeURIComponent(value);
+    throw new ConnectError(
+      place === "host"
+        ? `${label(id)} must be a host name only, such as example.com, without https:// or a path`
+        : place === "label"
+          ? `${label(id)} must be one word of the address: letters, digits and hyphens`
+          : `${label(id)} must not be empty, hold a slash, or be . or ..`,
+    );
+  });
+}
+
 // An app described entirely here, e.g. a company's internal REST API: the generic http module
 // (connectors/http) runs it, so it needs no code. Auth values are the ids of connect form fields.
 const headerName = z.string().regex(/^[A-Za-z0-9-]+$/);
@@ -201,6 +294,10 @@ const httpAuthSchema = z.discriminatedUnion("type", [
         .string()
         .regex(/^[\x21-\x7e]+( [\x21-\x7e]+)*$/)
         .optional(),
+      // How the client id and secret reach the token service: form fields (the default), or
+      // HTTP Basic.
+      clientAuth: z.enum(["body", "basic"]).optional(),
+      audience: headerValue.min(1).optional(),
     })
     .strict(),
   // Added to every call's query string, e.g. ?api_key=…
@@ -380,10 +477,14 @@ const CREDENTIAL_LIKE = /auth|token|secret|key|password|session|cookie/i;
 const httpSchema = z
   .object({
     // Every call goes to this origin, under this path, and nowhere else: redirects are refused.
-    baseUrl: z.url({ protocol: /^https?$/ }).refine((u) => !/[?#]/.test(u), "No query or fragment"),
+    baseUrl: addressSchema.refine((u) => !/[?#]/.test(u), "No query or fragment"),
+    allowedHosts: allowedHostsSchema,
     auth: httpAuthSchema,
     // Sent with every call, e.g. an API version or Accept. Not secret: never credentials.
     headers: z.record(headerName, headerValue).default({}),
+    // Sent with every call too, each filled from a connect form field (secret or not), e.g. a
+    // second key some apps ask for beside the main sign-in. Left out while the field is empty.
+    fieldHeaders: z.record(headerName, slug).default({}),
     tools: z.array(httpToolSchema).min(1),
     // Plain http for baseUrl and the token URL, e.g. an app inside the cluster. Off by default.
     allowInsecureHttp: z.boolean().default(false),
@@ -408,6 +509,19 @@ const httpSchema = z
     {
       message:
         "headers are not secret, so they cannot carry credentials (use auth) or headers the service sets",
+    },
+  )
+  .refine(
+    (h) =>
+      Object.keys(h.fieldHeaders).every(
+        (name) =>
+          !RESERVED_HEADERS.has(name.toLowerCase()) &&
+          !(h.auth.type === "header" && h.auth.header.toLowerCase() === name.toLowerCase()) &&
+          !Object.keys(h.headers).some((k) => k.toLowerCase() === name.toLowerCase()),
+      ),
+    {
+      message:
+        "fieldHeaders cannot set the auth header, headers the service sets, or a fixed header",
     },
   )
   .refine(
@@ -495,7 +609,7 @@ const soapToolSchema = z
 
 const soapSchema = z
   .object({
-    endpoint: z.url({ protocol: /^https?$/ }).refine((u) => !u.includes("#"), "No fragment"),
+    endpoint: addressSchema.refine((u) => !u.includes("#"), "No fragment"),
     version: z.enum(["1.1", "1.2"]).default("1.1"),
     // Prefixes declared on the Envelope for the tools' bodies, e.g. {"hr": "urn:example:hr"}.
     namespaces: z
@@ -647,9 +761,8 @@ const odataToolSchema = z
 const odataSchema = z
   .object({
     // The service root, e.g. https://host/sap/opu/odata/sap/API_BUSINESS_PARTNER.
-    serviceRoot: z
-      .url({ protocol: /^https?$/ })
-      .refine((u) => !/[?#]/.test(u), "No query or fragment"),
+    serviceRoot: addressSchema.refine((u) => !/[?#]/.test(u), "No query or fragment"),
+    allowedHosts: allowedHostsSchema,
     version: z.enum(["2", "4"]),
     auth: httpAuthSchema,
     // Sent on every call, e.g. SAP's sap-client. Not secret: never credentials.
@@ -1036,6 +1149,13 @@ export const connectorSchema = z
   .refine((c) => new Set(c.fields.map((f) => f.id)).size === c.fields.length, {
     message: "Field ids must be unique",
   })
+  .refine(
+    (c) =>
+      Object.values(c.http?.fieldHeaders ?? {}).every((id) =>
+        c.fields.some((f) => f.id === id && !f.options),
+      ),
+    { message: "fieldHeaders name connect form fields" },
+  )
   .refine((c) => new Set(c.capabilities.map((l) => l.id)).size === c.capabilities.length, {
     message: "Capability ids must be unique",
   })
@@ -1088,11 +1208,13 @@ function described(c: {
   odata?: ODataApp;
   sql?: SqlApp;
 }): { fields: [string, boolean][]; limits: string[] } | null {
+  const plain = (address: string) =>
+    addressFields(address).map((id): [string, boolean] => [id, false]);
   const limitsOf = (...sets: Record<string, { limit?: string }>[]) =>
     sets.flatMap((s) => Object.values(s).flatMap((p) => (p.limit ? [p.limit] : [])));
   if (c.http)
     return {
-      fields: authFields(c.http.auth),
+      fields: [...authFields(c.http.auth), ...plain(c.http.baseUrl)],
       limits: c.http.tools.flatMap((t) => [
         ...limitsOf(t.params),
         ...t.answerLimits.map((a) => a.limit),
@@ -1103,6 +1225,7 @@ function described(c: {
     return {
       fields: [
         ...(c.soap.auth ? authFields(c.soap.auth) : []),
+        ...plain(c.soap.endpoint),
         ...(ws
           ? ([
               [ws.username, false],
@@ -1118,7 +1241,7 @@ function described(c: {
   }
   if (c.odata)
     return {
-      fields: authFields(c.odata.auth),
+      fields: [...authFields(c.odata.auth), ...plain(c.odata.serviceRoot)],
       limits: c.odata.tools.flatMap((t) => [
         ...limitsOf(t.key, t.filters, t.fields, t.params),
         ...t.answerLimits.map((a) => a.limit),

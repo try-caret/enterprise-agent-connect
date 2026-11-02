@@ -61,6 +61,16 @@ A connector with an `http` block is like any other connector (name, setup steps,
 - **baseUrl**: every call goes to this address and under this path, and nowhere else. Redirects
   are not followed. It must be `https://`; for an app reachable only inside your network over
   plain http, add `"allowInsecureHttp": true` (this also allows a plain http `tokenUrl`).
+  For an app each company runs at its own address, name a plain (not secret) connect form field
+  in it as `{field}`, filled in per connection: the whole host (`"https://{host}/api/v4"`), one
+  label of it (`"https://{tenant}.example.com/v1"`) or one path segment
+  (`"https://api.example.com/customers/{customer}"`), nothing else. A host must be a host name
+  only (a port is allowed), a label one word of letters, digits and hyphens, and a segment holds
+  no slash and is not `.` or `..`; anything else is refused when the app is connected and before
+  every call. An OData `serviceRoot` and a SOAP `endpoint` take the same placeholders.
+- **allowedHosts** (optional): the hosts a filled-in address may reach, each exact or
+  `"*.<domain>"` for any host under that domain, e.g. `["*.qualys.com"]`. Checked when the app is
+  connected and before every call; an OData block takes it too.
 - **auth**: names the connect form fields that hold the credentials. Secrets must be fields with
   `"secret": true`; they are stored encrypted and never shown again. Every field must be filled
   in unless it has `"optional": true`.
@@ -69,13 +79,17 @@ A connector with an `http` block is like any other connector (name, setup steps,
     `"prefix": "Token token="` (PagerDuty)
   - `{"type": "bearer", "token": "<field>"}`
   - `{"type": "basic", "username": "<plain field>", "password": "<secret field>"}`
-  - `{"type": "oauth2", "tokenUrl": "https://…", "clientId": "<plain field>", "clientSecret": "<secret field>"}` (client credentials; add `"scope"` for a token service that needs one, such as Microsoft Entra's)
+  - `{"type": "oauth2", "tokenUrl": "https://…", "clientId": "<plain field>", "clientSecret": "<secret field>"}` (client credentials; add `"scope"` for a token service that needs one, such as Microsoft Entra's, `"audience"` for one that asks for an audience, and `"clientAuth": "basic"` for one that wants the client id and secret as HTTP Basic rather than in the form, which is the default `"body"`)
   - `{"type": "query", "param": "api_key", "value": "<secret field>"}`: the key goes in every
     call's query string. No tool param may use the same name.
 - **headers**: sent with every call, e.g. `{"X-GitHub-Api-Version": "2022-11-28", "Accept":
   "application/vnd.github+json"}`. They are not secret, so they cannot carry credentials: names
   like `Authorization`, `Cookie` or anything with `key`, `token`, `secret` or `auth` in it are
   refused, as are headers the service sets itself (`Content-Type`, `Host`).
+- **fieldHeaders**: headers filled from connect form fields, secret or not, sent with every call
+  beside `auth`, e.g. `{"x-client-id": "client_id"}` for an app that wants a second key. A header
+  whose field is left empty is not sent. They cannot set the auth header, a fixed header or one
+  the service sets.
 - **tools**: one per action. `path` takes `{param}` placeholders. Each param has a `type`
   (`string`, `number`, `integer`, `boolean` or `array`), a `description` the agent reads, and
   `in`: `path`, `query` or `body` (sent as one JSON object). Params are required unless
@@ -136,6 +150,9 @@ are passed back, and the agent's own headers are never sent to your app.
 A SOAP service or an OData service (SAP, Dynamics, SuccessFactors) is described the same way,
 with a `soap` or `odata` block instead: see [soap-connector.md](soap-connector.md) and
 [odata-connector.md](odata-connector.md).
+
+To ship an app described this way as a built-in, put its folder in `connectors/` and add
+`describedApp("<id>")` to `builtinConnectors` (`packages/server/src/builtin.ts`).
 
 When an app needs logic JSON cannot express, write a connector in code instead
 (`connectors/<app>/index.ts`, see the built-in ones) and pass it to `createAgentConnect`.

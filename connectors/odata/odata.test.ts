@@ -328,6 +328,25 @@ test("a v2 list writes a safe $filter from typed values, with SAP's headers", as
   assert.match(audit[0].target!, /^GET \/A_SalesOrder\?\$filter=/);
 });
 
+test("a {field} in the service root is filled from the connection", async () => {
+  respond = ok({ d: { results: [] } });
+  seen.length = 0;
+  // The helper's connection has username "svc": here one path segment of the root.
+  await run(sap({ serviceRoot: `${origin}/{username}${ROOT}` }), "sap_list_sales_orders", {
+    sales_org: "1010",
+  });
+  assert.match(seen[0].url, new RegExp(`^/svc${ROOT}/A_SalesOrder\\?`));
+  await assert.rejects(
+    odataVendor(
+      sap({ serviceRoot: "https://{username}.example.com/odata", allowedHosts: ["x.example.com"] }),
+    ).connect({
+      username: "y",
+      password: "pw",
+    }),
+    /not an address this app may use/,
+  );
+});
+
 test("a limited filter: left out it means the agent's values, any other value is refused", async () => {
   const limits = { sales_orgs: ["1010", "1710"] };
   respond = ok({ d: { results: [order("1010"), order("1710")] } });

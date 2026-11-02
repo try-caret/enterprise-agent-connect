@@ -7,11 +7,13 @@ import {
   VendorFailed,
   type Toolset,
 } from "../../packages/connector-kit/src/common.js";
-import type {
-  Connector,
-  ConnectorModule,
-  HttpApp,
-  HttpAuth,
+import {
+  checkHost,
+  fillAddress,
+  type Connector,
+  type ConnectorModule,
+  type HttpApp,
+  type HttpAuth,
 } from "../../packages/connector-kit/src/connector.js";
 
 type HttpTool = HttpApp["tools"][number];
@@ -117,16 +119,48 @@ export function formValues(connector: Connector, fields: Record<string, string>)
   return { config, secret };
 }
 
+// An app's address filled in for one connection (its {field}s), and the guarded fetch reaching
+// only that origin (and the token service's), kept per origin so a token cache survives calls.
+export function connectionAddress(
+  connector: Connector,
+  address: string,
+  allowedHosts: string[] | undefined,
+  tokenUrl: string | null,
+  fetchImpl: Fetch,
+  types?: RegExp,
+  passed?: string,
+) {
+  const label = (id: string) => connector.fields.find((f) => f.id === id)?.label ?? id;
+  const fetches = new Map<string, Fetch>();
+  return (c: Pick<VendorConnection, "config">) => {
+    const url = new URL(fillAddress(address, c.config, label));
+    checkHost(url, allowedHosts);
+    let safe = fetches.get(url.origin);
+    if (!safe) {
+      const origins = [url.origin, ...(tokenUrl ? [new URL(tokenUrl).origin] : [])];
+      safe = guardedFetch(origins, fetchImpl, types, passed);
+      fetches.set(url.origin, safe);
+    }
+    return { url, safe };
+  };
+}
+
 export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vendor {
   const http = connector.http!;
-  const base = new URL(http.baseUrl);
-  const prefix = base.pathname.replace(/\/+$/, "");
   const auth = http.auth;
-  const safe = guardedFetch(
-    [base.origin, ...(auth.type === "oauth2" ? [new URL(auth.tokenUrl).origin] : [])],
+  const addressOf = connectionAddress(
+    connector,
+    http.baseUrl,
+    http.allowedHosts,
+    auth.type === "oauth2" ? auth.tokenUrl : null,
     fetchImpl,
   );
-  const oauth = auth.type === "oauth2" ? clientCredentials(connector.name, safe) : null;
+  const clients = new Map<string, ReturnType<typeof clientCredentials>>();
+  const oauthFor = (origin: string, safe: Fetch) => {
+    if (auth.type !== "oauth2") return null;
+    if (!clients.has(origin)) clients.set(origin, clientCredentials(connector.name, safe));
+    return clients.get(origin)!;
+  };
   // Lower-case, so a configured Accept replaces the default rather than joining it.
   const fixed = Object.fromEntries(
     Object.entries(http.headers).map(([k, v]) => [k.toLowerCase(), v]),
@@ -138,10 +172,26 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
           clientId: c.config[auth.clientId],
           clientSecret: c.secret[auth.clientSecret],
           scope: auth.scope,
+          clientAuth: auth.clientAuth,
+          audience: auth.audience,
         }
       : null!;
 
+  const fieldHeaders = (c: VendorConnection) =>
+    Object.fromEntries(
+      Object.entries(http.fieldHeaders).flatMap(([name, id]) => {
+        const value = c.secret[id] ?? c.config[id];
+        if (!value) return [];
+        if (!/^[\x20-\x7E]*$/.test(value))
+          throw new ConnectError(`${name} can only hold plain letters, digits and symbols`);
+        return [[name.toLowerCase(), value]];
+      }),
+    );
+
   const call: Vendor["call"] = async (c, request) => {
+    const { url: base, safe } = addressOf(c);
+    const prefix = base.pathname.replace(/\/+$/, "");
+    const oauth = oauthFor(base.origin, safe);
     // The path is the tool's, already encoded; it must stay under baseUrl's path.
     const url = new URL(`${base.origin}${prefix}${request.path}`);
     if (url.origin !== base.origin || !`${url.pathname}/`.startsWith(`${prefix}/`))
@@ -152,12 +202,13 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
       path: `${url.pathname}${url.search}`,
       body: request.body,
     };
-    if (oauth) return oauth.call(oauthCreds(c), base.origin, req, fixed);
+    const headers = { ...fixed, ...fieldHeaders(c) };
+    if (oauth) return oauth.call(oauthCreds(c), base.origin, req, headers);
     const res = await safe(`${base.origin}${req.path}`, {
       method: req.method,
       headers: {
         accept: "application/json",
-        ...fixed,
+        ...headers,
         ...authHeaders(auth, c),
         ...(req.body === undefined ? {} : { "content-type": "application/json" }),
       },
@@ -174,8 +225,9 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
   return {
     async connect(fields) {
       const { config, secret } = formValues(connector, fields);
+      const { url: base, safe } = addressOf({ config });
       const conn: VendorConnection = { config: { host: base.host, ...config }, secret };
-      if (oauth) await oauth.signIn(oauthCreds(conn));
+      await oauthFor(base.origin, safe)?.signIn(oauthCreds(conn));
       return { ...conn, accountLabel: conn.config[connector.accountKey] ?? base.host };
     },
     call,
