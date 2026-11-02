@@ -59,7 +59,11 @@ jobs:
         run: npm run build && npm pack --dry-run
       - name: Docker image builds
         if: ${{ !cancelled() }}
-        run: docker build -f deploy/docker/Dockerfile .
+        # CI installs optional packages (tsx needs esbuild's); the image must not have pdf.js's canvas.
+        run: |
+          docker build -t agent-connect:ci -f deploy/docker/Dockerfile .
+          ! docker run --rm agent-connect:ci node -e 'require.resolve("@napi-rs/canvas")' 2>/dev/null \
+            || { echo "::error::@napi-rs/canvas is in the image"; exit 1; }
       - uses: azure/setup-helm@v5
       - name: Helm chart renders
         if: ${{ !cancelled() }}

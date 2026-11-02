@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { test } from "node:test";
 import { deflateSync } from "node:zlib";
 import { DOMParser } from "@xmldom/xmldom";
@@ -577,9 +576,6 @@ test("a PDF's text is read page by page, in a worker that never loads canvas, fo
   const bare = await readPdf(pdf(["No assets needed"]), { noAssets: true });
   assert.deepEqual(bare.pages, [{ page: 1, text: "No assets needed" }]);
   assert.equal(bare.canvasBlocked, true);
-  // And this install has no canvas package at all (installed with --omit=optional).
-  const require = createRequire(import.meta.url);
-  assert.throws(() => require.resolve("@napi-rs/canvas"), "@napi-rs/canvas must not be installed");
 });
 
 test("a PDF with no text layer says so", async () => {
