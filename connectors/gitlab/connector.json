@@ -9,7 +9,7 @@
   "setup": [
     {
       "title": "Create an access token",
-      "body": "Create the token on the group that holds the projects agents should see, or on one project. Give it the Reporter role and the read_api scope. If agents may comment on merge requests, give it the Developer role and the api scope instead. GitLab shows the token only once.",
+      "body": "Create the token on the group that holds the projects agents should see, or on one project. Give it the Reporter role and the read_api scope. If agents may comment on merge requests, keep the Reporter role and choose the api scope instead: Reporter can comment but cannot push code, merge or run pipelines. GitLab shows the token only once.",
       "link": {
         "label": "GitLab: project access tokens",
         "href": "https://docs.gitlab.com/user/project/settings/project_access_tokens/"
@@ -17,7 +17,7 @@
       "click": [
         "In GitLab, open the group (or the project), then select Settings > Access tokens > Add new token.",
         "Token name: AI agents. Set an expiration date.",
-        "Role: Reporter (Developer if agents may comment). Scopes: read_api (api if agents may comment).",
+        "Role: Reporter. Scopes: read_api (api if agents may comment).",
         "Select Create group access token (or Create project access token) and copy the token."
       ]
     },
@@ -68,7 +68,7 @@
       "id": "comment",
       "label": "Comment on merge requests",
       "description": "Add a comment to a merge request, such as a review brief. It can be marked internal, so only project members see it.",
-      "note": "Needs a token with the Developer role and the api scope.",
+      "note": "Needs a token with the api scope. Keep its role at Reporter.",
       "scopes": ["api"],
       "permissions": [],
       "tools": ["gitlab_add_merge_request_comment"]

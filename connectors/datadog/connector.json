@@ -36,7 +36,7 @@
       "body": "Datadog wants an API key beside the application key. The API address depends on your Datadog site: api.datadoghq.com for app.datadoghq.com, api.us3.datadoghq.com, api.us5.datadoghq.com, api.datadoghq.eu, api.ap1.datadoghq.com, and so on. You can test both keys with the command below: it counts your monitors and changes nothing.",
       "click": [
         "Organization Settings > API Keys > New Key. Name: AI agents. Select Create API key and copy it.",
-        "Your site is in your browser's address bar while you are in Datadog, such as app.datadoghq.eu: the API address is the same with api in place of app."
+        "Your site is in your browser's address bar while you are in Datadog. For app.datadoghq.com or app.datadoghq.eu the API address puts api in place of app; for a site such as us3.datadoghq.com it adds api. in front, as in api.us3.datadoghq.com."
       ],
       "copy": [
         "DD_API=api.datadoghq.com",

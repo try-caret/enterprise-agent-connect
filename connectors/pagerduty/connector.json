@@ -86,7 +86,7 @@
     "tools": [
       {
         "name": "pagerduty_list_incidents",
-        "description": "List incidents, newest first by default. Without statuses, only triggered and acknowledged ones. Pass offset to read further pages; more in the answer says whether there are any.",
+        "description": "List incidents, newest first by default. Without since and until, only those of the last month. Pass offset to read further pages; more in the answer says whether there are any.",
         "method": "GET",
         "path": "/incidents",
         "params": {
@@ -175,7 +175,7 @@
       },
       {
         "name": "pagerduty_list_incident_log",
-        "description": "List an incident's timeline: triggers, notifications, acknowledgements, escalations, notes and resolution, oldest first. Pass offset to read further pages.",
+        "description": "List an incident's timeline: triggers, notifications, acknowledgements, escalations, notes and resolution. Pass offset to read further pages.",
         "method": "GET",
         "path": "/incidents/{id}/log_entries",
         "params": {

@@ -51,7 +51,7 @@
       "label": "Read dashboards and alert rules",
       "description": "Search dashboards and folders, read a dashboard's panels and queries, and list and read alert rules.",
       "required": true,
-      "note": "Read-only. Reaches every dashboard and alert rule a viewer can see unless you keep a key to chosen folders.",
+      "note": "Read-only. Reaches every dashboard and alert rule a viewer can see unless you keep a key to chosen folders. Reading alert rules with the Viewer role needs Grafana 11 or later.",
       "scopes": [],
       "permissions": ["Viewer"],
       "tools": ["grafana_search", "grafana_get_dashboard", "grafana_list_alert_rules", "grafana_get_alert_rule"]

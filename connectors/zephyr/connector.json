@@ -23,8 +23,8 @@
         "href": "https://support.smartbear.com/zephyr/docs/en/rest-api/api-access-tokens-management.html"
       },
       "click": [
-        "In Jira, select your profile picture at the bottom left, then Zephyr API keys.",
-        "Create an access token and copy it."
+        "In Jira, select your profile picture, then Zephyr API Access Tokens.",
+        "Select Create access token and copy it."
       ],
       "copy": [
         "curl -s -H \"Authorization: Bearer $ZEPHYR_TOKEN\" \"https://api.zephyrscale.smartbear.com/v2/projects?maxResults=5\""
@@ -90,7 +90,7 @@
     "label": "Zephyr projects",
     "show": "values[].key"
   },
-  "revoke": "Sign in to Jira as the agents' user, select the profile picture, then Zephyr API keys, and delete the token. Agents lose access to Zephyr at once.",
+  "revoke": "Sign in to Jira as the agents' user, select the profile picture, then Zephyr API Access Tokens, and revoke the token. Agents lose access to Zephyr at once.",
   "http": {
     "baseUrl": "https://{host}/v2",
     "allowedHosts": ["api.zephyrscale.smartbear.com", "*.api.zephyrscale.smartbear.com"],
