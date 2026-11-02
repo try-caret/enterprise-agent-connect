@@ -271,7 +271,7 @@
       },
       {
         "name": "docusign_list_documents",
-        "description": "List an envelope's documents: each one's id, name, type, page count and order. Details only, not the files.",
+        "description": "List an envelope's documents: each one's id, name, type, order and size. Details only, not the files.",
         "method": "GET",
         "path": "/envelopes/{envelope_id}/documents",
         "params": {
@@ -288,7 +288,6 @@
             "name",
             "type",
             "order",
-            "pages",
             "sizeBytes",
             "hasDigitalSignature"
           ]

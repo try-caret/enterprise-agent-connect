@@ -114,13 +114,15 @@ A connector with an `http` block is like any other connector (name, setup steps,
     is not offered to the agent at all), for a value the app wants in every request, such as
     the company's own server address. A `string` in the query or body, with no `default`,
     `enum` or `limit`.
-- **Nested bodies**: a body param's `name` is a dot path into the body, so
-  `"name": "data.attributes.firstName"` sends `{"data": {"attributes": {"firstName": …}}}`
-  and a number indexes a list (`"matchInput.0.companyId"`, 0 to 99). A name without a dot is
-  sent as one key, as before. A tool's `body` holds fixed values merged into every request
-  and never shown to the agent, such as the type a JSON:API app wants:
+- **Nested bodies**: with `"nestedBody": true` on a tool, a body param's `name` is a dot path
+  into the body, so `"name": "data.attributes.firstName"` sends
+  `{"data": {"attributes": {"firstName": …}}}` and a number indexes a list
+  (`"matchInput.0.companyId"`, 0 to 99). Without it a name is sent as one key, dots and all. A
+  tool's `body` holds fixed values merged into every request and never shown to the agent,
+  such as the type a JSON:API app wants:
 
   ```json
+  "nestedBody": true,
   "body": { "data": { "type": "PersonSearch" } },
   "params": {
     "first_name": { "type": "string", "description": "First name", "in": "body", "name": "data.attributes.firstName" }
@@ -129,7 +131,11 @@ A connector with an `http` block is like any other connector (name, setup steps,
 
   Each param and fixed value has its own place: a param cannot sit at or inside a fixed value
   or another param (`data.type` beside `data.type.x`, or `a` beside `a.b`), and no segment may
-  be empty, `__proto__`, `constructor` or `prototype`. A GET tool has no body.
+  be empty, `__proto__`, `constructor` or `prototype`. A place is either a list (a number
+  follows it) or an object, never both. A GET tool has no body.
+- **readOnly**: `true` on a tool that only reads but is not a GET, such as a search sent as
+  POST with its filters in the body, so agents' clients see it as read-only. It cannot be
+  destructive or a DELETE.
 - **contentType** (on the `http` block or a tool, the tool's winning): the JSON body's content
   type when the app wants one other than `application/json`, such as
   `"application/vnd.api+json"`. Only `application/json` or a `+json` type. The app's `Accept`

@@ -350,14 +350,15 @@ export function paramLimits(
 }
 
 // Places a body value at its dot path, building objects on the way (a list for a numeric
-// segment). The connector's parse keeps paths from clashing or reaching a prototype.
+// segment). The connector's parse keeps paths from clashing; only own keys are followed, so a
+// path never reaches an inherited property such as a prototype's function.
 function setPath(body: Record<string, unknown>, keys: string[], value: unknown) {
   let node = body as Record<string, unknown>;
   keys.slice(0, -1).forEach((key, i) => {
-    node[key] ??= /^\d+$/.test(keys[i + 1]) ? [] : {};
+    if (!Object.hasOwn(node, key)) node[key] = /^\d+$/.test(keys[i + 1]) ? [] : {};
     node = node[key] as Record<string, unknown>;
   });
-  node[keys.at(-1)!] = value;
+  Object.defineProperty(node, keys.at(-1)!, { value, enumerable: true, writable: true, configurable: true });
 }
 
 export const zodType = {
@@ -392,7 +393,7 @@ export function httpTools(http: HttpApp): Toolset {
             description: tool.description,
             inputSchema: z.object(shape).strict(),
             annotations: {
-              readOnlyHint: tool.method === "GET",
+              readOnlyHint: tool.method === "GET" || tool.readOnly,
               destructiveHint: destructive,
               openWorldHint: true,
             },
@@ -413,7 +414,7 @@ export function httpTools(http: HttpApp): Toolset {
                 const value = p.field ? ctx.config[p.field] : args[name];
                 const wire = p.name ?? name;
                 if (value === undefined) continue;
-                if (p.in === "body") setPath(body, wire.split("."), value);
+                if (p.in === "body") setPath(body, tool.nestedBody ? wire.split(".") : [wire], value);
                 else if (p.in !== "query") continue;
                 else if (!Array.isArray(value)) query.set(wire, String(value));
                 else if (p.join) query.set(wire, value.join(p.join));

@@ -9174,6 +9174,14 @@
                     "contentType": {
                       "type": "string",
                       "pattern": "^application\\/(json|[A-Za-z0-9.-]+\\+json)$"
+                    },
+                    "nestedBody": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "readOnly": {
+                      "default": false,
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -9183,7 +9191,9 @@
                     "path",
                     "params",
                     "destructive",
-                    "answerLimits"
+                    "answerLimits",
+                    "nestedBody",
+                    "readOnly"
                   ],
                   "additionalProperties": false
                 }

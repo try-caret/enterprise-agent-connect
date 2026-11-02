@@ -81,6 +81,8 @@
         "name": "axonius_search_devices",
         "description": "Search Axonius devices with an AQL query, as Axonius's query wizard writes it, such as (\"specific_data.data.hostname\" == regex(\"IDC-\", \"i\")), and read the fields you name, correlated across every source Axonius collects from. Answers one page and the cursor for the next; pass it back as cursor while next is not null.",
         "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
         "path": "/api/v2/assets/devices",
         "params": {
           "query": {
@@ -132,6 +134,8 @@
         "name": "axonius_search_users",
         "description": "Search Axonius users with an AQL query, as Axonius's query wizard writes it, such as (\"specific_data.data.username\" == regex(\"ann\", \"i\")), and read the fields you name, correlated across every source Axonius collects from. Answers one page and the cursor for the next; pass it back as cursor while next is not null.",
         "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
         "path": "/api/v2/assets/users",
         "params": {
           "query": {

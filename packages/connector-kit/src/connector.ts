@@ -447,8 +447,9 @@ const httpPagingSchema = z.union([
 // A JSON body's content type: application/json or a +json type such as application/vnd.api+json.
 const jsonContentType = z.string().regex(/^application\/(json|[A-Za-z0-9.-]+\+json)$/);
 
-// A body param's wire name is a dot path into the body (a.b.c builds {"a":{"b":{"c":…}}}, a
-// numeric segment indexes a list). Fixed body values are the leaves of `body`.
+// With nestedBody, a body param's wire name is a dot path into the body (a.b.c builds
+// {"a":{"b":{"c":…}}}, a numeric segment indexes a list); without it the name is one key, as
+// before. Fixed body values are the leaves of `body`.
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 function bodyLeaves(value: unknown, at: string[] = []): string[][] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [at];
@@ -459,10 +460,11 @@ function bodyLeaves(value: unknown, at: string[] = []): string[][] {
 function bodyPlacesFit(t: {
   params: Record<string, { in: string; name?: string }>;
   body?: Record<string, unknown>;
+  nestedBody: boolean;
 }): boolean {
   const params = Object.entries(t.params)
     .filter(([, p]) => p.in === "body")
-    .map(([k, p]) => (p.name ?? k).split("."));
+    .map(([k, p]) => (t.nestedBody ? (p.name ?? k).split(".") : [p.name ?? k]));
   const fixed = t.body ? bodyLeaves(t.body) : [];
   // A param's numeric segment indexes a list, so it stays small: 0 to 99.
   const index = (seg: string) => !/^\d+$/.test(seg) || /^(0|[1-9]\d?)$/.test(seg);
@@ -472,6 +474,16 @@ function bodyPlacesFit(t: {
   // One path the same as or inside another (a param's own duplicates are refused elsewhere).
   const within = (a: string[], b: string[]) =>
     a.length <= b.length && a.every((seg, i) => seg === b[i]);
+  // A place is a list (a numeric segment follows it) or an object, never both: else one value is
+  // dropped or the body changes shape with the params' order. Fixed values are objects down to
+  // their leaves.
+  const kinds = new Map<string, boolean>();
+  for (const [path, isParam] of [...params.map((p) => [p, true] as const), ...fixed.map((f) => [f, false] as const)])
+    for (let i = 1; i < path.length; i++) {
+      const at = path.slice(0, i).join("."), isList = isParam && /^\d+$/.test(path[i]);
+      if ((kinds.get(at) ?? isList) !== isList) return false;
+      kinds.set(at, isList);
+    }
   return params.every(
     (p, i) =>
       params.every((q, j) => i === j || p.length === q.length || !within(p, q)) &&
@@ -506,6 +518,10 @@ const httpToolSchema = z
       }, z.record(z.string(), z.unknown()))
       .optional(),
     contentType: jsonContentType.optional(),
+    // Body param names are dot paths into nested objects (see bodyPlacesFit).
+    nestedBody: z.boolean().default(false),
+    // A read sent as POST (a search with a body): told to clients as read-only.
+    readOnly: z.boolean().default(false),
   })
   .strict()
   .refine(
@@ -531,6 +547,9 @@ const httpToolSchema = z
     (t) => !(t.body || Object.values(t.params).some((p) => p.in === "body")) || t.method !== "GET",
     { message: "A GET tool has no body params or body" },
   )
+  .refine((t) => !(t.readOnly && (t.destructive || t.method === "DELETE")), {
+    message: "A readOnly tool cannot be destructive",
+  })
   .refine((t) => bodyPlacesFit(t), {
     message:
       "Each body param and fixed body value has its own place in the body: no path inside another's, no empty segment, a list index of at most 99, and no __proto__, constructor or prototype",

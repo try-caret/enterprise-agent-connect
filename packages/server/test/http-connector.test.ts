@@ -956,6 +956,7 @@ const people = (extra: Record<string, unknown> = {}) =>
         default: ["id"],
       },
     },
+    nestedBody: true,
     body: { data: { type: "PersonSearch" } },
     ...extra,
   });
@@ -990,6 +991,44 @@ test("a body param's dot path nests, fixed body values are merged, and a +json t
   await assert.rejects(run(connector, "orders_people", { data: { type: "Other" } }));
 });
 
+test("a body path follows only the body's own keys, never an inherited property", async () => {
+  respond = ok({});
+  seen.length = 0;
+  const reach = (name: string) => ({ type: "string", description: "x", in: "body", name, required: false });
+  const connector = withTools([people({ params: { a: reach("q.hasOwnProperty.call"), b: reach("l.length") } })]);
+  await run(connector, "orders_people", { a: "pwned", b: "4294967295" });
+  assert.equal(typeof Object.prototype.hasOwnProperty.call, "function");
+  assert.deepEqual(JSON.parse(seen[0].body), {
+    data: { type: "PersonSearch" },
+    q: { hasOwnProperty: { call: "pwned" } },
+    l: { length: "4294967295" },
+  });
+});
+
+test("without nestedBody a dotted body name is one key, as before", async () => {
+  respond = ok({});
+  seen.length = 0;
+  const flat = people({
+    nestedBody: false,
+    body: undefined,
+    params: { user: { type: "string", description: "x", in: "body", name: "urn:ietf:params:scim:schemas:core:2.0:User" } },
+  });
+  await run(withTools([flat]), "orders_people", { user: "ann" });
+  assert.deepEqual(JSON.parse(seen[0].body), { "urn:ietf:params:scim:schemas:core:2.0:User": "ann" });
+});
+
+test("a POST marked readOnly is told to clients as read-only", () => {
+  const hints = new Map<string, { readOnlyHint?: boolean }>();
+  const recorder = {
+    registerTool: (name: string, c: { annotations: { readOnlyHint?: boolean } }) => hints.set(name, c.annotations),
+  } as unknown as McpServer;
+  for (const readOnly of [true, false]) {
+    const toolset = httpTools(withTools([people({ readOnly })]).http!);
+    toolset.register(recorder, {} as ToolContext, new Set(toolset.names));
+    assert.equal(hints.get("orders_people")!.readOnlyHint, readOnly);
+  }
+});
+
 test("body paths and fixed values are checked when the connector is read", () => {
   const body = (name: string) => ({
     type: "string",
@@ -1013,6 +1052,11 @@ test("body paths and fixed values are checked when the connector is read", () =>
     people({ params: { a: body("data..x") } }),
     // A list index past 99.
     people({ params: { a: body("data.list.100") } }),
+    // One place both a list and an object, among params or beside a fixed value.
+    people({ params: { a: body("data.attributes.match.0.x"), b: body("data.attributes.match.y") } }),
+    people({ params: { a: body("data.0") } }),
+    // Read-only and destructive at once.
+    people({ readOnly: true, destructive: true }),
     // A GET with a body, and a content type that is not JSON.
     search({ body: { a: 1 } }),
     people({ contentType: "text/plain" }),

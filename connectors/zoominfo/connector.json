@@ -103,6 +103,8 @@
         "name": "zoominfo_search_companies",
         "description": "Search ZoomInfo's companies by name, website, location, parent or industry keywords. Answers basic details (name, city, country, website, revenue, employees) and ZoomInfo's company id; enrich a company for its full profile. Uses no credits. Answers one page; ask for the next page while a page comes back full.",
         "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
         "path": "/data/v1/companies/search",
         "body": {
           "data": {
@@ -204,8 +206,10 @@
       },
       {
         "name": "zoominfo_enrich_company",
-        "description": "Read one company's full ZoomInfo profile: legal name, headquarters address, parent and ultimate parent, founding year, revenue, employees, industries and SIC and NAICS codes. Best matched by ZoomInfo company id from a search; otherwise by name, website or ticker with its country. Each matched company uses one ZoomInfo credit.",
+        "description": "Read one company's full ZoomInfo profile: legal name, headquarters address, parent and ultimate parent, founding year, revenue, employees, industries and SIC and NAICS codes. Send at least one of these: best ZoomInfo company id from a search, otherwise name, website or ticker with its country. Each matched company uses one ZoomInfo credit.",
         "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
         "path": "/data/v1/companies/enrich",
         "body": {
           "data": {
@@ -357,8 +361,10 @@
       },
       {
         "name": "zoominfo_search_contacts",
-        "description": "Search ZoomInfo's people by name, email, job title, management level, department or company. Answers names, job titles, the company and whether ZoomInfo holds an email or phone, with ZoomInfo's person id; enrich a contact for the email and phone. Uses no credits. Answers one page; ask for the next page while a page comes back full.",
+        "description": "Search ZoomInfo's people by name, email, job title, management level, department or company; send at least one. Answers names, job titles, the company and whether ZoomInfo holds an email or phone, with ZoomInfo's person id; enrich a contact for the email and phone. Uses no credits. Answers one page; ask for the next page while a page comes back full.",
         "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
         "path": "/data/v1/contacts/search",
         "body": {
           "data": {
@@ -484,8 +490,10 @@
       },
       {
         "name": "zoominfo_enrich_contact",
-        "description": "Read one person's ZoomInfo profile, such as work email, phone, job title and company. Best matched by ZoomInfo person id from a search; otherwise by email, or by name with the company. Each matched person uses one ZoomInfo credit.",
+        "description": "Read one person's ZoomInfo profile, such as work email, phone, job title and company. Send at least one of these: best ZoomInfo person id from a search, otherwise email, or name with the company. Each matched person uses one ZoomInfo credit.",
         "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
         "path": "/data/v1/contacts/enrich",
         "body": {
           "data": {

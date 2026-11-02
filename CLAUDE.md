@@ -365,11 +365,13 @@ connectors/http/      # the generic module for a connector.json `http` block; ex
                       # (an address's and an http tokenUrl's {field}s filled per connection,
                       # connector-kit fillAddress, held to allowedHosts, one guarded fetch per
                       # origin pair) for its siblings. A tool param with `field` is filled from
-                      # that connect form field and never offered to the agent. A body param's
-                      # name is a dot path (numeric segment = list index, 0-99) into a body that
-                      # starts from the tool's fixed `body`; clashes and prototype keys are
-                      # refused at parse; `contentType` (block or tool) is application/json or
-                      # +json. Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # that connect form field and never offered to the agent. With a tool's
+                      # `nestedBody`, a body param's name is a dot path (numeric segment = list
+                      # index, 0-99) into a body that starts from the tool's fixed `body`, else
+                      # one key as before; clashes, a place both list and object, and prototype
+                      # keys are refused at parse, and setPath follows only own keys;
+                      # `contentType` (block or tool) is application/json or +json; `readOnly`
+                      # marks a POST search read-only to clients. Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
                       # connector-kit oauth.ts jwtAssertion, http blocks only);
                       # openapi.ts: draftConnector (the OpenAPI drafter the script and the
                       # admin API's internal app drafts share)

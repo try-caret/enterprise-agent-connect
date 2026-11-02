@@ -1432,6 +1432,10 @@ export interface components {
                         [key: string]: unknown;
                     };
                     contentType?: string;
+                    /** @default false */
+                    nestedBody: boolean;
+                    /** @default false */
+                    readOnly: boolean;
                 }[];
                 /** @default false */
                 allowInsecureHttp: boolean;
