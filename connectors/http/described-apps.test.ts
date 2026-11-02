@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ZodType } from "zod";
@@ -7,7 +8,9 @@ import { loadConnectors, type Connector } from "../../packages/connector-kit/src
 import type { Limits, VendorConnection } from "../../packages/connector-kit/src/types.ts";
 import { httpTools, httpVendor } from "./index.ts";
 import { builtinConnectors } from "../../packages/server/src/builtin.ts";
-import { assertToolsImplemented } from "../../packages/server/src/service.ts";
+import { CredentialKey } from "../../packages/server/src/secrets.ts";
+import { assertToolsImplemented, createService } from "../../packages/server/src/service.ts";
+import { fakeStore, ORG } from "../../packages/server/test/helpers.ts";
 
 // The built-in apps described only in their connector.json, each run through one representative
 // tool against a fake app: the request it makes (method, address, auth) and what the agent gets.
@@ -240,4 +243,114 @@ test("devops apps: one tool each, against a fake app", async () => {
   );
   assert.equal(fake.seen[1].headers.authorization, "Bearer minted");
   assert.equal(JSON.parse(out.text).next, "abc");
+});
+
+test("HR and procurement apps: one tool each, against a fake app", async () => {
+  // Zip: the key header, a department limit on the search, and a request outside it refused.
+  const zip = { config: {}, secret: { api_key: "zk" } };
+  let fake = fakeApp({
+    list: [{ id: "r1", request_number: 42, status: 1, department: { id: "d1", name: "IT" }, owner: {} }],
+    next_page_token: "p2",
+  });
+  let out = await run(app("zip"), zip, "zip_search_requests", { status: 1, department_id: ["d1"] }, fake, {
+    departments: ["d1"],
+  });
+  assert.equal(fake.seen[0].method, "GET");
+  assert.equal(
+    fake.seen[0].url,
+    "https://api.ziphq.com/requests?status=1&department_id=d1&sort_by=create_time&page_size=20",
+  );
+  assert.equal(fake.seen[0].headers["zip-api-key"], "zk");
+  let page = JSON.parse(out.text);
+  assert.equal(page.next, "p2");
+  assert.equal(page.items[0]["department.name"], "IT");
+  assert.equal(page.items[0].owner, undefined);
+  fake = fakeApp({});
+  out = await run(app("zip"), zip, "zip_search_requests", {}, fake, { departments: ["d1"] });
+  assert.equal(out.isError, true);
+  assert.equal(fake.seen.length, 0);
+  fake = fakeApp({ id: "r2", department: { id: "d9" } });
+  out = await run(app("zip"), zip, "zip_get_request", { request_id: "r2" }, fake, { departments: ["d1"] });
+  assert.equal(fake.seen[0].url, "https://api.ziphq.com/requests/r2");
+  assert.equal(out.isError, true);
+
+  // UKG Pro: Basic sign-in plus the customer key, a company limit, and only UKG's own hosts.
+  const ukg = {
+    config: { host: "service5.ultipro.com", username: "svc" },
+    secret: { password: "pw", customer_api_key: "ck" },
+  };
+  fake = fakeApp([{ employeeID: "E1", companyID: "C1", annualSalary: 90000 }]);
+  out = await run(app("ukg-pro"), ukg, "ukg_list_compensation", { company_id: "C1", date_in_job: ">01-01-2026" }, fake, {
+    companies: ["C1"],
+  });
+  assert.equal(
+    fake.seen[0].url,
+    "https://service5.ultipro.com/personnel/v1/compensation-details?companyId=C1&dateInJob=%3E01-01-2026&page=1&per_Page=100",
+  );
+  assert.equal(fake.seen[0].headers.authorization, `Basic ${btoa("svc:pw")}`);
+  assert.equal(fake.seen[0].headers["us-customer-api-key"], "ck");
+  assert.equal(JSON.parse(out.text)[0].annualSalary, 90000);
+  fake = fakeApp([{ employeeId: "E1", companyId: "C1" }, { employeeId: "E2", companyId: "C2" }]);
+  out = await run(app("ukg-pro"), ukg, "ukg_list_time_off_plans", {}, fake, { companies: ["C1"] });
+  assert.equal(fake.seen[0].url, "https://service5.ultipro.com/personnel/v1/pto-plans?page=1&per_page=100");
+  assert.equal(out.isError, true);
+  fake = fakeApp([{ employeeId: "E1", nationalId: "123-45-6789", firstName: "Ann" }]);
+  out = await run(app("ukg-pro"), ukg, "ukg_list_people", { last_name: "Lee" }, fake);
+  assert.equal(JSON.parse(out.text)[0].nationalId, undefined);
+  assert.equal(JSON.parse(out.text)[0].firstName, "Ann");
+  fake = fakeApp([]);
+  out = await run(app("ukg-pro"), { ...ukg, config: { ...ukg.config, host: "ukg.attacker.example" } }, "ukg_list_jobs", {}, fake);
+  assert.equal(out.isError, true);
+  assert.equal(fake.seen.length, 0);
+
+  // iCIMS: the customer id a path segment, the search JSON encoded, ids back; EU host allowed.
+  const icims = { config: { host: "api-eu.icims.com", customer: "1234", username: "u" }, secret: { password: "p" } };
+  fake = fakeApp({ searchResults: [{ id: "7", self: "x" }] });
+  const search = '{"filters":[{"name":"job.folder","value":["Approved"]}]}';
+  out = await run(app("icims"), icims, "icims_search_jobs", { search, staleness: 0 }, fake);
+  assert.equal(
+    fake.seen[0].url,
+    `https://api-eu.icims.com/customers/1234/search/jobs?searchJson=${encodeURIComponent(search).replace(/%20/g, "+")}&staleness=0`,
+  );
+  assert.equal(fake.seen[0].headers.authorization, `Basic ${btoa("u:p")}`);
+  assert.deepEqual(JSON.parse(out.text), [{ id: "7" }]);
+  fake = fakeApp({ id: 5 });
+  await run(app("icims"), icims, "icims_find_person_by_email", { email: "a@example.com", fields: "firstname,folder" }, fake);
+  assert.equal(
+    fake.seen[0].url,
+    "https://api-eu.icims.com/customers/1234/people/by-email?email=a%40example.com&fields=firstname%2Cfolder",
+  );
+  fake = fakeApp({});
+  out = await run(app("icims"), { ...icims, config: { ...icims.config, host: "api.attacker.example" } }, "icims_get_job", { job_id: "7" }, fake);
+  assert.equal(out.isError, true);
+  assert.equal(fake.seen.length, 0);
+});
+
+test("connecting proves each sign-in with one cheap read: Zip, UKG Pro, iCIMS", async () => {
+  const key = new CredentialKey(randomBytes(32).toString("base64"));
+  const fake = fakeApp({ total: 12 });
+  const ukgFake = fakeApp([{ companyID: "C1", companyName: "Acme" }]);
+  const icimsFake = fakeApp({ lists: ["lists.job.folders"] });
+  const fakes: Record<string, ReturnType<typeof fakeApp>> = { zip: fake, "ukg-pro": ukgFake, icims: icimsFake };
+  const service = createService({
+    apps: Object.entries(fakes).map(([id, f]) => ({
+      connector: app(id),
+      vendor: httpVendor(app(id), f.fetchImpl),
+      toolset: httpTools(app(id).http!),
+    })),
+    store: fakeStore(key).store,
+    key,
+  });
+  const connect = (connectorId: string, capabilities: string[], fields: Record<string, string>) =>
+    service.connect({ organizationId: ORG, connectorId, capabilities, fields, connectedBy: "admin@x" });
+
+  let r = await connect("zip", ["requests"], { api_key: "zk" });
+  assert.equal(fake.seen[0].url, "https://api.ziphq.com/requests?page_size=1");
+  assert.deepEqual(r.checks[0].values, ["12"]);
+  r = await connect("ukg-pro", ["read"], { host: "service5.ultipro.com", username: "svc", password: "pw", customer_api_key: "ck" });
+  assert.equal(ukgFake.seen[0].url, "https://service5.ultipro.com/configuration/v1/company-details?per_Page=1");
+  assert.deepEqual(r.checks[0].values, ["Acme"]);
+  r = await connect("icims", ["jobs"], { host: "api.icims.com", customer: "1234", username: "u", password: "p" });
+  assert.equal(icimsFake.seen[0].url, "https://api.icims.com/customers/1234/v2/lists");
+  assert.deepEqual(r.checks[0].values, ["lists.job.folders"]);
 });

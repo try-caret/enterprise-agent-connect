@@ -1,0 +1,346 @@
+{
+  "id": "ukg-pro",
+  "name": "UKG Pro",
+  "description": "Let agents read employees, jobs, supervisors and your organization in UKG Pro, and, only if you allow it, time off balances and pay. For joiner and leaver checks, HR change requests, benefits and leave cases, merit files and payroll audits. Agents change nothing.",
+  "logo": "/brand/registry/ukg-pro.svg",
+  "identity": "A UKG Pro web service account, with View on only the web services you grant it, and your company's customer API key.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a web service account",
+      "body": "Create the account as a UKG Pro system administrator. UKG Pro generates its password and shows it once.",
+      "link": {
+        "label": "UKG Pro: web service account",
+        "href": "https://developer.ukg.com/hcm/docs/web-service-account"
+      },
+      "click": [
+        "In UKG Pro, open System Configuration > Security > Service Account Administration > Add.",
+        "User name: ai-agents. Copy the password UKG Pro shows."
+      ]
+    },
+    {
+      "title": "Grant View on the web services agents read",
+      "body": "Give the account the View role on the web services below, and nothing else: pay and time off are listed only if you allow them. Without a service UKG Pro refuses those calls.",
+      "click": ["On the account, grant View for each web service below and save."],
+      "permissions": true
+    },
+    {
+      "title": "Find your service address and customer API key",
+      "body": "The service address differs by data center and between production and test, such as service5.ultipro.com or service4.ultipro.ca. It is not the address you sign in at. You can test everything with the command below: it lists your companies and changes nothing.",
+      "click": [
+        "Open System Configuration > Security > Web Services.",
+        "Copy the host name of the service endpoint, without https:// and /services, and the Customer API Key."
+      ],
+      "copy": [
+        "UKG_HOST=service5.ultipro.com",
+        "curl -s -u \"$UKG_USER:$UKG_PASSWORD\" -H \"US-CUSTOMER-API-KEY: $UKG_CUSTOMER_KEY\" \"https://$UKG_HOST/configuration/v1/company-details?per_Page=1\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "Service address",
+      "help": "The host name of your web services endpoint, such as service5.ultipro.com.",
+      "placeholder": "service5.ultipro.com",
+      "secret": false
+    },
+    { "id": "username", "label": "Service account user name", "secret": false },
+    { "id": "password", "label": "Service account password", "secret": true },
+    { "id": "customer_api_key", "label": "Customer API key", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read employees and organization",
+      "description": "List and read employment details (job, status, supervisor, hire and termination dates), names and work emails, supervisors, and your companies, jobs and org levels.",
+      "required": true,
+      "note": "Read-only. Home addresses, national IDs, health and other personal details are left out of the answers. Reaches every company unless you keep a key to chosen companies.",
+      "scopes": [],
+      "permissions": [
+        "Personnel Integration (View)",
+        "Employee Person Details (View)",
+        "Company Configuration Integration (View)"
+      ],
+      "tools": [
+        "ukg_list_employment_details",
+        "ukg_get_employment_details",
+        "ukg_list_people",
+        "ukg_list_supervisors",
+        "ukg_list_companies",
+        "ukg_list_jobs",
+        "ukg_get_job",
+        "ukg_list_org_levels"
+      ]
+    },
+    {
+      "id": "time_off",
+      "label": "Read time off balances",
+      "description": "Read employees' time off plans with hours earned, taken and pending.",
+      "note": "Read-only.",
+      "scopes": [],
+      "permissions": ["PTO Plan Integration (View)"],
+      "tools": ["ukg_list_time_off_plans", "ukg_get_employee_time_off_plans"]
+    },
+    {
+      "id": "pay",
+      "label": "Read pay and compensation",
+      "description": "Read employees' pay rates, annual salary, pay group, salary grade and review dates, and their job history with each rate change and promotion.",
+      "note": "Pay is sensitive: give it only to agents that prepare merit files or payroll audits. Read-only.",
+      "scopes": [],
+      "permissions": ["Employee Compensation Details (View)", "Employee Job History Details (View)"],
+      "tools": ["ukg_list_compensation", "ukg_get_employee_compensation", "ukg_list_job_history"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "companies",
+      "label": "Companies",
+      "help": "Optional: only employees of these companies, by company ID, shown under Companies after connecting. Agents must then name the company in each call. Leave empty for every company.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9]{1,10}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/configuration/v1/company-details?per_Page=1",
+    "label": "UKG Pro company",
+    "show": "[].companyName"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/configuration/v1/company-details?per_Page=100",
+    "label": "Companies",
+    "show": "[].companyID",
+    "name": "[].companyName"
+  },
+  "revoke": "In UKG Pro, open System Configuration > Security > Service Account Administration and delete the ai-agents account. Agents lose access to UKG Pro at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "allowedHosts": ["*.ultipro.com", "*.ultipro.ca", "*.ukg.net"],
+    "auth": { "type": "basic", "username": "username", "password": "password" },
+    "fieldHeaders": { "US-CUSTOMER-API-KEY": "customer_api_key" },
+    "tools": [
+      {
+        "name": "ukg_list_employment_details",
+        "description": "List employees' employment details. A date filter takes a date as 01-01-2026, >01-01-2026 (after), <01-01-2026 (before) or {01-01-2026,03-01-2026} (between). Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/personnel/v1/employment-details",
+        "params": {
+          "company_id": { "type": "string", "description": "Only employees of this company ID", "in": "query", "name": "companyId", "limit": "companies", "required": false },
+          "employee_id": { "type": "string", "description": "Only this employee ID", "in": "query", "name": "employeeId", "required": false },
+          "employee_number": { "type": "string", "description": "Only this employee number", "in": "query", "name": "employeeNumber", "required": false },
+          "employee_status_code": { "type": "string", "description": "Only this employee status code", "in": "query", "name": "employeeStatusCode", "required": false },
+          "primary_job_code": { "type": "string", "description": "Only this job code", "in": "query", "name": "primaryJobCode", "required": false },
+          "supervisor_id": { "type": "string", "description": "Only employees of this supervisor's employee ID", "in": "query", "name": "supervisorID", "required": false },
+          "last_hire_date": { "type": "string", "description": "Hired on, after, before or between dates", "in": "query", "name": "lastHireDate", "required": false },
+          "date_of_termination": { "type": "string", "description": "Terminated on, after, before or between dates", "in": "query", "name": "dateOfTermination", "required": false },
+          "date_time_changed": { "type": "string", "description": "Changed on, after, before or between dates", "in": "query", "name": "dateTimeChanged", "required": false },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 },
+          "per_page": { "type": "integer", "description": "How many per page", "in": "query", "name": "per_Page", "default": 100 }
+        },
+        "result": {
+          "fields": [
+            "companyID",
+            "companyCode",
+            "employeeID",
+            "employeeNumber",
+            "jobTitle",
+            "primaryJobCode",
+            "employeeStatusCode",
+            "employeeTypeCode",
+            "fullTimeOrPartTimeCode",
+            "orgLevel1Code",
+            "orgLevel2Code",
+            "orgLevel3Code",
+            "orgLevel4Code",
+            "primaryWorkLocationCode",
+            "positionCode",
+            "supervisorID",
+            "supervisorFirstName",
+            "supervisorLastName",
+            "originalHireDate",
+            "lastHireDate",
+            "dateInJob",
+            "statusStartDate",
+            "leaveReasonCode",
+            "plannedLeaveReason",
+            "dateOfTermination",
+            "termType",
+            "termReason",
+            "terminationReasonDescription",
+            "payGroup",
+            "salaryOrHourly",
+            "scheduledFTE",
+            "dateTimeChanged"
+          ]
+        }
+      },
+      {
+        "name": "ukg_get_employment_details",
+        "description": "Read one employee's employment details: job, status, org levels, supervisor, hire, leave and termination dates and reasons.",
+        "method": "GET",
+        "path": "/personnel/v1/companies/{company_id}/employees/{employee_id}/employment-details",
+        "params": {
+          "company_id": { "type": "string", "description": "The employee's company ID", "in": "path", "limit": "companies" },
+          "employee_id": { "type": "string", "description": "The employee ID", "in": "path" }
+        }
+      },
+      {
+        "name": "ukg_list_people",
+        "description": "List employees' names and work email, to find an employee's ID. A date filter takes a date as in ukg_list_employment_details. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/personnel/v1/person-details",
+        "params": {
+          "company_id": { "type": "string", "description": "Only employees of this company ID", "in": "query", "name": "companyId", "limit": "companies", "required": false },
+          "employee_id": { "type": "string", "description": "Only this employee ID", "in": "query", "name": "employeeId", "required": false },
+          "last_name": { "type": "string", "description": "Only this last name", "in": "query", "name": "lastName", "required": false },
+          "email_address": { "type": "string", "description": "Only this email address", "in": "query", "name": "emailAddress", "required": false },
+          "date_time_changed": { "type": "string", "description": "Changed on, after, before or between dates", "in": "query", "name": "dateTimeChanged", "required": false },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 },
+          "per_page": { "type": "integer", "description": "How many per page", "in": "query", "name": "per_Page", "default": 100 }
+        },
+        "result": {
+          "fields": [
+            "employeeId",
+            "companyId",
+            "personId",
+            "firstName",
+            "middleName",
+            "lastName",
+            "preferredName",
+            "emailAddress",
+            "userName",
+            "addressState",
+            "addressCountry"
+          ]
+        }
+      },
+      {
+        "name": "ukg_list_supervisors",
+        "description": "List employees with their supervisor's ID, name, email and job. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/personnel/v1/employee-supervisor-details",
+        "params": {
+          "company_id": { "type": "string", "description": "Only employees of this company ID", "in": "query", "name": "companyId", "limit": "companies", "required": false },
+          "employee_id": { "type": "string", "description": "Only this employee ID", "in": "query", "name": "employeeId", "required": false },
+          "supervisor_employee_id": { "type": "string", "description": "Only the reports of this supervisor's employee ID", "in": "query", "name": "supervisorEmployeeId", "required": false },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 },
+          "per_page": { "type": "integer", "description": "How many per page", "in": "query", "name": "per_Page", "default": 100 }
+        }
+      },
+      {
+        "name": "ukg_list_companies",
+        "description": "List your companies with their company ID and code.",
+        "method": "GET",
+        "path": "/configuration/v1/company-details",
+        "result": {
+          "fields": ["companyID", "companyCode", "companyName", "isMasterCompany", "masterCompanyId", "addressCity", "addressState", "addressCountry"]
+        }
+      },
+      {
+        "name": "ukg_list_jobs",
+        "description": "List job codes with their title, family, group and FLSA type. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/configuration/v2/jobs",
+        "params": {
+          "job_code": { "type": "string", "description": "Only this job code", "in": "query", "name": "jobCode", "required": false },
+          "country_code": { "type": "string", "description": "Only jobs of this country code", "in": "query", "name": "countryCode", "required": false },
+          "is_active": { "type": "boolean", "description": "Only active (or inactive) jobs", "in": "query", "name": "isActive", "required": false },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 },
+          "per_page": { "type": "integer", "description": "How many per page", "in": "query", "default": 100 }
+        }
+      },
+      {
+        "name": "ukg_get_job",
+        "description": "Read one job code's configuration.",
+        "method": "GET",
+        "path": "/configuration/v2/jobs/{code}",
+        "params": {
+          "code": { "type": "string", "description": "The job code", "in": "path" }
+        }
+      },
+      {
+        "name": "ukg_list_org_levels",
+        "description": "List org levels (such as division, department and cost center) with their codes and descriptions.",
+        "method": "GET",
+        "path": "/configuration/v1/org-levels",
+        "params": {
+          "level_description": { "type": "string", "description": "Only this level, by its description", "in": "query", "name": "levelDescription", "required": false },
+          "code": { "type": "string", "description": "Only this org code", "in": "query", "required": false },
+          "is_active": { "type": "boolean", "description": "Only active (or inactive) ones", "in": "query", "name": "isActive", "required": false }
+        },
+        "result": {
+          "fields": ["level", "levelDescription", "code", "description", "budgetGroup", "reportingCategory", "glSegment", "isActive"]
+        }
+      },
+      {
+        "name": "ukg_list_time_off_plans",
+        "description": "List employees' time off plans with hours earned, taken and pending, for every employee. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/personnel/v1/pto-plans",
+        "params": {
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 },
+          "per_page": { "type": "integer", "description": "How many per page", "in": "query", "default": 100 }
+        },
+        "answerLimits": [{ "field": "companyId", "limit": "companies" }]
+      },
+      {
+        "name": "ukg_get_employee_time_off_plans",
+        "description": "Read one employee's time off plans with hours earned, taken and pending.",
+        "method": "GET",
+        "path": "/personnel/v1/companies/{company_id}/employees/{employee_id}/pto-plans",
+        "params": {
+          "company_id": { "type": "string", "description": "The employee's company ID", "in": "path", "limit": "companies" },
+          "employee_id": { "type": "string", "description": "The employee ID", "in": "path" }
+        }
+      },
+      {
+        "name": "ukg_list_compensation",
+        "description": "List employees' pay: annual salary, hourly and period rates, pay group, salary grade and salary review dates. A date filter takes a date as in ukg_list_employment_details. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/personnel/v1/compensation-details",
+        "params": {
+          "company_id": { "type": "string", "description": "Only employees of this company ID", "in": "query", "name": "companyId", "limit": "companies", "required": false },
+          "employee_id": { "type": "string", "description": "Only this employee ID", "in": "query", "name": "employeeId", "required": false },
+          "primary_job_code": { "type": "string", "description": "Only this job code", "in": "query", "name": "primaryJobCode", "required": false },
+          "pay_group_code": { "type": "string", "description": "Only this pay group", "in": "query", "name": "payGroupCode", "required": false },
+          "salary_or_hourly_code": { "type": "string", "description": "Only this salary or hourly code", "in": "query", "name": "salaryOrHourlyCode", "required": false },
+          "date_in_job": { "type": "string", "description": "In the job since, after, before or between dates", "in": "query", "name": "dateInJob", "required": false },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 },
+          "per_page": { "type": "integer", "description": "How many per page", "in": "query", "name": "per_Page", "default": 100 }
+        }
+      },
+      {
+        "name": "ukg_get_employee_compensation",
+        "description": "Read one employee's pay: annual salary, rates, pay group, salary grade and review dates.",
+        "method": "GET",
+        "path": "/personnel/v1/companies/{company_id}/employees/{employee_id}/compensation-details",
+        "params": {
+          "company_id": { "type": "string", "description": "The employee's company ID", "in": "path", "limit": "companies" },
+          "employee_id": { "type": "string", "description": "The employee ID", "in": "path" }
+        }
+      },
+      {
+        "name": "ukg_list_job_history",
+        "description": "List job history entries: each job, org, rate change or promotion with its effective date, reason, pay rate and percent change. A date filter takes a date as in ukg_list_employment_details. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/personnel/v1/employee-job-history-details",
+        "params": {
+          "company_id": { "type": "string", "description": "Only employees of this company ID", "in": "query", "name": "companyId", "limit": "companies", "required": false },
+          "employee_id": { "type": "string", "description": "Only this employee ID", "in": "query", "name": "employeeId", "required": false },
+          "is_rate_change": { "type": "string", "enum": ["true", "false"], "description": "Only rate changes (or not)", "in": "query", "name": "isRateChange", "required": false },
+          "is_promotion": { "type": "string", "enum": ["true", "false"], "description": "Only promotions (or not)", "in": "query", "name": "isPromotion", "required": false },
+          "is_job_change": { "type": "string", "enum": ["true", "false"], "description": "Only job changes (or not)", "in": "query", "name": "isJobChange", "required": false },
+          "job_effective_date": { "type": "string", "description": "Effective on, after, before or between dates", "in": "query", "name": "jobEffectiveDate", "required": false },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 },
+          "per_page": { "type": "integer", "description": "How many per page", "in": "query", "name": "per_Page", "default": 100 }
+        }
+      }
+    ]
+  }
+}

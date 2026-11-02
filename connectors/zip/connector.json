@@ -1,0 +1,509 @@
+{
+  "id": "zip",
+  "name": "Zip",
+  "description": "Let agents read purchase requests, approvals, purchase orders, invoices, vendors and agreements in Zip. For matching quotes and invoices to requests and POs, chasing stalled approvals, renewal checks and spend reports. Agents never submit, approve or pay.",
+  "logo": "/brand/registry/zip.svg",
+  "identity": "A Zip restricted API key with read-only access to the record types you choose. It is not tied to a person and can change nothing.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a restricted, read-only API key",
+      "body": "Create the key as a Zip admin. Choose Restricted, then Read only for each kind of record agents read: requests, approvals and comments, purchase orders and invoices, vendors and agreements, and departments if you keep agents to chosen departments. Zip shows the key only once.",
+      "link": {
+        "label": "Zip API reference",
+        "href": "https://developers.ziphq.com/"
+      },
+      "click": [
+        "In Zip, select the settings icon at the top right > Company settings > Setup > API > API keys.",
+        "Select + Create API key > Restricted. Name: AI agents. Set an expiration date if your policy asks for one.",
+        "For each record type above, choose Read only. Leave every other record type without access.",
+        "Select Create and copy the key."
+      ]
+    },
+    {
+      "title": "Test the key",
+      "body": "The command below counts your requests and changes nothing.",
+      "copy": ["curl -s -H \"Zip-Api-Key: $ZIP_API_KEY\" \"https://api.ziphq.com/requests?page_size=1\""],
+      "shell": "bash",
+      "clickUnavailable": true
+    }
+  ],
+  "afterConnect": [],
+  "fields": [{ "id": "api_key", "label": "API key", "secret": true }],
+  "capabilities": [
+    {
+      "id": "requests",
+      "label": "Read purchase requests",
+      "description": "Search purchase requests by number, status, type, vendor, department or date, and read one request with its amounts, line items, vendor, owner, custom fields and linked purchase order.",
+      "required": true,
+      "note": "Read-only. Reaches every request the key can read unless you keep a key to chosen departments.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["zip_search_requests", "zip_get_request"]
+    },
+    {
+      "id": "approvals",
+      "label": "Read approvals and comments",
+      "description": "Search approval steps by request, status or due date to see who still has to approve, and read a request's comments and questionnaire answers.",
+      "note": "Read by request number or id, so these are not held to the departments you choose for a key.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["zip_search_approvals", "zip_list_request_comments", "zip_get_request_questionnaires"]
+    },
+    {
+      "id": "spend",
+      "label": "Read purchase orders and invoices",
+      "description": "Search and read purchase orders, with what has been billed against them, and supplier invoices with their status, amounts and matched purchase orders.",
+      "note": "Not held to the departments you choose for a key.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["zip_search_purchase_orders", "zip_get_purchase_order", "zip_search_invoices", "zip_get_invoice"]
+    },
+    {
+      "id": "vendors",
+      "label": "Read vendors and agreements",
+      "description": "Search and read vendors, and list agreements with their dates, amounts and renewal status.",
+      "note": "Not held to the departments you choose for a key.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["zip_search_vendors", "zip_get_vendor", "zip_search_agreements"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "departments",
+      "label": "Departments",
+      "help": "Optional: only purchase requests of these departments, shown under Departments after connecting. Covers searching and reading requests only. Leave empty for every department.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    }
+  ],
+  "verify": { "method": "GET", "path": "/requests?page_size=1", "label": "Requests in Zip", "show": "total" },
+  "discover": {
+    "method": "GET",
+    "path": "/departments?page_size=100",
+    "label": "Departments",
+    "show": "list[].id",
+    "name": "list[].name"
+  },
+  "revoke": "In Zip, open Company settings > Setup > API > API keys and delete the AI agents key. Agents lose access to Zip at once.",
+  "http": {
+    "baseUrl": "https://api.ziphq.com",
+    "auth": { "type": "header", "header": "Zip-Api-Key", "value": "api_key" },
+    "tools": [
+      {
+        "name": "zip_search_requests",
+        "description": "Search purchase requests, newest first. Times are seconds since 1970. Pass next from the answer as page_token for the next page.",
+        "method": "GET",
+        "path": "/requests",
+        "params": {
+          "request_number": { "type": "string", "description": "The request number, as shown in Zip", "in": "query", "required": false },
+          "status": {
+            "type": "integer",
+            "enum": [1, 2, 3, 4, 5, 6],
+            "description": "Only requests in this status: 1 awaiting approval, 2 rejected, 3 approved, 4 canceled, 5 closed, 6 paused",
+            "in": "query",
+            "required": false
+          },
+          "request_type": {
+            "type": "string",
+            "enum": [
+              "PURCHASE_REQUEST",
+              "SOURCING_PROJECT",
+              "SOURCING_INSTANCE",
+              "BILL",
+              "PAYOUT_GROUP",
+              "INVOICE_ASSIGNMENT",
+              "PO_CHANGE_ORDER",
+              "SECURITY_REVIEW",
+              "VENDOR_ONBOARDING",
+              "SOURCING_REQUEST",
+              "GOODS_RECEIVING",
+              "DISBURSEMENT_REQUEST",
+              "VENDOR_UPDATE",
+              "VENDOR_MANAGEMENT_ONBOARDING",
+              "VENDOR_MANAGEMENT_UPDATE",
+              "CHANGE_ORDER",
+              "CONTRACT_AMENDMENT"
+            ],
+            "description": "Only requests of this type",
+            "in": "query",
+            "required": false
+          },
+          "department_id": {
+            "type": "array",
+            "items": "string",
+            "description": "Only requests of these department ids",
+            "in": "query",
+            "limit": "departments",
+            "required": false
+          },
+          "vendor_id": { "type": "string", "description": "Only requests for this vendor id", "in": "query", "required": false },
+          "vendor_name": { "type": "string", "description": "Only requests for this vendor name", "in": "query", "required": false },
+          "requester_name": { "type": "string", "description": "Only requests by this requester", "in": "query", "required": false },
+          "created_after": { "type": "integer", "description": "Only requests created after this time", "in": "query", "required": false },
+          "created_before": { "type": "integer", "description": "Only requests created before this time", "in": "query", "required": false },
+          "completed_after": { "type": "integer", "description": "Only requests completed after this time", "in": "query", "required": false },
+          "last_updated_after": { "type": "integer", "description": "Only requests updated after this time", "in": "query", "required": false },
+          "sort_by": {
+            "type": "string",
+            "enum": ["create_time", "complete_time", "last_updated_time", "request_number", "status"],
+            "description": "What to sort by",
+            "in": "query",
+            "default": "create_time"
+          },
+          "page_size": { "type": "integer", "description": "How many per page, at most 30", "in": "query", "default": 20 },
+          "page_token": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page_token", "body": "next_page_token" },
+        "result": {
+          "items": "list",
+          "fields": [
+            "id",
+            "request_number",
+            "name",
+            "status",
+            "request_type",
+            "department.id",
+            "department.name",
+            "vendor.id",
+            "vendor.name",
+            "requester.email",
+            "amount_usd",
+            "price_detail.total",
+            "price_detail.currency",
+            "purchase_order.po_number",
+            "created_at",
+            "completed_at",
+            "updated_at",
+            "request_link"
+          ]
+        }
+      },
+      {
+        "name": "zip_get_request",
+        "description": "Read one purchase request: description, status and why, vendor, department, requester and owner, amounts and line items, term and renewal dates, custom fields and its purchase order.",
+        "method": "GET",
+        "path": "/requests/{request_id}",
+        "params": {
+          "request_id": { "type": "string", "description": "The request's id (not its number), from zip_search_requests", "in": "path" }
+        },
+        "answerLimits": [{ "field": "department.id", "limit": "departments" }],
+        "result": {
+          "fields": [
+            "id",
+            "request_number",
+            "name",
+            "description",
+            "status",
+            "status_reason",
+            "request_type",
+            "priority",
+            "workflow.name",
+            "category.name",
+            "subcategory.name",
+            "department",
+            "subsidiary",
+            "location.name",
+            "gl_code.name",
+            "vendor.id",
+            "vendor.name",
+            "is_existing_vendor",
+            "requester.email",
+            "requester.first_name",
+            "requester.last_name",
+            "owner.email",
+            "amount_usd",
+            "price_detail.total",
+            "price_detail.currency",
+            "price_detail.start_date",
+            "price_detail.end_date",
+            "price_detail.renewal_date",
+            "price_detail.line_items",
+            "payment_terms.name",
+            "purchase_order",
+            "renewal_source_request",
+            "attachments.name",
+            "attributes.name",
+            "attributes.data",
+            "created_at",
+            "completed_at",
+            "updated_at",
+            "request_link"
+          ]
+        }
+      },
+      {
+        "name": "zip_search_approvals",
+        "description": "Search approval steps, such as those still waiting or past due, with their assignee and request. Times are seconds since 1970. Pass next from the answer as page_token for the next page.",
+        "method": "GET",
+        "path": "/approvals",
+        "params": {
+          "request_number": { "type": "string", "description": "Only approvals of this request number", "in": "query", "required": false },
+          "status": {
+            "type": "integer",
+            "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            "description": "Only approvals in this status: 0 upcoming, 1 ready to start (waiting on the approver), 2 rejected, 3 approved, 4 approved automatically, 5 canceled, 6 to 8 a custom status of your company",
+            "in": "query",
+            "required": false
+          },
+          "due_before": { "type": "integer", "description": "Only approvals due before this time", "in": "query", "required": false },
+          "due_after": { "type": "integer", "description": "Only approvals due after this time", "in": "query", "required": false },
+          "started_after": { "type": "integer", "description": "Only approvals started after this time", "in": "query", "required": false },
+          "completed_after": { "type": "integer", "description": "Only approvals completed after this time", "in": "query", "required": false },
+          "sort_by": {
+            "type": "string",
+            "enum": ["start_time", "complete_time", "due_date", "request_create_time", "request_number"],
+            "description": "What to sort by",
+            "in": "query",
+            "default": "start_time"
+          },
+          "page_size": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 50 },
+          "page_token": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page_token", "body": "next_page_token" },
+        "result": {
+          "items": "list",
+          "fields": [
+            "id",
+            "name",
+            "status",
+            "display_status",
+            "start_time",
+            "due_date",
+            "complete_time",
+            "assignee.email",
+            "queue.name",
+            "request.id",
+            "request.request_number",
+            "request.name",
+            "request.status"
+          ]
+        }
+      },
+      {
+        "name": "zip_list_request_comments",
+        "description": "List the comments on a purchase request, with their replies.",
+        "method": "GET",
+        "path": "/comments",
+        "params": {
+          "request_id": { "type": "string", "description": "The request's id (not its number)", "in": "query", "name": "request_guid" }
+        },
+        "result": {
+          "items": "list",
+          "fields": ["id", "commenter.email", "text", "created_at", "comment_responses.commenter.email", "comment_responses.text"]
+        }
+      },
+      {
+        "name": "zip_get_request_questionnaires",
+        "description": "Read the questionnaires answered on a purchase request, such as intake or security review questions, with each question and answer.",
+        "method": "GET",
+        "path": "/requests/{request_id}/questionnaire_responses",
+        "params": {
+          "request_id": { "type": "string", "description": "The request's id (not its number)", "in": "path" }
+        },
+        "result": { "items": "list" }
+      },
+      {
+        "name": "zip_search_purchase_orders",
+        "description": "Search purchase orders, newest first. Times are seconds since 1970. Pass next from the answer as page_token for the next page.",
+        "method": "GET",
+        "path": "/purchase_orders",
+        "params": {
+          "po_number": {
+            "type": "string",
+            "description": "The PO number. Works only if Zip has turned on extra PO search filters for your company",
+            "in": "query",
+            "required": false
+          },
+          "vendor_id": { "type": "string", "description": "Only purchase orders of this vendor id", "in": "query", "required": false },
+          "created_after": { "type": "integer", "description": "Only purchase orders created after this time", "in": "query", "required": false },
+          "created_before": { "type": "integer", "description": "Only purchase orders created before this time", "in": "query", "required": false },
+          "last_updated_after": { "type": "integer", "description": "Only purchase orders with activity after this time", "in": "query", "required": false },
+          "open_amount_greater_than": { "type": "number", "description": "Only purchase orders with more than this left open", "in": "query", "required": false },
+          "page_size": { "type": "integer", "description": "How many per page, at most 50", "in": "query", "default": 20 },
+          "page_token": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page_token", "body": "next_page_token" },
+        "result": {
+          "items": "list",
+          "fields": [
+            "id",
+            "po_number",
+            "status",
+            "description",
+            "total_amount",
+            "currency",
+            "amount_billed",
+            "vendor.id",
+            "vendor.name",
+            "department.name",
+            "original_request.request_number",
+            "start_date",
+            "end_date",
+            "created_at",
+            "invoices.invoice_number"
+          ]
+        }
+      },
+      {
+        "name": "zip_get_purchase_order",
+        "description": "Read one purchase order: vendor, amounts billed and credited, dates, line items, change orders and the invoices against it.",
+        "method": "GET",
+        "path": "/purchase_orders/{purchase_order_id}",
+        "params": {
+          "purchase_order_id": { "type": "string", "description": "The purchase order's id (not its PO number)", "in": "path" }
+        }
+      },
+      {
+        "name": "zip_search_invoices",
+        "description": "Search supplier invoices, newest first. Times are seconds since 1970. Pass next from the answer as page_token for the next page.",
+        "method": "GET",
+        "path": "/invoices",
+        "params": {
+          "invoice_number": { "type": "string", "description": "The supplier's invoice number", "in": "query", "required": false },
+          "vendor_id": { "type": "string", "description": "Only invoices of this vendor id", "in": "query", "required": false },
+          "status": {
+            "type": "array",
+            "items": "string",
+            "enum": [
+              "INITIAL",
+              "PENDING_APPROVAL",
+              "APPROVED",
+              "REJECTED",
+              "ARCHIVED",
+              "PENDING_PAYOUT_APPROVAL",
+              "PAYOUT_SCHEDULED",
+              "PAYOUT_INITIATED",
+              "PAID",
+              "PAYOUT_FAILED",
+              "PAYOUT_CANCELED",
+              "RECEIPT_HOLD"
+            ],
+            "description": "Only invoices in these statuses",
+            "in": "query",
+            "required": false
+          },
+          "created_after": { "type": "integer", "description": "Only invoices created after this time", "in": "query", "required": false },
+          "created_before": { "type": "integer", "description": "Only invoices created before this time", "in": "query", "required": false },
+          "updated_after": { "type": "integer", "description": "Only invoices updated after this time", "in": "query", "required": false },
+          "invoice_amount_min": { "type": "number", "description": "Only invoices of at least this amount", "in": "query", "required": false },
+          "invoice_amount_max": { "type": "number", "description": "Only invoices of at most this amount", "in": "query", "required": false },
+          "line_items_count_only": { "type": "boolean", "description": "Count line items instead of listing them", "in": "query", "default": true },
+          "page_size": { "type": "integer", "description": "How many per page, at most 50", "in": "query", "default": 20 },
+          "page_token": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page_token", "body": "next_page_token" },
+        "result": {
+          "items": "list",
+          "fields": [
+            "id",
+            "invoice_number",
+            "status",
+            "amount",
+            "currency",
+            "invoice_date",
+            "due_date_iso",
+            "vendor.id",
+            "vendor.name",
+            "department.name",
+            "purchase_orders.po_number",
+            "requesters.email",
+            "approved_at",
+            "flagged_for_coding",
+            "erp_sync_status",
+            "line_items_count",
+            "created_at"
+          ]
+        }
+      },
+      {
+        "name": "zip_get_invoice",
+        "description": "Read one supplier invoice: amounts and tax, dates, vendor, matched purchase orders, approvals, coding and line items.",
+        "method": "GET",
+        "path": "/invoices/{invoice_id}",
+        "params": {
+          "invoice_id": { "type": "string", "description": "The invoice's id (not the supplier's invoice number)", "in": "path" }
+        }
+      },
+      {
+        "name": "zip_search_vendors",
+        "description": "Search vendors by name or status. Pass next from the answer as page_token for the next page.",
+        "method": "GET",
+        "path": "/vendors",
+        "params": {
+          "name": { "type": "string", "description": "The vendor's name", "in": "query", "required": false },
+          "status": {
+            "type": "array",
+            "items": "string",
+            "enum": ["ACTIVE", "PREFERRED", "INACTIVE", "BANNED", "DRAFT"],
+            "description": "Only vendors in these statuses",
+            "in": "query",
+            "required": false
+          },
+          "page_size": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 20 },
+          "page_token": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page_token", "body": "next_page_token" },
+        "result": {
+          "items": "list",
+          "fields": ["id", "name", "legal_name", "status", "risk", "tier", "currency", "website_link", "po_email", "updated_at", "last_reviewed_at"]
+        }
+      },
+      {
+        "name": "zip_get_vendor",
+        "description": "Read one vendor: names, status, risk and tier, contacts, sites, categories and owners.",
+        "method": "GET",
+        "path": "/vendors/{vendor_id}",
+        "params": {
+          "vendor_id": { "type": "string", "description": "The vendor's id", "in": "path" }
+        }
+      },
+      {
+        "name": "zip_search_agreements",
+        "description": "List agreements, such as a vendor's contracts with their term, amount and renewal status. Pass next from the answer as page_token for the next page.",
+        "method": "GET",
+        "path": "/agreements",
+        "params": {
+          "vendor_id": { "type": "string", "description": "Only agreements with this vendor id", "in": "query", "required": false },
+          "department_id": { "type": "string", "description": "Only agreements of this department id", "in": "query", "required": false },
+          "sort_by": {
+            "type": "string",
+            "enum": ["created_at", "updated_at"],
+            "description": "What to sort by, newest first",
+            "in": "query",
+            "default": "created_at"
+          },
+          "page_size": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 20 },
+          "page_token": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page_token", "body": "next_page_token" },
+        "result": {
+          "items": "list",
+          "fields": [
+            "agreement_number",
+            "name",
+            "agreement_type",
+            "status",
+            "amount",
+            "currency",
+            "start_date",
+            "end_date",
+            "renewal_date",
+            "renewal_status",
+            "auto_renews",
+            "opt_out_date",
+            "vendor.id",
+            "vendor.name",
+            "department.name",
+            "original_request.id",
+            "original_request.request_number",
+            "attachments.name"
+          ]
+        }
+      }
+    ]
+  }
+}
