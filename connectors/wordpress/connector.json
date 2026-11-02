@@ -1,0 +1,181 @@
+{
+  "id": "wordpress",
+  "name": "WordPress",
+  "description": "Let agents draft posts on your WordPress site for an editor to review: find and read posts, create drafts or posts waiting for review and, if you allow it, edit posts. Agents never publish.",
+  "logo": "/brand/registry/wordpress.svg",
+  "identity": "An application password of a WordPress user. Agents act as that user, so make one with the Author or Contributor role.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a user for agents",
+      "body": "Make a WordPress user for agents with the Contributor role (writes posts for review) or Author. Agents can only ever save drafts or posts pending review, whatever the role.",
+      "click": ["In WordPress admin, go to Users, then Add New User, and create a user named Agents with the Contributor role."]
+    },
+    {
+      "title": "Create an application password",
+      "body": "Application passwords work over https only and need WordPress 5.6 or later. WordPress shows the password once.",
+      "link": {
+        "label": "WordPress: application passwords",
+        "href": "https://developer.wordpress.org/rest-api/using-the-rest-api/authentication/"
+      },
+      "click": [
+        "In WordPress admin, go to Users, then edit the Agents user.",
+        "Under Application Passwords, enter the name Agents and select Add New Application Password.",
+        "Copy the password."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "Site address",
+      "help": "Your site's host name, without https:// or a path.",
+      "placeholder": "blog.example.com",
+      "secret": false
+    },
+    {
+      "id": "username",
+      "label": "Username",
+      "help": "The agents' WordPress user.",
+      "secret": false
+    },
+    {
+      "id": "app_password",
+      "label": "Application password",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read posts",
+      "description": "Find posts by text or status, read one post, and list categories and tags.",
+      "required": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["wordpress_list_posts", "wordpress_get_post", "wordpress_list_categories", "wordpress_list_tags"]
+    },
+    {
+      "id": "draft",
+      "label": "Write drafts",
+      "description": "Create posts as drafts or pending review. Nothing is published.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["wordpress_create_draft"]
+    },
+    {
+      "id": "edit",
+      "label": "Edit posts",
+      "description": "Change a post's title, content, excerpt, categories or tags, or set it back to draft or pending review.",
+      "destructive": true,
+      "note": "Edits to a published post show on the site at once, and setting one to draft takes it down. A Contributor can edit only their own unpublished posts, so give agents that role if they should never touch live posts.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["wordpress_update_post"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/users/me",
+    "label": "WordPress user",
+    "show": "name"
+  },
+  "revoke": "In WordPress admin, edit the Agents user and revoke the application password under Application Passwords. Agents lose access to the site at once.",
+  "http": {
+    "baseUrl": "https://{host}/wp-json/wp/v2",
+    "auth": { "type": "basic", "username": "username", "password": "app_password" },
+    "tools": [
+      {
+        "name": "wordpress_list_posts",
+        "description": "Find posts, newest first, by text or status.",
+        "method": "GET",
+        "path": "/posts",
+        "params": {
+          "search": { "type": "string", "description": "Text to look for", "in": "query", "required": false },
+          "status": {
+            "type": "array",
+            "items": "string",
+            "description": "Statuses to include",
+            "in": "query",
+            "join": ",",
+            "enum": ["draft", "pending", "future", "publish", "private"],
+            "required": false
+          },
+          "per_page": { "type": "integer", "description": "Posts per page, up to 100", "in": "query", "default": 20 },
+          "page": { "type": "integer", "description": "The page, from the previous answer", "in": "query", "required": false },
+          "context": { "type": "string", "description": "Always edit, to see drafts", "in": "query", "enum": ["edit"], "default": "edit" }
+        },
+        "result": { "fields": ["id", "date", "modified", "status", "title.raw", "excerpt.raw", "link", "author", "categories", "tags"] },
+        "paging": { "param": "page", "link": true }
+      },
+      {
+        "name": "wordpress_get_post",
+        "description": "Read one post, with its content.",
+        "method": "GET",
+        "path": "/posts/{id}",
+        "params": {
+          "id": { "type": "integer", "description": "The post id", "in": "path" },
+          "context": { "type": "string", "description": "Always edit, to see drafts", "in": "query", "enum": ["edit"], "default": "edit" }
+        },
+        "result": { "fields": ["id", "date", "modified", "status", "title.raw", "content.raw", "excerpt.raw", "link", "author", "categories", "tags"] }
+      },
+      {
+        "name": "wordpress_list_categories",
+        "description": "List categories, by name.",
+        "method": "GET",
+        "path": "/categories",
+        "params": {
+          "search": { "type": "string", "description": "Text to look for", "in": "query", "required": false },
+          "per_page": { "type": "integer", "description": "Categories per page, up to 100", "in": "query", "default": 100 }
+        },
+        "result": { "fields": ["id", "name", "slug", "parent", "count"] }
+      },
+      {
+        "name": "wordpress_list_tags",
+        "description": "List tags, by name.",
+        "method": "GET",
+        "path": "/tags",
+        "params": {
+          "search": { "type": "string", "description": "Text to look for", "in": "query", "required": false },
+          "per_page": { "type": "integer", "description": "Tags per page, up to 100", "in": "query", "default": 100 }
+        },
+        "result": { "fields": ["id", "name", "slug", "count"] }
+      },
+      {
+        "name": "wordpress_create_draft",
+        "description": "Create a post as a draft, or pending review for an editor.",
+        "method": "POST",
+        "path": "/posts",
+        "params": {
+          "title": { "type": "string", "description": "The title", "in": "body" },
+          "content": { "type": "string", "description": "The content, as HTML or block markup", "in": "body" },
+          "excerpt": { "type": "string", "description": "A short summary", "in": "body", "required": false },
+          "categories": { "type": "array", "items": "integer", "description": "Category ids", "in": "body", "required": false },
+          "tags": { "type": "array", "items": "integer", "description": "Tag ids", "in": "body", "required": false },
+          "status": { "type": "string", "description": "Draft, or pending review", "in": "body", "enum": ["draft", "pending"], "default": "draft" }
+        },
+        "result": { "fields": ["id", "status", "link", "title.raw"] }
+      },
+      {
+        "name": "wordpress_update_post",
+        "description": "Edit a post. Only the fields you send change. Edits to a published post show on the site at once.",
+        "method": "POST",
+        "path": "/posts/{id}",
+        "destructive": true,
+        "params": {
+          "id": { "type": "integer", "description": "The post id", "in": "path" },
+          "title": { "type": "string", "description": "The title", "in": "body", "required": false },
+          "content": { "type": "string", "description": "The content, as HTML or block markup", "in": "body", "required": false },
+          "excerpt": { "type": "string", "description": "A short summary", "in": "body", "required": false },
+          "categories": { "type": "array", "items": "integer", "description": "Category ids", "in": "body", "required": false },
+          "tags": { "type": "array", "items": "integer", "description": "Tag ids", "in": "body", "required": false },
+          "status": { "type": "string", "description": "Set it to draft or pending review (leave out to keep its status)", "in": "body", "enum": ["draft", "pending"], "required": false }
+        },
+        "result": { "fields": ["id", "status", "link", "title.raw"] }
+      }
+    ]
+  }
+}

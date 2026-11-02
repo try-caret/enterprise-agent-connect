@@ -1,0 +1,286 @@
+{
+  "id": "cvent",
+  "name": "Cvent",
+  "description": "Let agents read your Cvent events: who was invited and who registered, attended or declined, each event's invitation lists and its exhibitors and sponsors. For reconciling RSVPs and matching delegates to sponsors.",
+  "logo": "/brand/registry/cvent.svg",
+  "identity": "A Cvent REST API application (machine to machine). It reads with the scopes you give its workspace, across every event in your Cvent account.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a REST API workspace",
+      "body": "You need a Cvent administrator for this. Give the workspace only the read scopes below. If you are not a developer on it yourself, invite yourself (or whoever finishes setup) under Developers. This connection works with Cvent accounts in the North American data center.",
+      "link": {
+        "label": "Cvent: inviting developers to your workspace",
+        "href": "https://developers.cvent.com/docs/rest-api/tutorials/inviting-your-developers"
+      },
+      "click": [
+        "In Cvent, hover over the global navigation and select Admin, then under Integrations select REST API.",
+        "Select + Create Workspace, name it Agents, tick only the scopes below, then Save.",
+        "On the Developers tab, select + Invite Developers, enter the email of whoever finishes setup, select the Agents workspace, then Send."
+      ],
+      "copy": ["{scope}"]
+    },
+    {
+      "title": "Create a machine to machine application",
+      "body": "Sign in to the Cvent Developer Portal as that developer and create an application in the Agents workspace with the same scopes. Copy its client ID and client secret for the form below.",
+      "link": {
+        "label": "Cvent: making your first API call",
+        "href": "https://developers.cvent.com/docs/rest-api/tutorials/developer-quickstart"
+      },
+      "click": [
+        "In the Cvent Developer Portal, go to Applications and select Create application.",
+        "Enter a name such as Agents, select Machine to machine, assign the scopes below, then Save.",
+        "Select View applications and copy the Client ID and Client secret."
+      ],
+      "copy": ["{scope}"]
+    },
+    {
+      "title": "Check what people agreed to",
+      "body": "Attendee and contact records hold names, emails, companies and registration answers. Make sure your event privacy notices allow agents to read them, and give contact lookups only to agents that need them.",
+      "click": ["Ask your privacy or events team whether attendee data may be read by AI agents."],
+      "confirm": "cvent-attendee-data"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read_events",
+      "label": "Read events and attendees",
+      "description": "List and read events, list attendees (invitees, registrants and their status, invitation list and check-in), read one attendee, and list an event's invitation lists.",
+      "required": true,
+      "note": "Reaches every event in the account unless you keep an agent to chosen events.",
+      "scopes": ["event/events:read", "event/attendees:read", "event/invitation-lists:read"],
+      "permissions": [],
+      "tools": [
+        "cvent_list_events",
+        "cvent_get_event",
+        "cvent_list_attendees",
+        "cvent_get_attendee",
+        "cvent_list_invitation_lists"
+      ]
+    },
+    {
+      "id": "read_exhibitors",
+      "label": "Read exhibitors and sponsors",
+      "description": "List an event's exhibitors and sponsors, with their sponsorship level, and the event's sponsorship levels.",
+      "scopes": ["exhibitor/exhibitors:read", "exhibitor/sponsorship-levels:read"],
+      "permissions": [],
+      "tools": ["cvent_list_exhibitors", "cvent_list_sponsorship_levels"]
+    },
+    {
+      "id": "read_contacts",
+      "label": "Look up contacts",
+      "description": "Read a contact's name, email, company and title from your Cvent address book.",
+      "note": "Contacts are account-wide, not limited to chosen events.",
+      "scopes": ["event/contacts:read"],
+      "permissions": [],
+      "tools": ["cvent_get_contact"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "events",
+      "label": "Events",
+      "help": "Optional: only these Cvent events (their ids). Attendee lists must then be filtered to one of them, such as event.id eq '<id>'. Leave empty for every event.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9A-Fa-f-]{36}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/events?limit=5",
+    "label": "Cvent events",
+    "show": "data[].title"
+  },
+  "revoke": "In the Cvent Developer Portal, go to Applications and delete the application (turn off Termination Protection first if it is on). Agents lose access to Cvent at once.",
+  "http": {
+    "baseUrl": "https://api-platform.cvent.com/ea",
+    "auth": {
+      "type": "oauth2",
+      "tokenUrl": "https://api-platform.cvent.com/ea/oauth2/token",
+      "clientId": "client_id",
+      "clientSecret": "client_secret",
+      "clientAuth": "basic"
+    },
+    "tools": [
+      {
+        "name": "cvent_list_events",
+        "description": "List events, newest changes first unless sorted. Filter with Cvent's filter syntax, e.g. title contains 'Summit' and start ge '2026-01-01T00:00:00Z'.",
+        "method": "GET",
+        "path": "/events",
+        "params": {
+          "filter": {
+            "type": "string",
+            "description": "Cvent filter, e.g. status eq 'Active' (fields: id, title, code, start, end, status, format, venue.address.city)",
+            "in": "query",
+            "required": false
+          },
+          "sort": {
+            "type": "string",
+            "description": "Sort order, start:ASC or start:DESC",
+            "in": "query",
+            "required": false,
+            "enum": ["start:ASC", "start:DESC"]
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Events per page, up to 200",
+            "in": "query",
+            "default": 50
+          },
+          "token": {
+            "type": "string",
+            "description": "The next page's cursor, from the previous answer",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["id", "title", "code", "start", "end", "timezone", "status", "format", "capacity", "venues.name"]
+        },
+        "paging": { "param": "token", "body": "paging.nextToken" }
+      },
+      {
+        "name": "cvent_get_event",
+        "description": "Read one event by its id: dates, venue, status, capacity, planners and custom fields.",
+        "method": "GET",
+        "path": "/events/{event_id}",
+        "params": {
+          "event_id": { "type": "string", "description": "The event id", "in": "path", "limit": "events" }
+        }
+      },
+      {
+        "name": "cvent_list_attendees",
+        "description": "List attendees (invitees and registrants) with their status, invitation list, registration type and check-in. Filter to one event with event.id eq '<id>'; add status eq 'Accepted' (or Declined, Invited, No Response, Cancelled) to reconcile RSVPs.",
+        "method": "GET",
+        "path": "/attendees",
+        "params": {
+          "filter": {
+            "type": "string",
+            "description": "Cvent filter, e.g. event.id eq '<id>' and invitationList.id eq '<id>' (fields: event.id, invitationList.id, registrationType.id, checkedIn, registeredAt)",
+            "in": "query",
+            "required": false
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Attendees per page, up to 200",
+            "in": "query",
+            "default": 100
+          },
+          "token": {
+            "type": "string",
+            "description": "The next page's cursor, from the previous answer",
+            "in": "query",
+            "required": false
+          }
+        },
+        "answerLimits": [{ "field": "data.event.id", "limit": "events" }],
+        "result": {
+          "items": "data",
+          "fields": [
+            "id",
+            "event.id",
+            "contact.id",
+            "contact.firstName",
+            "contact.lastName",
+            "contact.email",
+            "contact.company",
+            "contact.title",
+            "status",
+            "invitationList.id",
+            "registrationType.id",
+            "registeredAt",
+            "registrationCancelledAt",
+            "responseMethod",
+            "checkedIn",
+            "guest"
+          ]
+        },
+        "paging": { "param": "token", "body": "paging.nextToken" }
+      },
+      {
+        "name": "cvent_get_attendee",
+        "description": "Read one attendee by id, with their registration answers.",
+        "method": "GET",
+        "path": "/attendees/{attendee_id}",
+        "params": {
+          "attendee_id": { "type": "string", "description": "The attendee id", "in": "path" }
+        },
+        "answerLimits": [{ "field": "event.id", "limit": "events" }]
+      },
+      {
+        "name": "cvent_list_invitation_lists",
+        "description": "List an event's invitation lists, the waves invitees are grouped in.",
+        "method": "GET",
+        "path": "/events/{event_id}/invitation-lists",
+        "params": {
+          "event_id": { "type": "string", "description": "The event id", "in": "path", "limit": "events" },
+          "token": {
+            "type": "string",
+            "description": "The next page's cursor, from the previous answer",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": { "items": "data", "fields": ["id", "name", "default", "locale"] },
+        "paging": { "param": "token", "body": "paging.nextToken" }
+      },
+      {
+        "name": "cvent_list_exhibitors",
+        "description": "List an event's exhibitors and sponsors, with whether each is a sponsor and its sponsorship level.",
+        "method": "GET",
+        "path": "/events/{event_id}/exhibitors",
+        "params": {
+          "event_id": { "type": "string", "description": "The event id", "in": "path", "limit": "events" },
+          "token": {
+            "type": "string",
+            "description": "The next page's cursor, from the previous answer",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["id", "name", "description", "website", "email", "eventSponsor", "featured", "sponsorshipLevel", "hidden"]
+        },
+        "paging": { "param": "token", "body": "paging.nextToken" }
+      },
+      {
+        "name": "cvent_list_sponsorship_levels",
+        "description": "List an event's sponsorship levels.",
+        "method": "GET",
+        "path": "/events/{event_id}/sponsorship-levels",
+        "params": {
+          "event_id": { "type": "string", "description": "The event id", "in": "path", "limit": "events" }
+        }
+      },
+      {
+        "name": "cvent_get_contact",
+        "description": "Read one contact by id: name, email, company, title and work address.",
+        "method": "GET",
+        "path": "/contacts/{contact_id}",
+        "params": {
+          "contact_id": { "type": "string", "description": "The contact id (an attendee's contact.id)", "in": "path" }
+        },
+        "result": {
+          "fields": ["id", "firstName", "lastName", "email", "company", "title", "designation", "type.name", "workAddress", "workPhone", "optOut"]
+        }
+      }
+    ]
+  }
+}

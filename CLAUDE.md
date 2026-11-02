@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia and WordPress once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -1297,6 +1297,24 @@ id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resource
   `onPremiseAadUser`) and `from_kind` (`user` / `application`). Sources:
   learn.microsoft.com/graph/api/resources/chatmessagefromidentityset and teamworkuseridentity
   (read October 25, 2026).
+- Marketing and customer apps described only in `connector.json` (http block, `describedApp` in
+  builtin.ts): adestra (`Authorization: TOKEN <key>`; search params go as `search:<field>` and
+  paging as `paging:page`, so a param's wire `name` may hold `:`; nothing launches a campaign,
+  approval requests never send auto_launch; tests are destructive, kept to `test_addresses`),
+  cvent (client credentials with `clientAuth: basic` on api-platform.cvent.com, North America
+  only since the token URL is fixed; read-only), forsta-decipher (`x-apikey` on `{host}/api/v1`;
+  surveys only under `selfserve/<directory>/<project>`, since path values are encoded one segment
+  each; read-only), intercom (bearer on `{host}` kept to its US, EU and AU API hosts,
+  `Intercom-Version: 2.14`; replies are destructive, notes and assignment are not), sprout-social
+  (bearer, the customer id a path segment of baseUrl; drafts only, `is_draft` fixed true),
+  synthesia (raw key in `Authorization`; read-only, since creating a video needs nested objects)
+  and wordpress (application password as Basic on `{host}/wp-json/wp/v2`; creates drafts or
+  pending posts, editing a post is destructive). Canva is left out: its API takes only a user's
+  OAuth consent. Sources: app.adestra.com/doc/page/current/index/api (REST pages),
+  developers.cvent.com public OpenAPI spec and tutorials, docs.developer.focusvision.com and
+  release.decipherinc.com/s/local/beacon.html, github.com/intercom/Intercom-OpenAPI 2.14,
+  api.sproutsocial.com/docs, docs.synthesia.io/reference, developer.wordpress.org/rest-api, read
+  November 1, 2026. Tested against a local fake only (`packages/server/test/apps-marketing-cx.test.ts`).
 
 ## Commands
 

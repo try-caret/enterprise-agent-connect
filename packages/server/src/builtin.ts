@@ -48,4 +48,11 @@ export const builtinConnectors: BuiltinModule[] = [
   netsuite,
   dynamics365,
   gong,
+  describedApp("adestra"),
+  describedApp("cvent"),
+  describedApp("forsta-decipher"),
+  describedApp("intercom"),
+  describedApp("sprout-social"),
+  describedApp("synthesia"),
+  describedApp("wordpress"),
 ];

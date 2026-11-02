@@ -104,6 +104,28 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     },
     request: { method: "GET", path: "/api/data/v9.2/WhoAmI" },
   },
+  adestra: { conn: { config: {}, secret: { api_token: "t" } }, request: { method: "GET", path: "/projects" } },
+  cvent: {
+    conn: { config: { client_id: "i" }, secret: { client_secret: "s" } },
+    request: { method: "GET", path: "/events" },
+  },
+  "forsta-decipher": {
+    conn: { config: { host: "acme.decipherinc.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/hello?name=x" },
+  },
+  intercom: {
+    conn: { config: { host: "api.intercom.io" }, secret: { access_token: "t" } },
+    request: { method: "GET", path: "/me" },
+  },
+  "sprout-social": {
+    conn: { config: { customer: "1" }, secret: { api_token: "t" } },
+    request: { method: "GET", path: "/metadata/customer" },
+  },
+  synthesia: { conn: { config: {}, secret: { api_key: "k" } }, request: { method: "GET", path: "/videos" } },
+  wordpress: {
+    conn: { config: { host: "blog.example.com", username: "u" }, secret: { app_password: "p" } },
+    request: { method: "GET", path: "/users/me" },
+  },
 };
 for (const id of [
   "outlook-mail",
