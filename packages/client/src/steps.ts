@@ -82,14 +82,21 @@ export const askedFields = (fields: Field[], values: Record<string, string>) => 
   return fields.filter((f) => isChosen(f.requires, chosen));
 };
 
-/** The steps that apply under the chosen options (a step with `option` only while chosen). */
+/** The steps that apply under the chosen options (a step with `option` only while chosen)
+ *  and, given `ticked`, the ticked capabilities (a step with `capabilities` only while one of
+ *  them is). */
 export function chosenSteps(
   connector: Connector,
   steps: Step[],
   values: Record<string, string>,
+  ticked?: readonly string[],
 ): Step[] {
   const chosen = choiceValues(connector, values);
-  return steps.filter((s) => isChosen(s.option, chosen));
+  return steps.filter(
+    (s) =>
+      isChosen(s.option, chosen) &&
+      (!ticked || !s.capabilities || s.capabilities.some((c) => ticked.includes(c))),
+  );
 }
 
 /** Choices that change the permissions the setup steps ask for: made in step 1, with what
@@ -149,8 +156,18 @@ export function keysUsing(agents: Agent[], connectorId: string): number {
 
 /** The values a connected app reported for its discover probe, e.g. Jira project keys. */
 export function discovered(connector: Connector, checks: Check[] | null): string[] {
+  return discoveredChoices(connector, checks).map((c) => c.value);
+}
+
+/** The same, each with the label to show for it (the value itself when the app gave none),
+ *  e.g. a NetSuite subsidiary's name for its id. */
+export function discoveredChoices(
+  connector: Connector,
+  checks: Check[] | null,
+): { value: string; label: string }[] {
   if (!connector.discover || !checks) return [];
-  return checks.find((c) => c.label === connector.discover!.label)?.values ?? [];
+  const check = checks.find((c) => c.label === connector.discover!.label);
+  return (check?.values ?? []).map((value) => ({ value, label: check?.labels?.[value] ?? value }));
 }
 
 /** Parses free-typed list input ("KAN, SAM1") into values. */
@@ -222,7 +239,11 @@ export function destructiveWarning(connector: Connector, capability: Capability)
 /** needs_steps: on, but a step on its page is not done yet. needs_attention: on, but a live
  *  check of it could not run, so whether it works is not known. */
 export type AppStatus =
-  "connected" | "needs_reconnect" | "not_connected" | "needs_steps" | "needs_attention";
+  | "connected"
+  | "needs_reconnect"
+  | "not_connected"
+  | "needs_steps"
+  | "needs_attention";
 
 /** The provider form's values to send: only the fields on show, so a secret typed and then
  *  hidden by going back to the certificate is not sent (a secret sent wins the sign-in). */
@@ -756,8 +777,8 @@ export function appSteps(input: {
   choices?: Record<string, string>;
 }): AppStep[] {
   const { connector, connection, health, ceiling, marks } = input;
-  const setup = chosenSteps(connector, connector.setup, input.choices ?? {});
-  const afterConnect = chosenSteps(connector, connector.afterConnect, input.choices ?? {});
+  const setup = chosenSteps(connector, connector.setup, input.choices ?? {}, ceiling);
+  const afterConnect = chosenSteps(connector, connector.afterConnect, input.choices ?? {}, ceiling);
   const on = connection !== null;
   const changed = on && connection.capabilities.join(",") !== ceiling.join(",");
   const before = input.providerReady ? {} : { locked: true };

@@ -1,22 +1,65 @@
 name: Release
 
 # A v* tag publishes the server and client packages to npmjs as @arbium/enterprise-agent-connect
-# and @arbium/enterprise-agent-connect-client, and the image to
-# ghcr.io/try-caret/enterprise-agent-connect.
+# and @arbium/enterprise-agent-connect-client (dist-tag latest, or next for a prerelease), the
+# image to ghcr.io/try-caret/enterprise-agent-connect, and a GitHub Release. Running it by hand
+# on any branch publishes a dev build of that commit instead (dist-tag dev, no GitHub Release).
+# How to cut either: RELEASING.md.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      dist_tag: ${{ steps.v.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          semver() { npx --yes semver@7.7.2 "$@"; }
+          # Every published version but dev builds, oldest first; none before the first release.
+          published=$(npm view @arbium/enterprise-agent-connect versions --json 2>/dev/null \
+            | jq -r 'if type == "string" then . else .[] end' | grep -v -- '-dev\.' || true)
+          newest=$( [ -n "$published" ] && semver $published | tail -1 || true)
+          if [[ $GITHUB_REF_TYPE == tag ]]; then
+            v=${GITHUB_REF_NAME#v}
+            semver "$v" >/dev/null || { echo "::error::$GITHUB_REF_NAME is not v<semver>"; exit 1; }
+            if [ -n "$newest" ] && ! semver -p -r ">$newest" "$v" >/dev/null; then
+              echo "::error::$v is not greater than $newest, the newest on npm"; exit 1
+            fi
+            [[ $v == *-* ]] && tag=next || tag=latest
+          else
+            v=$(semver -i patch "${newest:-$(node -p 'require("./package.json").version')}")-dev.$(git rev-parse --short=7 HEAD)
+            tag=dev
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing $v as $tag" >> "$GITHUB_STEP_SUMMARY"
+
+  # The whole CI (check, tests on Postgres, the consumer test, image and chart) on this commit.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   npm:
+    needs: [version, test]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      DIST_TAG: ${{ needs.version.outputs.dist_tag }}
+      # Until trusted publishing is set up on npmjs.com; npm >= 11.5 tries OIDC first.
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -24,22 +67,16 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@11
       - run: npm ci --no-audit --no-fund
-      - run: npm run check
-      - name: Version
-        run: |
-          v=${GITHUB_REF_NAME#v}
-          npm pkg set version="$v"
-          (cd packages/client && npm pkg set version="$v")
-          [[ $v == *-* ]] && echo "DIST_TAG=next" >> "$GITHUB_ENV" || echo "DIST_TAG=latest" >> "$GITHUB_ENV"
+      - run: |
+          npm pkg set version="$VERSION"
+          (cd packages/client && npm pkg set version="$VERSION")
       - run: npm run build && npm publish --access public --provenance --tag "$DIST_TAG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: npx tsc -p packages/client && npm publish ./packages/client --access public --provenance --tag "$DIST_TAG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   image:
+    needs: [version, test]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -53,11 +90,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          DIST_TAG: ${{ needs.version.outputs.dist_tag }}
         run: |
-          v=${GITHUB_REF_NAME#v}
           img=ghcr.io/${{ github.repository }}
-          tags="$img:$v"
-          [[ $v == *-* ]] || tags="$tags,$img:latest"
+          tags="$img:$VERSION"
+          [[ $DIST_TAG == latest ]] && tags="$tags,$img:latest"
           echo "TAGS=$tags" >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
@@ -65,3 +104,18 @@ jobs:
           file: deploy/docker/Dockerfile
           push: true
           tags: ${{ env.TAGS }}
+
+  github-release:
+    if: github.ref_type == 'tag'
+    needs: [version, npm, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.version.outputs.dist_tag == 'next' && 'yes' || '' }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            ${PRERELEASE:+--prerelease}

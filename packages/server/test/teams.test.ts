@@ -15,8 +15,7 @@ import type { RunInput, TriggerRunner } from "../src/teams/runner.ts";
 import { botAad, createTeamsRuntime } from "../src/teams/runtime.ts";
 import { createTeamsStore } from "../src/teams/store.ts";
 import { ADMIN_TOKEN, teamsConnector } from "./helpers.ts";
-import type { ToolContext } from "../../connector-kit/src/common.ts";
-import { teamsTools } from "../../../connectors/teams/tools.ts";
+import { teamsTools, type TeamsToolContext } from "../../../connectors/teams/tools.ts";
 
 // The Teams runtime and trigger admin with fake runners, against the scratch database
 // (TEST_DATABASE_URL, see store.test.ts). Skipped without one.
@@ -356,7 +355,7 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
   const bot = (await t.teams.botById(t.botId))!;
   const lookups: string[] = [];
   const handlers = new Map<string, (input: unknown) => Promise<any>>();
-  const ctx: ToolContext = {
+  const ctx: TeamsToolContext = {
     limits: {},
     config: {},
     call: async (req) => {

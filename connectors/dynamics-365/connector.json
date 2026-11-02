@@ -1,0 +1,228 @@
+{
+  "id": "dynamics-365",
+  "name": "Dynamics 365",
+  "description": "Let agents work with your Dynamics 365 customers, opportunities and cases: find and update accounts and contacts, close opportunities, resolve cases, add notes, tasks and phone calls, and read other tables you list.",
+  "logo": "/brand/registry/dynamics-365.svg",
+  "identity": "Your Microsoft app registration, through the Microsoft connection, added to one Dynamics 365 environment as an application user. It reaches only what its security role allows. Each API key can be kept to records of chosen business units or teams.",
+  "provider": "microsoft",
+  "order": 8,
+  "accountKey": "environment",
+  "connectionKind": "guided",
+  "scopes": ["prvReadUser"],
+  "setup": [
+    {
+      "title": "Create a security role for agents",
+      "body": "In your Dynamics 365 environment, create a role that gives only what agents need: {scopes}. Each is a privilege on a table, for example prvReadAccount is Read on Account and prvCreateActivity is Create on Activity. Choose Organization access to let agents reach every record, or Business Unit to keep them to one business unit. You can keep each agent to some business units or teams here later.",
+      "link": {
+        "label": "Open Power Platform admin center",
+        "href": "https://admin.powerplatform.microsoft.com/environments"
+      },
+      "click": [
+        "In the Power Platform admin center, go to Manage, then Environments, and open your environment.",
+        "Select Settings, then Users + permissions, then Security roles, and select New role.",
+        "Name it {brand.microsoft.appName} agents, keep the root business unit and select Save.",
+        "For each privilege above, find its table (Account, Contact, Opportunity, Case, Activity, Note, User) and set that privilege's access level. Leave everything else at None and select Save."
+      ],
+      "copy": [
+        "# Needs the Azure CLI, signed in as a Dynamics 365 system administrator. Replace the address with your environment URL.",
+        "$environment = 'https://your-org.crm.dynamics.com'",
+        "$api = \"$environment/api/data/v9.2\"",
+        "$headers = @{ Authorization = \"Bearer $(az account get-access-token --resource $environment --query accessToken -o tsv)\"; 'Content-Type' = 'application/json' }",
+        "$root = (Invoke-RestMethod -Headers $headers \"$api/businessunits?`$filter=_parentbusinessunitid_value eq null&`$select=businessunitid\").value[0].businessunitid",
+        "$role = Invoke-RestMethod -Method Post -Headers ($headers + @{ Prefer = 'return=representation' }) \"$api/roles\" -Body (@{ name = '{brand.microsoft.appName} agents'; 'businessunitid@odata.bind' = \"/businessunits($root)\" } | ConvertTo-Json)",
+        "# Global is Organization access; use Local to keep agents to the business unit.",
+        "$names = @(",
+        "  '{scope}'",
+        ")",
+        "$privileges = foreach ($name in $names) { @{ PrivilegeId = (Invoke-RestMethod -Headers $headers \"$api/privileges?`$filter=name eq '$name'&`$select=privilegeid\").value[0].privilegeid; Depth = 'Global'; BusinessUnitId = $root } }",
+        "Invoke-RestMethod -Method Post -Headers $headers \"$api/roles($($role.roleid))/Microsoft.Dynamics.CRM.AddPrivilegesRole\" -Body (@{ Privileges = @($privileges) } | ConvertTo-Json -Depth 4)"
+      ],
+      "shell": "powershell"
+    },
+    {
+      "title": "Add the app as an application user",
+      "body": "Agents act as this application user. It needs no license, and the app needs no API permission in Microsoft Entra for this: what agents can reach is what the security role allows. Use the Application (client) ID {clientId}. With Commands, the application user goes to your own business unit.",
+      "click": [
+        "In the environment, select Settings, then Users + permissions, then Application users.",
+        "Select New app user, then Add an app, search for {clientId} and select Add.",
+        "Choose the business unit agents work in (the root one reaches every unit the role allows).",
+        "Under Security roles select the pencil, choose {brand.microsoft.appName} agents, then select Save and Create."
+      ],
+      "copy": [
+        "# Needs the Power Platform CLI (pac). Replace the address with your environment URL.",
+        "$environment = 'https://your-org.crm.dynamics.com'",
+        "pac auth create --environment $environment",
+        "pac admin assign-user --environment $environment --user '{clientId}' --role '{brand.microsoft.appName} agents' --application-user"
+      ],
+      "shell": "powershell"
+    },
+    {
+      "title": "Copy the environment URL",
+      "body": "The address of the environment agents will use, such as https://your-org.crm.dynamics.com. Enter it below.",
+      "click": [
+        "In the Power Platform admin center, go to Manage, then Environments, and open your environment.",
+        "Copy the Environment URL from its Details."
+      ],
+      "copy": ["pac admin list"],
+      "shell": "powershell"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "environment",
+      "label": "Environment URL",
+      "help": "From the environment's Details in the Power Platform admin center.",
+      "placeholder": "https://your-org.crm.dynamics.com",
+      "secret": false
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read_customers",
+      "label": "Read accounts and contacts",
+      "description": "Find accounts and contacts and read their details.",
+      "scopes": ["prvReadAccount", "prvReadContact"],
+      "permissions": [],
+      "tools": ["dynamics_search_customers", "dynamics_get_customer"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}."
+    },
+    {
+      "id": "write_customers",
+      "label": "Create and update accounts and contacts",
+      "description": "Add accounts and contacts and change their details, such as phone numbers and addresses.",
+      "scopes": [
+        "prvReadAccount",
+        "prvCreateAccount",
+        "prvWriteAccount",
+        "prvAppendToAccount",
+        "prvReadContact",
+        "prvCreateContact",
+        "prvWriteContact",
+        "prvAppendContact"
+      ],
+      "permissions": [],
+      "tools": ["dynamics_create_customer", "dynamics_update_customer"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}."
+    },
+    {
+      "id": "read_opportunities",
+      "label": "Read opportunities",
+      "description": "Find opportunities and read their value, stage, close date and status.",
+      "scopes": ["prvReadOpportunity"],
+      "permissions": [],
+      "tools": ["dynamics_search_opportunities", "dynamics_get_opportunity"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}."
+    },
+    {
+      "id": "close_opportunities",
+      "label": "Close opportunities as won or lost",
+      "description": "Close open opportunities, with a reason and, for a win, the actual revenue.",
+      "scopes": ["prvReadOpportunity", "prvWriteOpportunity", "prvCreateActivity"],
+      "permissions": [],
+      "tools": ["dynamics_close_opportunity"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}."
+    },
+    {
+      "id": "read_cases",
+      "label": "Read cases",
+      "description": "Find customer service cases and read their status, priority and description.",
+      "scopes": ["prvReadIncident"],
+      "permissions": [],
+      "tools": ["dynamics_search_cases", "dynamics_get_case"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}."
+    },
+    {
+      "id": "close_cases",
+      "label": "Resolve and cancel cases",
+      "description": "Resolve cases with a resolution, or cancel them.",
+      "scopes": ["prvReadIncident", "prvWriteIncident", "prvCreateActivity"],
+      "permissions": [],
+      "tools": ["dynamics_close_case"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}."
+    },
+    {
+      "id": "read_activities",
+      "label": "Read activities and notes",
+      "description": "List the tasks, phone calls, emails, appointments and notes of the accounts, contacts, opportunities and cases an agent may use.",
+      "scopes": ["prvReadActivity", "prvReadNote"],
+      "permissions": [],
+      "tools": ["dynamics_list_activities"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}, and Read on the record's own table."
+    },
+    {
+      "id": "add_activities",
+      "label": "Add notes, tasks and phone calls",
+      "description": "Add notes, tasks and logged phone calls to the accounts, contacts, opportunities and cases an agent may use.",
+      "scopes": [
+        "prvCreateActivity",
+        "prvWriteActivity",
+        "prvAppendActivity",
+        "prvCreateNote",
+        "prvAppendNote"
+      ],
+      "permissions": [],
+      "tools": ["dynamics_add_activity"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}, plus Read and Append To on the record's own table."
+    },
+    {
+      "id": "read_tables",
+      "label": "Read other tables",
+      "description": "Read rows of the tables you list on each API key, such as products or your own tables, with simple conditions. Nothing is read from a table you do not list.",
+      "note": "Give the security role Read on each table you list.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["dynamics_list_rows", "dynamics_get_row"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs Read on this table."
+    },
+    {
+      "id": "delete",
+      "label": "Delete records",
+      "description": "Delete accounts, contacts, opportunities, cases, tasks, phone calls and notes. Dynamics also deletes what belongs to a record, such as its activities and notes. An agent kept to business units or teams can delete only tasks, phone calls and notes.",
+      "destructive": true,
+      "scopes": [
+        "prvDeleteAccount",
+        "prvDeleteContact",
+        "prvDeleteOpportunity",
+        "prvDeleteIncident",
+        "prvDeleteActivity",
+        "prvDeleteNote"
+      ],
+      "permissions": [],
+      "tools": ["dynamics_delete_record"],
+      "forbidden": "Dynamics 365 refused this. The agents' security role needs {scopes}."
+    }
+  ],
+  "limits": [
+    {
+      "id": "business_units",
+      "label": "Business units",
+      "help": "Optional: only records owned in these business units (their ids). To see them, open https://your-org.crm.dynamics.com/api/data/v9.2/businessunits?$select=name in your browser while signed in. With teams set too, a record of either is allowed. Leave both empty for every record the security role reaches.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    {
+      "id": "teams",
+      "label": "Owning teams",
+      "help": "Optional: only records owned by these teams (their ids). To see them, open https://your-org.crm.dynamics.com/api/data/v9.2/teams?$select=name in your browser while signed in. Records this agent creates go to its team (name one when there are several).",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    {
+      "id": "tables",
+      "label": "Other tables",
+      "help": "For Read other tables: the tables this key may read, by logical name, such as product or new_project (in Power Apps, under Tables, then the table's Properties). Under business units or teams, only tables whose records have an owner.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    }
+  ],
+  "verify": {
+    "label": "Security roles of the application user",
+    "check": "access",
+    "ifEmpty": "The application user has no security role yet. Give it the agents' role, then check again."
+  },
+  "revoke": "In the Power Platform admin center, open the environment's Application users and deactivate {brand.microsoft.appName}'s application user, or remove its security role. Agents lose access at once. To stop every Microsoft app at once, remove the app registration (see the Microsoft connection)."
+}

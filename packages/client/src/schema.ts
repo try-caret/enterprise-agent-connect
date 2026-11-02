@@ -731,6 +731,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orgs/{org}/event-subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The apps whose events reach this organization, by webhook or by polling */
+        get: operations["eventSubscriptions"];
+        put?: never;
+        /** Starts receiving an app's events: a webhook (answers its address and secret, shown once) or a poll on an interval */
+        post: operations["subscribeEvents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/{org}/event-subscriptions/{subscription}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A new secret for a webhook, shown once; the old one stops working at once */
+        post: operations["rotateEventSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/{org}/event-subscriptions/{subscription}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Stops receiving an app's events (remove the webhook in the app too) */
+        delete: operations["unsubscribeEvents"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/{org}/agents/{agent}/event-triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The app events that start the agent */
+        get: operations["eventTriggers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/{org}/agents/{agent}/event-triggers/{app}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Sets which of an app's events start the agent and how, checked by its runner first */
+        put: operations["setEventTrigger"];
+        post?: never;
+        /** Stops an app's events starting the agent, stopping its live runs */
+        delete: operations["removeEventTrigger"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/{org}/agents/{agent}/event-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The agent's recent runs started by app events, newest first */
+        get: operations["eventRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/orgs/{org}/claude-key": {
         parameters: {
             query?: never;
@@ -862,6 +966,9 @@ export interface components {
             label: string;
             values: string[];
             warning?: string;
+            labels?: {
+                [key: string]: string;
+            };
         };
         CheckOutcome: {
             /** @constant */
@@ -966,6 +1073,7 @@ export interface components {
                     field: string;
                     value: string;
                 };
+                capabilities?: string[];
             }[];
             afterConnect: {
                 title: string;
@@ -999,6 +1107,7 @@ export interface components {
                     field: string;
                     value: string;
                 };
+                capabilities?: string[];
             }[];
             fields: {
                 id: string;
@@ -1016,6 +1125,8 @@ export interface components {
                     field: string;
                     value: string;
                 };
+                /** @default false */
+                optional: boolean;
             }[];
             capabilities: {
                 id: string;
@@ -1113,6 +1224,7 @@ export interface components {
                 path: string;
                 label: string;
                 show: string;
+                name?: string;
                 match?: {
                     [key: string]: string | number | boolean;
                 };
@@ -1132,6 +1244,7 @@ export interface components {
                 path: string;
                 label: string;
                 show: string;
+                name?: string;
                 match?: {
                     [key: string]: string | number | boolean;
                 };
@@ -1153,6 +1266,7 @@ export interface components {
                     type: "header";
                     header: string;
                     value: string;
+                    prefix?: string;
                 } | {
                     /** @constant */
                     type: "bearer";
@@ -1169,6 +1283,16 @@ export interface components {
                     tokenUrl: string;
                     clientId: string;
                     clientSecret: string;
+                    scope?: string;
+                } | {
+                    /** @constant */
+                    type: "query";
+                    param: string;
+                    value: string;
+                };
+                /** @default {} */
+                headers: {
+                    [key: string]: string;
                 };
                 tools: {
                     name: string;
@@ -1180,15 +1304,110 @@ export interface components {
                     params: {
                         [key: string]: {
                             /** @enum {string} */
-                            type: "string" | "number" | "integer" | "boolean";
+                            type: "string" | "number" | "integer" | "boolean" | "array";
                             description: string;
                             /** @enum {string} */
                             in: "path" | "query" | "body";
+                            name?: string;
+                            /** @default true */
+                            required: boolean;
+                            default?: (string | number | boolean) | (string | number | boolean)[];
+                            enum?: (string | number | boolean)[];
+                            /** @enum {string} */
+                            items?: "string" | "number" | "integer" | "boolean";
+                            join?: string;
+                            limit?: string;
+                        };
+                    };
+                    /** @default false */
+                    destructive: boolean;
+                    /** @default [] */
+                    answerLimits: {
+                        field: string;
+                        limit: string;
+                    }[];
+                    result?: {
+                        items?: string;
+                        fields?: string[];
+                    };
+                    paging?: {
+                        param: string;
+                        body: string;
+                    } | {
+                        param: string;
+                        header: string;
+                    } | {
+                        param: string;
+                        /** @constant */
+                        link: true;
+                    };
+                }[];
+                /** @default false */
+                allowInsecureHttp: boolean;
+            };
+            soap?: {
+                /** Format: uri */
+                endpoint: string;
+                /**
+                 * @default 1.1
+                 * @enum {string}
+                 */
+                version: "1.1" | "1.2";
+                /** @default {} */
+                namespaces: {
+                    [key: string]: string;
+                };
+                auth?: {
+                    /** @constant */
+                    type: "header";
+                    header: string;
+                    value: string;
+                    prefix?: string;
+                } | {
+                    /** @constant */
+                    type: "bearer";
+                    token: string;
+                } | {
+                    /** @constant */
+                    type: "basic";
+                    username: string;
+                    password: string;
+                };
+                wsSecurity?: {
+                    username: string;
+                    password: string;
+                    /** @default false */
+                    digest: boolean;
+                };
+                verify?: {
+                    tool: string;
+                    /** @default {} */
+                    args: {
+                        [key: string]: string | number | boolean;
+                    };
+                    show: string;
+                };
+                tools: {
+                    name: string;
+                    description: string;
+                    operation: string;
+                    soapAction?: string;
+                    body: string;
+                    /** @default {} */
+                    params: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "number" | "integer" | "boolean";
+                            description: string;
                             /** @default true */
                             required: boolean;
                             limit?: string;
                         };
                     };
+                    result?: string;
+                    fields?: string[];
+                    /** @default false */
+                    readOnly: boolean;
                     /** @default false */
                     destructive: boolean;
                     /** @default [] */
@@ -1200,6 +1419,291 @@ export interface components {
                 /** @default false */
                 allowInsecureHttp: boolean;
             };
+            odata?: {
+                /** Format: uri */
+                serviceRoot: string;
+                /** @enum {string} */
+                version: "2" | "4";
+                auth: {
+                    /** @constant */
+                    type: "header";
+                    header: string;
+                    value: string;
+                    prefix?: string;
+                } | {
+                    /** @constant */
+                    type: "bearer";
+                    token: string;
+                } | {
+                    /** @constant */
+                    type: "basic";
+                    username: string;
+                    password: string;
+                } | {
+                    /** @constant */
+                    type: "oauth2";
+                    /** Format: uri */
+                    tokenUrl: string;
+                    clientId: string;
+                    clientSecret: string;
+                    scope?: string;
+                } | {
+                    /** @constant */
+                    type: "query";
+                    param: string;
+                    value: string;
+                };
+                /** @default {} */
+                headers: {
+                    [key: string]: string;
+                };
+                /** @default false */
+                csrf: boolean;
+                /**
+                 * @default skip
+                 * @enum {string}
+                 */
+                paging: "skip" | "server";
+                tools: {
+                    name: string;
+                    description: string;
+                    /** @enum {string} */
+                    kind: "list" | "get" | "create" | "update" | "function" | "action";
+                    entitySet?: string;
+                    function?: string;
+                    /** @default {} */
+                    key: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default {} */
+                    filters: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                            /**
+                             * @default eq
+                             * @enum {string}
+                             */
+                            op: "eq" | "ne" | "gt" | "ge" | "lt" | "le" | "contains" | "startswith";
+                        };
+                    };
+                    /** @default {} */
+                    fields: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default {} */
+                    params: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "integer" | "number" | "decimal" | "boolean" | "guid" | "datetime" | "datetimeoffset";
+                            description: string;
+                            property?: string;
+                            required?: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default [] */
+                    select: string[];
+                    orderBy?: string;
+                    /** @default 50 */
+                    top: number;
+                    /** @default false */
+                    destructive: boolean;
+                    /** @default [] */
+                    answerLimits: {
+                        field: string;
+                        limit: string;
+                    }[];
+                }[];
+                /** @default false */
+                allowInsecureHttp: boolean;
+            };
+            sql?: {
+                /** @enum {string} */
+                engine: "postgres" | "sqlserver" | "mysql" | "oracle";
+                host: string;
+                port?: number;
+                database: string;
+                auth: {
+                    user: string;
+                    password: string;
+                };
+                /**
+                 * @default verify
+                 * @enum {string}
+                 */
+                tls: "verify" | "insecure" | "off";
+                /** @default 30 */
+                timeoutSeconds: number;
+                /** @default 200 */
+                maxRows: number;
+                tools: {
+                    name: string;
+                    description: string;
+                    sql: string;
+                    /** @default {} */
+                    params: {
+                        [key: string]: {
+                            /** @enum {string} */
+                            type: "string" | "number" | "integer" | "boolean";
+                            description: string;
+                            /** @default true */
+                            required: boolean;
+                            limit?: string;
+                        };
+                    };
+                    /** @default false */
+                    write: boolean;
+                    /** @default false */
+                    destructive: boolean;
+                    /** @default [] */
+                    answerLimits: {
+                        column: string;
+                        limit: string;
+                    }[];
+                }[];
+            };
+            events?: {
+                types: {
+                    id: string;
+                    label: string;
+                }[];
+                fields: {
+                    [key: string]: string;
+                };
+                /** @default {} */
+                limits: {
+                    [key: string]: string;
+                };
+                webhook?: {
+                    verify: {
+                        /** @constant */
+                        type: "hmac-sha256";
+                        header: string;
+                        /** @default  */
+                        prefix: string;
+                    } | {
+                        /** @constant */
+                        type: "token";
+                        header: string;
+                    } | {
+                        /** @constant */
+                        type: "none";
+                    };
+                    /** @default false */
+                    allowInsecure: boolean;
+                    type: {
+                        field: string;
+                    } | {
+                        header: string;
+                    };
+                    deliveryId?: {
+                        field: string;
+                    } | {
+                        header: string;
+                    };
+                    timestamp?: {
+                        at: {
+                            field: string;
+                        } | {
+                            header: string;
+                        };
+                        /** @enum {string} */
+                        unit: "s" | "ms" | "iso";
+                        /** @default 300 */
+                        toleranceSeconds: number;
+                    };
+                    setup: {
+                        title: string;
+                        body: string;
+                        link?: {
+                            label: string;
+                            /** Format: uri */
+                            href: string;
+                        };
+                        copy?: string[];
+                        /** @enum {string} */
+                        shell?: "bash" | "powershell";
+                        permissions?: boolean;
+                        certificate?: boolean;
+                        click?: string[];
+                        /** @constant */
+                        clickUnavailable?: true;
+                        /** @enum {string} */
+                        siteRole?: "read" | "write";
+                        agentCheck?: boolean;
+                        confirm?: string;
+                        live?: string;
+                        settings?: {
+                            id: string;
+                            label: string;
+                            help?: string;
+                            placeholder?: string;
+                            pattern: string;
+                        }[];
+                        option?: {
+                            field: string;
+                            value: string;
+                        };
+                    }[];
+                    register?: {
+                        /** @enum {string} */
+                        method: "GET" | "POST" | "PUT";
+                        /** Format: starts_with */
+                        path: string;
+                        body?: unknown;
+                        location: string;
+                    };
+                };
+                self?: {
+                    request: {
+                        /** @enum {string} */
+                        method: "GET" | "POST" | "PUT";
+                        /** Format: starts_with */
+                        path: string;
+                        body?: unknown;
+                    };
+                    id: string;
+                    fields: string[];
+                };
+                poll?: {
+                    request: {
+                        /** @enum {string} */
+                        method: "GET" | "POST" | "PUT";
+                        /** Format: starts_with */
+                        path: string;
+                        body?: unknown;
+                    };
+                    /** Format: includes */
+                    filter?: string;
+                    items: string;
+                    wrap?: string;
+                    cursor: string;
+                    deliveryId: string[];
+                    types: {
+                        type: string;
+                        since?: string;
+                    }[];
+                };
+            };
         };
         ConnectResult: {
             connection: components["schemas"]["Connection"];
@@ -1207,6 +1711,110 @@ export interface components {
         };
         Error: {
             error: string;
+        };
+        EventRun: {
+            id: string;
+            agentId: string;
+            triggerId: string;
+            connectorId: string;
+            eventType: string;
+            deliveryId: string;
+            runner: string;
+            sessionId: string | null;
+            /** @enum {string} */
+            state: "starting" | "running" | "ended" | "failed";
+            error: string | null;
+            costCents: number | null;
+            /** @description ISO 8601, UTC */
+            startedAt: string;
+            finishedAt: string | null;
+        };
+        EventSubscribed: {
+            subscription: components["schemas"]["EventSubscription"];
+            secret: string | null;
+            setup: {
+                title: string;
+                body: string;
+                link?: {
+                    label: string;
+                    /** Format: uri */
+                    href: string;
+                };
+                copy?: string[];
+                /** @enum {string} */
+                shell?: "bash" | "powershell";
+                permissions?: boolean;
+                certificate?: boolean;
+                click?: string[];
+                /** @constant */
+                clickUnavailable?: true;
+                /** @enum {string} */
+                siteRole?: "read" | "write";
+                agentCheck?: boolean;
+                confirm?: string;
+                live?: string;
+                settings?: {
+                    id: string;
+                    label: string;
+                    help?: string;
+                    placeholder?: string;
+                    pattern: string;
+                }[];
+                option?: {
+                    field: string;
+                    value: string;
+                };
+            }[];
+            registration: {
+                ok: boolean;
+                message: string;
+            } | null;
+        };
+        EventSubscription: {
+            id: string;
+            connectorId: string;
+            /** @enum {string} */
+            source: "webhook" | "poll";
+            filter: string;
+            intervalSeconds: number;
+            cursor: string | null;
+            polledAt: string | null;
+            lastError: string | null;
+            registered: string | null;
+            url: string | null;
+            createdBy: string;
+            /** @description ISO 8601, UTC */
+            createdAt: string;
+        };
+        EventTrigger: {
+            id: string;
+            agentId: string;
+            connectorId: string;
+            enabled: boolean;
+            eventTypes: string[];
+            conditions: ({
+                field: string;
+                in: string[];
+            } | {
+                field: string;
+                notIn: string[];
+            })[];
+            prompt: string;
+            runner: string;
+            settings: {
+                [key: string]: unknown;
+            };
+            hasSigningSecret: boolean;
+            managedAgentId: string | null;
+            environmentId: string | null;
+            vaultIds: string[];
+            budgetCents: number;
+            maxRunsPerHour: number;
+            maxCentsPerDay: number;
+            maxConcurrent: number;
+            updatedBy: string | null;
+            /** @description ISO 8601, UTC */
+            updatedAt: string;
         };
         Grant: {
             agentId: string;
@@ -5010,6 +5618,548 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamsRun"][];
+                };
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    eventSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventSubscription"][];
+                };
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    subscribeEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    app: string;
+                    /** @enum {string} */
+                    source: "webhook" | "poll";
+                    /** @default  */
+                    filter?: string;
+                    /** @default 300 */
+                    intervalSeconds?: number;
+                    /** @default false */
+                    register?: boolean;
+                    by: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventSubscribed"];
+                };
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    rotateEventSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                subscription: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    by: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        subscription: components["schemas"]["EventSubscription"];
+                        secret: string;
+                    };
+                };
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    unsubscribeEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                subscription: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    by: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    eventTriggers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventTrigger"][];
+                };
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setEventTrigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                agent: string;
+                app: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                    eventTypes: string[];
+                    /** @default [] */
+                    conditions?: ({
+                        field: string;
+                        in: string[];
+                    } | {
+                        field: string;
+                        notIn: string[];
+                    })[];
+                    prompt: string;
+                    /** @default claude-managed-agents */
+                    runner?: string;
+                    managedAgentId?: string;
+                    environmentId?: string;
+                    /** @default [] */
+                    vaultIds?: string[];
+                    /** @default {} */
+                    settings?: {
+                        [key: string]: unknown;
+                    };
+                    signingSecret?: string;
+                    budgetCents: number;
+                    /** @default 20 */
+                    maxRunsPerHour?: number;
+                    /** @default 500 */
+                    maxCentsPerDay?: number;
+                    /** @default 2 */
+                    maxConcurrent?: number;
+                    by: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventTrigger"];
+                };
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    removeEventTrigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                agent: string;
+                app: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    by: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    eventRuns: {
+        parameters: {
+            query?: {
+                /** @description 1 to 200, default 20 */
+                limit?: string;
+            };
+            header?: never;
+            path: {
+                org: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventRun"][];
                 };
             };
             /** @description Refused */

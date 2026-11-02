@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Salesforce, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -78,7 +78,18 @@ orgs/:org/teams/publish/callback` {state, nonce, params, by} (the administrator'
   `GET/PUT …/agents/:id/teams-trigger`, `GET
 …/agents/:id/teams-runs?limit`; the organization's Claude API key at `GET/PUT/DELETE
 orgs/:org/claude-key` (write-only, shown as its last four characters) and `GET
-orgs/:org/claude-key/agents`.
+orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in openapi.json):
+  `GET/POST orgs/:org/event-subscriptions` (POST {app, source webhook|poll, filter, intervalSeconds,
+  register, by}: one per org and app; answers the address, the secret once, the setup steps with
+  {url} filled and, with `register`, whether the app's API took it), `POST …/:subscription/secret`
+  {by} (a new secret, once), `DELETE …/:subscription` {by}; per agent `GET …/event-triggers`,
+  `PUT/DELETE …/event-triggers/:app` and `GET …/event-runs?limit`.
+- `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
+  cap, the connector's proof (HMAC-SHA256 of the raw body or a token header, constant time) checked
+  before the body is parsed (401; audited at most once a minute per subscription), then type,
+  delivery id (else the body's SHA-256) and replay window; a repeated delivery id or an
+  undeclared type is audited and ignored. Accepted: the kept fields sealed into `app_events`,
+  answered 200 at once.
 - `POST /agent-connect/teams/bots/:botAppId/messages`: public, for Teams. Every request carries
   Microsoft's Bot Framework token, checked by hand (packages/server/src/teams/jwt.ts): signature from
   login.botframework.com keys, issuer, audience = this bot, 5 min skew, serviceUrl claim,
@@ -108,8 +119,10 @@ own step), `CONNECT_ENCRYPTION_KEY` (32 bytes,
 base64), `AGENT_CONNECT_ADMIN_TOKEN` (≥32 chars), `PORT` (3000), `PUBLIC_BASE_URL` (the
 deployment's origin, the service under `/agent-connect`; where Teams reaches the bots; without it
 the bot setup script and package say to set `global.publicBaseUrl`), `BRANDING` (JSON, see
-Branding), `CONNECTOR_DIRS` (`:`-separated folders laid out like `connectors/`, `<id>/connector.json` each; one with an
-`http` block runs on the generic module `connectors/http`, docs/http-connector.md; any other needs a
+Branding), `BUILTIN_APPS` (comma-separated built-in app ids this deployment offers; unset offers every one, an unknown id stops startup), `CONNECTOR_DIRS` (`:`-separated folders laid out like `connectors/`, `<id>/connector.json` each; one with an
+`http`, `soap`, `odata` or `sql` block runs on the generic module of that name in `connectors/`,
+docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md, docs/sql-connector.md;
+any other needs a
 `ConnectorModule` passed to `createAgentConnect`).
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
 multi-tenant Entra app instead of the customer's own, and then needs
@@ -121,8 +134,9 @@ a deprecation line in the log (server.ts `renamed`; drop it in the release after
 `CONNECT_ENCRYPTION_KEY_PREVIOUS`; old rows still open and are re-sealed on their next check,
 recorded or read only (an app page or the Integrations tab; only over the credential it read, so a
 reconnect meanwhile wins). Teams bot credentials
-(`teams_bots`), Claude keys (`providers`, provider `anthropic`) and trigger signing secrets
-(`teams_triggers.secret`) are re-sealed by a pass at startup while `CONNECT_ENCRYPTION_KEY_PREVIOUS` is set. Drop the
+(`teams_bots`), Claude keys (`providers`, provider `anthropic`), trigger signing secrets
+(`teams_triggers.secret`) and app event webhook and trigger secrets (`event_subscriptions.secret`,
+`event_triggers.secret`) are re-sealed by a pass at startup while `CONNECT_ENCRYPTION_KEY_PREVIOUS` is set. Drop the
 previous key once every row's `credential_key_id` is the new one in `connections`,
 `providers` and `teams_bots`. Approvals in flight during a rotation must be restarted.
 
@@ -161,12 +175,18 @@ runner continues, watches or stops it, and saving the trigger with another runne
 runner's live sessions. A run whose runner the deployment no longer offers is marked failed,
 but its session is left running (nothing here can stop it). The webhook URL is an admin-only capability: the service POSTs from its
 own network, so receivers check `t` freshness and dedupe on `replyToken` (`docs/teams.md`, As built).
-`createAgentConnect({runners})` takes runner factories.
+`createAgentConnect({runners})` takes runner factories. App events use the same runners through
+the optional `startEvent` (EventRunInput: no bot or reply token; `RunInput` is unchanged for
+existing runners): only a runner with it can be chosen for an event trigger. Claude: a session
+with `source: <prefix>-events` metadata; webhook: `{type: "event", run, agent, app, event,
+deliveryId, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
+`capReached` is the one cap rule for both (hour, then day with live budgets, then concurrency).
 
 ## Database
 
 Schema `agent_connect` (`DATABASE_SCHEMA`), tables without a prefix (`agents`, `providers`,
-`connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`); index and
+`connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`,
+`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`); index and
 constraint names keep the `agent_connect_<table>_...` spelling they had in public (`store.ts`
 matches `agent_connect_providers_one_org_per_tenant`). `packages/server/src/migrate.ts` applies
 `packages/server/migrations/NNNN_*.sql` on start, all pending in one transaction under an advisory lock, with
@@ -181,7 +201,7 @@ the org ids already in them, 0003 drops two never-used columns, 0004 gives trigg
 (`claude-managed-agents` for every earlier row), its settings and a sealed signing secret, 0005
 records each run's runner (a trigger moved to another runner stops the old runner's live
 sessions and never reuses them), 0006 makes `approvals` (Teams approval cards; the
-rollback drops it). The adopting run then makes simple views
+rollback drops it), 0007 the app event tables (rollback drops them). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -195,10 +215,14 @@ equivalence of both paths, the rows, the key and the rollback.
 ## Deploy
 
 `deploy/docker` (image, `docker-compose.yml` with Postgres, `docker-compose.example.yml` adding
-the example internal app) and `deploy/helm/agent-connect` (one replica, Service, optional
-Ingress with only `/agent-connect/mcp` and `/agent-connect/teams`; `existingSecret` holds
-`DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`). One replica only: Teams
-run limits (concurrent runs, runs per hour, daily spend) are counted and admitted by one process,
+the example internal app, `docker-compose.sql-example.yml` the example orders database; the
+image moves the optional database drivers, peers of the npm package, into its dependencies
+before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (one replica, Service, optional
+Ingress with only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`; `existingSecret` holds
+`DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`; `caBundle` mounts a
+ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). One replica only: Teams
+and app event run limits (concurrent runs, runs per hour, daily spend) and polls are counted,
+admitted and run by one process,
 so a rollout recreates rather than overlaps. The admin API is never public: it refuses any
 request carrying `X-Forwarded-For`. Give the service a database role that owns only its schema.
 
@@ -206,20 +230,29 @@ request carrying `X-Forwarded-For`. Give the service a database role that owns o
 
 ```
 package.json          # one npm package for the server, kit and connectors (one lockfile);
-                      # tsconfig.json builds all three into dist/ with their paths kept
+                      # tsconfig.json builds all three into dist/ with their paths kept, with
+                      # declarations; `exports` "." (packages/server/src/index.ts) and "./kit"
+                      # (packages/connector-kit/src/index.ts), each with its types
 connectors/<id>/      # one folder per app: connector.json, index.ts (its ConnectorModule:
                       # vendor client + toolset), tools.ts (MCP tools), vendor.ts (auth + HTTP)
                       # and any helpers of its own. Loaded by folder; the id is the folder name
 connectors/<id>/connector.json # one per app: logo (admin /brand path), setup steps, form fields,
                       # capabilities → tools + vendor scopes (+ token `roles` when they differ;
                       # connector-level `scopes`: needed whatever is ticked, e.g. Teams' target search)
-                      # + in-app permissions + step fills, value limits, verify/discover
+                      # + in-app permissions + step fills, value limits, `events` (types, kept
+                      # fields, limit fields, self, webhook proof and steps, poll; docs/triggers.md), verify/discover
                       # probes, optional `provider`, `siteAccess` (grant steps and a note to
                       # IT per added site). Fields may be choices (`options`, the first the
                       # default; an option's `scopes` add to the token roles expected, and the
                       # admin page asks such a choice in step 1, before the steps naming
                       # {scopes}; `requires` {field, value}: asked only while an earlier choice
-                      # is that option, else its first option holds). Limits
+                      # is that option, else a choice's first option holds; a text field with
+                      # it is not asked at all, e.g. ServiceNow's password only for basic;
+                      # `optional`: may be left empty, e.g. Okta's KID). A step with
+                      # `capabilities` shows only while one of them is ticked (chosenSteps'
+                      # `ticked`; NetSuite's saved search script). An http probe's `name`
+                      # labels each value from the same list item as `show` (Check.labels;
+                      # a vendor check may return `labels` too; client discoveredChoices). Limits
                       # are list, text or map (`keys`: one value per chosen value of an earlier
                       # list limit, e.g. a folder per site). zod-validated at startup (connector-kit/src/connector.ts)
                       # Steps may carry `click` (the same step in the vendor's admin portals;
@@ -257,14 +290,27 @@ packages/connector-kit/src/ # what a connector builds on: connector.ts (connecto
                       # schemas, ConnectorModule, loading connectors/), common.ts (Toolset,
                       # audited: the audit row for every call), types.ts (Vendor, ConnectError),
                       # oauth.ts (client credentials with a cached token, vendor error text),
-                      # branding.ts, certificate.ts. It still imports types from the server
-                      # (Limits, TeamsAccess); untangling that is phase 3
+                      # fetch.ts (vendorFetch: every coded app's calls, redirects refused as a
+                      # ConnectError, a 429 with Retry-After up to 10 s sent again twice;
+                      # vendorUrl: base + path refused when it leaves base's origin; the
+                      # redirects test calls every built-in app against a redirecting fake),
+                      # branding.ts, certificate.ts. Imports nothing from the server or
+                      # connectors/ (Limits lives in types.ts; store.ts re-exports it).
+                      # ConnectorModule.create gets a ConnectorContext ({connector}); the
+                      # built-ins are BuiltinModule (connectors/microsoft/client.ts: also the
+                      # Microsoft client), and Teams tools read their bot from TeamsToolContext
+                      # (connectors/teams/tools.ts). index.ts: the public
+                      # `@arbium/enterprise-agent-connect/kit`, only what a connector author needs
 packages/connector-kit/src/certificate.ts # RSA key pair + self-signed X.509 (DER written by hand; Node only parses
                       # X.509), SHA-1 thumbprint for display, PS256 (RSA-PSS) client assertion
                       # (x5t#S256), as Microsoft documents for certificate credentials
 packages/server/src/index.ts # createAgentConnect(options): checks and wires everything (connectors and
                       # their modules, providers, branding, runners, migrations), returns
-                      # {fetch, start, stop}; what an embedder imports
+                      # {fetch, start, stop}; what an embedder imports. `connectors`: modules
+                      # (a built-in folder's app is offered, and its connector.json read, only
+                      # while its module is passed;
+                      # a module may carry its connector.json inline as `connector`) and
+                      # http-only definitions; checked like a folder's. Teams may be left out
 packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<id>/index.ts)
 packages/connector-kit/src/branding.ts # names shown and created in tenants (BRANDING), {brand.*} placeholders
 packages/server/src/server.ts # the container's entry: env (old names for one release) → createAgentConnect, listen
@@ -288,8 +334,25 @@ packages/server/migrations/ # 0001_tables.sql ... (plain SQL, unqualified names,
 packages/server/src/secrets.ts # AES-256-GCM credential sealing (AAD = org + app, or org + provider:<id>; key
                       # id per row), agent keys
 scripts/test-databases.sh # makes an empty ac_test on a scratch Postgres, for the DB-backed tests
+scripts/consumer-test.sh # packs both packages, installs them in a temp project, type-checks and runs
+                      # scripts/consumer/ (the README's "Use it in your code" snippets) on Postgres
+RELEASING.md          # cutting a release or a dev build; switching npm to trusted publishing
+scripts/openapi-to-connector.ts # drafts an http connector.json from an OpenAPI 3.x spec (JSON) and
+                      # chosen operations or tags; prints what a person must still edit. Tested on
+                      # scripts/fixtures/tracker.openapi.json
 packages/server/src/consent.ts # signed approval state (org, app, capability ceiling, return address, tenant once
                       # approved, nonce, 15 min expiry)
+connectors/http/      # the generic module for a connector.json `http` block; exports guardedFetch,
+                      # authHeaders, formValues, paramLimits and answerWithin for its siblings
+connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
+                      # templates with XML-escaped values, faults, result path), xml.ts (the XML
+                      # reader: no DTD, five entities, depth 100; also used by the scripts)
+connectors/odata/     # `odata` block (v2 and v4): typed literals, structured filters, keys,
+                      # create, update (read first under answerLimits), function and action
+                      # imports, $skip / skiptoken paging as `cursor`, SAP's CSRF token on writes
+scripts/wsdl-to-connector.ts, scripts/odata-to-connector.ts # draft a soap / odata connector.json
+                      # from a WSDL or $metadata (tested in connectors/soap and connectors/odata)
+examples/legacy-apps/ # hr-soap and sap-sales-orders, JSON-only; the soap and odata tests' fixtures
 connectors/jira/jql.ts # confines agent JQL to granted projects
 connectors/salesforce/soql.ts # finds the one object a SOQL query reads; refuses anything reaching another
 connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account client credentials;
@@ -300,23 +363,51 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # only the app's own choice fields, from its connector.json; microsoftApp()
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
-                      # fedex, dell-techdirect on the kit's oauth.ts (client credentials, a
-                      # cached token re-minted once on a 401))
+                      # gong: an API access key as Basic auth on the company's *.api.gong.io,
+                      # short 429 waits retried;
+                      # sap-s4hana: OData v2 with basic auth or Cloud OAuth, sap-client, CSRF;
+                      # servicenow: OAuth client credentials or basic, on the instance;
+                      # fedex, dell-techdirect, jamf on the kit's oauth.ts (client credentials, a
+                      # cached token re-minted once on a 401; a string body is sent as is, under
+                      # the request's own content-type: Jamf's Classic API takes XML); slack: a bot
+                      # token, ok:false and 429 handling; okta: an API service app,
+                      # private_key_jwt, a token per scope;
+                      # workday: an API client for integrations' refresh token;
+                      # dynamics-365: the Microsoft connection signing in to one Dataverse
+                      # environment)
+connectors/sql/       # the generic module for connector.json files with an `sql` block:
+                      # index.ts (vendor: a pool per credential, the `database` check; tools),
+                      # engines.ts (:name parsing, one adapter per engine: postgres, sqlserver
+                      # (mssql), mysql (mysql2), oracle (oracledb thin); drivers but postgres
+                      # are optional peer dependencies, imported on first use, a missing one
+                      # fails startup). docs/sql-connector.md, examples/legacy-orders
 connectors/*/tools.ts # per-app MCP tools (sharepoint-files has tools.ts for files and excel.ts
                       # for spreadsheets, joined by the kit's `toolsets`; entra and intune reuse
                       # its Graph paging, outlook-calendar outlook-mail's). Folder, mail, calendar and people listings page with `cursor`
                       # (Graph's $skiptoken, or mail's and calendar's $skip as `s<n>` / token as `t<token>`,
                       # returned as `next`); shortcuts to other sites are never listed nor read by id
 docs/teams.md         # Teams design (a bot per agent, real-time responses)
+docs/inside-your-network.md # internal certificate authorities (NODE_EXTRA_CA_CERTS, the chart's
+                      # caBundle) and reaching the admin API behind a proxy (in process, the
+                      # private network, or a second private listener)
+docs/triggers.md      # app events that start agents: how it works, Jira webhook and poll, how a
+                      # connector declares `events`, security
+packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window, paths, kept
+                      # fields, limits, conditions, request templates, the prompt), runtime.ts
+                      # (public inbound, queue, decisions per trigger, polls, run watcher),
+                      # admin.ts (subscriptions, triggers, runs, secret re-seal), store.ts
+packages/server/src/queue.ts # the one-process queue worker Teams and app events share
 deploy/docker/        # Dockerfile (context: the repository root),
                       # docker-compose.yml (Postgres + the service) and .env.example
 deploy/helm/agent-connect/ # small standalone chart (Deployment, Service, optional Ingress with
                       # only the public paths)
 README.md             # quick start
-.github/workflows/ci.yml # check, tests on Postgres 17, generated files current, package, image and chart build
-.github/workflows/release.yml # v* tag: publishes the server and client to npmjs as
-                      # @arbium/enterprise-agent-connect(-client) and the image to
-                      # ghcr.io/try-caret/enterprise-agent-connect
+.github/workflows/ci.yml # check, tests on Postgres 17, generated files current, package, image and chart
+                      # build, consumer test; also called by release.yml
+.github/workflows/release.yml # v* tag (newer than npm's newest, else refused): CI, then the server and
+                      # client to npmjs as @arbium/enterprise-agent-connect(-client) (latest, or next
+                      # for a prerelease), the image to ghcr.io/try-caret/enterprise-agent-connect and
+                      # a GitHub Release. Run by hand on a branch: <next patch>-dev.<sha>, dist-tag dev
 packages/server/src/teams/ # Teams: approval.ts (approval cards: token, card before and after,
                       # invoke answers), jwt.ts (inbound token checks), bot.ts (the bot's certificate
                       # sign-in, Bot Connector + Graph calls), activity.ts (places, the decision
@@ -334,6 +425,9 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # upgrade.test.ts: an install from fixtures/legacy-20261023200000.sql (a
                       # frozen copy of the earlier layout) adopted, against a fresh one, and
                       # by an owner that cannot bypass RLS
+                      # events.test.ts: app events on a made-up app (signatures, replays,
+                      # repeats, limits, conditions, own changes, caps, poll cursor, the signed
+                      # webhook runner end to end, admin); deliver.test.ts its pure rules
                       # teams.test.ts: the Teams runtime and trigger admin with fake runners
                       # (replies while starting, sessions kept to their runner) and approval
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
@@ -492,9 +586,11 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
 - SharePoint (`sharepoint-files`, shown as "SharePoint"; the id stays for compatibility):
   files and Excel spreadsheets, one app with one site list, one site access check, one setup
   and one status. Capabilities, reads before writes so any write tick's `site_role` fill wins:
-  `read_files` (graph_list_sites, graph_list_files, graph_read_file), `read_sheets` (the five
-  excel_* reads), `write_files` (graph_upload_file, destructive), `write_sheets`
-  (excel_update_range, excel_add_table_rows), `read_directory` (graph_list_users). None is
+  `read_files` (graph_list_sites, graph_list_files, graph_read_file, graph_get_download_link),
+  `read_sheets` (the five excel_* reads), `read_documents` (document_read), `write_files` (graph_upload_file,
+  graph_create_upload_link, destructive), `write_sheets`
+  (excel_update_range, excel_add_table_rows), `edit_documents` (word_fill_template, destructive:
+  `replace`), `read_directory` (graph_list_users). None is
   required, so a key can have spreadsheets without files. Both write capabilities are
   `siteAccess.write` (the access check then proves write). Through the Microsoft
   connection. Tokens are client credentials for `graph.microsoft.com/.default`, cached per
@@ -538,12 +634,106 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   (case-insensitive, NFC). An item read by id must have `parentReference.siteId` of the site,
   `driveId` of the site's default library (`GET /sites/{id}/drive`, the only one paths reach) and,
   with a folder limit, a parent path (percent-encoded, split before decoding) inside the folder;
-  a missing or unreadable one is refused. Downloads only text types up to 1 MB, and uploads up to
-  3 MB (the MCP endpoint takes 4 MiB bodies), never replacing a file unless asked (so it is
-  marked destructive; base64 content is validated, never silently repaired). A key's sites are
+  a missing or unreadable one is refused. graph_read_file downloads only text types up to 1 MB,
+  and graph_upload_file uploads up to 3 MB (the MCP endpoint takes 4 MiB bodies), never
+  replacing a file unless asked (so it is marked destructive; base64 content is validated, never
+  silently repaired). Any other file goes through Graph's pre-authenticated links, so its bytes
+  move in the agent's own workspace and never through the MCP endpoint or the model's context:
+  `graph_get_download_link` (same site, library and folder checks as graph_read_file) answers
+  the item's `@microsoft.graph.downloadUrl` (about an hour, no token; read without `$select`, since
+  Microsoft documents no `$select` form for it), and
+  `graph_create_upload_link` (same path and folder checks as graph_upload_file) opens an upload
+  session (`createUploadSession` on `root:/<path>:`, the form the access check uses; conflictBehavior
+  `fail` unless `replace`, so a name taken fails the last PUT with 409) and answers its
+  `uploadUrl`, which the agent PUTs the file to in one request under 60 MiB (Microsoft's limit
+  per PUT; an empty file goes through graph_upload_file). Only https links on a
+  `*.sharepoint.com` host are handed out (sites are only ever that); the audit target is the
+  file, never the link, and the upload link's row names the folder actually opened plus
+  `(replace)` when it may overwrite, since the PUT itself is never seen here. The agent's
+  environment must allow the tenant's SharePoint host. Anyone holding a link reaches that one
+  file until it expires: it sits in the Managed Agents session transcript (tool result and
+  curl line), and Microsoft says removing permissions might not invalidate a download link at
+  once, so revoking a key does not cut off a link already handed out. The tool descriptions say
+  to use a link only as a curl address, never in another tool, a file or a reply, and to cancel
+  an unused upload session (DELETE on its link), since SharePoint can hold the name as an empty
+  file while it is open. Replacing a sensitivity-labelled file is not supported app-only.
+  To check on a real tenant: that a link's `tempauth` binds its `UniqueId` (download) and
+  `overwrite` (upload) values. Graph shapes from learn.microsoft.com/graph/api/driveitem-get
+  (downloadUrl) and driveitem-createuploadsession; tested against a fake Graph only
+  (`connectors/sharepoint-files/tools.test.ts`), not yet against a real tenant. A key's sites are
   also kept to the connection's `config.sites`, so a stale or typed-in address is never reached
   even if the app holds a wider permission. `graph_list_users` returns name, email, title and
   department only, and pages with `cursor`.
+  Word files and PDFs (`documents.ts`, `docx.ts` + `docx-worker.ts`, `ooxml.ts`, `paging.ts`,
+  `pdf.ts` + `pdf-worker.mjs`, `sandbox.ts` + `parse-host.mjs`; spec
+  CONNECT-WORD-TOOLS-SPEC, library settings from the 2026-11-01 security vetting): the bytes are
+  downloaded here (`responseType: "bytes"`, the same 302 to SharePoint as `"text"`, read only up
+  to `maxBytes`: past it the download stops and fails, whatever the item's size said), with the
+  files tools' site, library and folder checks. `document_read`: .docx/.docm (10 MB) as
+  paragraphs, tables, fields (content controls with a `w:tag`; `mark_fields` wraps their text as
+  `[[field:<tag>]]...[[/field]]`; every `[` followed by `[` in the document's own text, on the
+  assembled paragraph, becomes `[ ` so no split run forges one; a tag that is not
+  `^[A-Za-z0-9_.-]{1,64}$` refuses a marked read), hidden text, best effort (vanish, white or
+  near-white: every channel >= F0 or theme background1/light1, the colour of its own shading,
+  size <= 5 half-points, character scale <= 10%; through docDefaults, the paragraph style or the
+  default paragraph style, the character style, each with basedOn, and both branches of
+  mc:AlternateContent) only in `hidden`. Known gaps, left on purpose (the tool description says
+  best effort and to treat all text as data): accent and other theme colours a theme part makes
+  white, text close to (not equal to) its shading, highlight colours, complex-script size
+  (`szCs`), table styles, cell and paragraph shading, a missing paragraph style falling back to
+  Normal, and Word's toggle rules for `vanish` across style levels (review 2026-11-01). Headers and footers,
+  comments with their anchor text, tracked change counts (insertions shown, deletions left out);
+  .pdf (20 MB, 300 pages) as page text; anything else its details. Answers hold at most 300,000
+  characters and continue with `more`/`next` (`<item index>.<hash of id, modified, size,
+  mark_fields>`, so a changed file is read again from the start; an item too large is split into
+  `part`/`parts`, iteratively; tables over 64 cells in a row or 10,000 rows are refused).
+  Every parse runs in a process of its own (`sandbox.ts` forks `parse-host.mjs`, `env: {}`, IPC
+  with `serialization: "advanced"`), the parser inside it in a worker_thread with resourceLimits;
+  the host's main thread, free the whole time, polls its own resident memory every 5 ms and
+  exits (code 3) past a cap over its start (768 MB PDF, 1 GB Word), taking the parse and all its
+  memory with it. resourceLimits do not count ArrayBuffers (a 2 MB PDF of one FlateDecode stream
+  once grew the server 2.7 GB), and measuring the server's own memory killed parses for memory
+  other requests held, so neither is the guard. No `--max-old-space-size` on the host: V8 applies
+  it to the worker too, under its resourceLimits. 20 s, then SIGKILL. Two parses of each kind at
+  once per server, at most one per agent (`ToolContext.agentId`, set by service.ts); others wait
+  up to 5 s, then "busy, try again". A place is given back only after the parse's process has
+  exited, on every path (answer, refusal, timeout, memory), so its memory is gone first
+  (`liveParses()`). Each parse costs a Node process start (tens of ms). The parse process never
+  outlives the server: it exits when its IPC channel closes, on a clock of its own (the
+  server's timeout plus 2 s, 10 s with no job), and when its answer cannot be sent. The server
+  takes one answer only, of the expected shape (`{ok: true, value}` or `{ok: false, denied:
+  string}`) and at most 80 MB serialized (checked in both processes); anything else is "could not
+  be read". The parse process runs as the same user as the server, with no OS sandbox (no
+  seccomp, namespaces or separate user): its limits are memory, time and an empty environment. Anything but a refusal inside a worker becomes "could not be read"; file-controlled
+  text in refusals is cut to about 100 characters. Zips through fflate's `unzipSync` only, with a filter checking every size
+  from the directory before anything is inflated (2,000 entries, 50 MB in all, a ratio over 200
+  past 1 MB, compression 0 or 8, no `..` or rooted names, no repeated names), then each part's
+  length and CRC-32 against the directory (fflate checks neither: a header that lies about a
+  size otherwise cuts a part short silently, seen 2026-11-01); ZIP64 refused. XML through xmldom
+  after refusing `<!DOCTYPE`/`<!ENTITY` in the text, `onError` throwing, one root, depth 256, 5
+  MB a part (xmldom needs about 100 times a dense part's size; a SOW's document.xml is well
+  under 1 MB). A fill parses the template's document.xml once and the output's once (the guard
+  checks the bytes to be uploaded). PDFs through pdf.js's legacy build
+  (`pdfjs-dist/legacy/build/pdf.mjs` and its worker): the modern build calls `Promise.try`, which
+  Node 22 (the image's node:22-alpine) lacks, so every PDF failed on staging while the suite passed
+  on Node 26 (2026-11-01); the legacy bundle has no `isEvalSupported`, `new Function` or `eval`.
+  Run the suite on Node 22 before shipping a pdf.js change. 512/64/4 MB limits, `env: {}`, no
+  fetch, the vetting's `getDocument` options, local fonts/CMaps/wasm read from
+  `node_modules/pdfjs-dist`; module hooks refuse to load any canvas package; encrypted ones
+  refused. A parse that fails tells the agent only "could not be read"; the error's class name
+  alone (never its message: pdf.js puts document strings in messages) comes back as a separate
+  `reason` that the server checks is a plain name, writes to its log and never returns. `word_fill_template`: a .docx template (never written) to a new .docx through the
+  same PUT as graph_upload_file (conflict `fail` unless `replace`); text takes the first run's
+  and first paragraph's formatting (Word's PlaceholderText style dropped), newlines are
+  paragraphs in a block field and breaks in an inline one, a table field keeps its first row and
+  repeats its last per row; every filled field loses `w:showingPlcHdr` and any `dataBinding`.
+  Before upload the guard re-opens the output and refuses unless every other zip part is
+  byte-identical and the document with every filled field's content taken out serializes
+  identically (text and markup). A target that is the template itself (same folder and name) is
+  refused, replace or not. Audit `${site} ${template} -> ${folder}/${name}`, then
+  `-> <folder>/<name> (<new id>)` plus ` (replace)`. The image installs with `--ignore-scripts --omit=optional`, so pdfjs-dist's
+  optional native `@napi-rs/canvas` (in the lockfile, as npm always records optionals) is never
+  installed there. Tests: `connectors/sharepoint-files/documents.test.ts`, fake Graph only.
 
 - Outlook calendar (`outlook-calendar`): the mail model applied to calendars: no Graph
   Calendars permission, Exchange RBAC roles
@@ -672,6 +862,78 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   intune-enrollment-windowsautopilotdeviceidentity (v1.0 and beta), resources/
   intune-enrollment-enrollmentstate, intune-shared-windowsautopilotdeploymentprofile-get (beta)
   (read October 25, 2026). Tests: `connectors/intune/autopilot.test.ts`, against a fake Graph.
+- Okta (`okta`): an Okta API service app on the org authorization server
+  (`https://<org>/oauth2/v1/token`), client credentials with a private_key_jwt client assertion
+  (RS256, `kid`, iss = sub = client id, aud = the token URL, 5 minutes) signed with the private key
+  Okta generated in the app (PEM or JWK, kept as PKCS#8 PEM in the secret). Okta has no catch-all
+  scope and refuses a whole token request naming a scope not granted (`invalid_scope`), so each
+  call gets a token for the one scope its path and method need (`scopeFor`:
+  `okta.<resource>.read` for a GET, `.manage` otherwise, resource users, groups, apps or logs),
+  cached per credential and scope, re-minted once on a 401. The `scopes` check mints one token per expected scope and warns only about missing ones.
+  An error naming DPoP (on by default for new service apps) says to clear it. The org is
+  `<name>.okta.com` (also oktapreview, okta-emea, okta-gov; an `-admin` host is its org), the only
+  host called, redirects refused. Lists come back as `{items, after}` from the Link header. Okta
+  also checks the app's admin role on every call: the setup has the admin make a custom role (the
+  capabilities' `permissions`) with a resource set of the agents' groups. Capabilities: `read`
+  (required: get, search users, factors, search groups, group members), `read_apps`,
+  `read_activity` (System Log for one person: `actor.id` or `target.id`, a window kept in the
+  cursor as `<until>~<after>`, since a log query with `since` and no `until` never ends; another
+  person's name is left out under limits), `manage_groups`, `helpdesk` (unlock, password reset
+  always `sendEmail=true`, so the reset link never reaches the agent), and destructive
+  `reset_mfa`, `suspend` (suspend, unsuspend, clear sessions with `oauthTokens=true`) and
+  `deactivate` (`sendEmail=false`). Limit `groups` (Okta group ids; Okta groups do not nest): a
+  person is in scope when `/users/{id}/groups` (5 pages of 200 at most) has one of them; every tool
+  naming a person checks first, a username not found under limits gets the same refusal, searches
+  read on up to 5 pages, group tools and membership changes take only the key's groups. Not yet run
+  against a real Okta org: tested against fakes only (`connectors/okta/*.test.ts`). Sources:
+  developer.okta.com guides implement-oauth-for-okta-serviceapp, client-auth, pagination, and the
+  Management API's User, UserLifecycle, UserSessions, UserFactor, Group, Application and SystemLog
+  references (read October 27, 2026).
+- Dynamics 365 (`dynamics-365`, provider microsoft): one Dataverse environment per connection,
+  its URL the connect form's `environment` field (`accountKey`), normalized to its origin: hosts
+  `<org>.crm[N].dynamics.com` (a pasted `<org>.api.crm[N]` Web API address is mapped back);
+  GCC High, DoD and China hosts (`crm.microsoftdynamics.us`, `crm.appsplatform.us`,
+  `crm.dynamics.cn`) are refused by name, since the Microsoft connection signs in only to the
+  global cloud. Calls are the Microsoft connection's client credentials with a token for the
+  environment itself (`<origin>/.default`, `ms.call`'s origin) and go only to that origin, under
+  `/api/data/v9.2`. The app needs no Entra API permission: it is added to the environment as an
+  application user (Power Platform admin center, or `pac admin assign-user --application-user`)
+  with a security role, and what agents reach is that role. Connect proves it with `WhoAmI`
+  (401/403 says to add the application user). Capabilities' `scopes` are Dataverse privilege
+  names (`prvReadAccount`, ...; connector `scopes` adds `prvReadUser` for the check); the `access`
+  check lists the application user's directly assigned roles and warns only about expected
+  privileges `RetrieveUserPrivileges` does not return. Tools: search and get accounts/contacts,
+  opportunities and cases (fixed `$select` per table; text search is `contains` on name columns),
+  create/update accounts and contacts (plain columns only: names `_?[a-z][a-z0-9_]*`, no `_x_value`
+  and no `@odata.bind`, so no owner change; a contact's account through `account_id`; update sends
+  `If-Match: *` so it never upserts), close opportunities (`WinOpportunity` / `LoseOpportunity`,
+  Status 3 / 4), close cases (`CloseIncident` Status 5, or PATCH statecode 2 statuscode 6),
+  list a record's activities (`activitypointers` by `_regardingobjectid_value`) or notes
+  (`annotations` by `_objectid_value`), add a note, task or phone call (completed by a second
+  PATCH unless `completed` false), list/get rows of the tables in the key's `tables` limit
+  (entity set and primary columns from `EntityDefinitions`), and destructive delete. Agents never
+  write OData: `filters` are {column, op, value}, values rendered as literals here (GUIDs, ISO
+  dates, numbers and booleans bare, other text quoted with `'` doubled). Every request asks for
+  formatted values (`Prefer: odata.include-annotations="*"`): answers give option sets and money
+  as labels and lookups as {id, name, table}, text over 2000 characters shortened. Paging:
+  `odata.maxpagesize` and the next link's `$skiptoken` as `cursor`. Limits `business_units` and
+  `teams` (ids; a record is in scope when its owning business unit or owning team is one of
+  them): every listing adds the owner filter and drops any row outside it, every read or write of
+  one record reads it first (not found under limits gets the same refusal as outside), a contact's
+  account must be in scope, and a created record must land in scope (the app user's own business
+  unit, the key's only team, or `owner_team`, which must be a key team or in a key business unit).
+  Under limits, `tables` reads only `UserOwned` tables, activities and notes are those of an
+  in-scope record whoever owns them, and delete takes only tasks, phone calls and notes (checked
+  through their record), since deleting an account, contact, opportunity or case cascades to
+  records that may be outside the scope. Not yet run against a real environment: tested against
+  fakes only (`connectors/dynamics-365/*.test.ts`). Sources: learn.microsoft.com/power-apps/
+  developer/data-platform/use-single-tenant-server-server-authentication (no API permission is
+  needed for S2S) and learn.microsoft.com/power-platform/developer/cli/reference/admin
+  (`assign-user --application-user`; without `--business-unit` the application user goes to the
+  signed-in admin's business unit), read October 27, 2026; the Web API shapes (WhoAmI,
+  RetrieveUserPrivileges, WinOpportunity, LoseOpportunity, CloseIncident, `@odata.bind`
+  navigation names, paging, formatted values) are from Microsoft's Dataverse Web API reference,
+  not re-read for this.
 - FedEx (`fedex`): a FedEx Developer Portal project's API key and secret key, OAuth client
   credentials at `/oauth/token` on `apis-sandbox.fedex.com` or `apis.fedex.com` (the connect
   form's `environment` choice; no default is assumed: the admin app always sends the choice),
@@ -700,6 +962,240 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   only after approval. `dell_warranty_lookup` returns model, ship date and each entitlement
   with an `active` flag; an answer that is not a list fails loudly. Asset components (parts)
   are left out: a separate API not confirmed under the same key. No limits.
+- Generic `soap` and `odata` modules (docs/soap-connector.md, docs/odata-connector.md), siblings
+  of `http`, sharing its guarded fetch (origin, no redirects, 30 s, 1 MB; SOAP also takes XML
+  types), auth headers, form values and limit checks. At most one of http, soap, odata, sql
+  per connector; the shared refine checks auth fields, accountKey, list limits, no provider. SOAP: a
+  POST of the endpoint only; each tool's body is a template whose `{param}`s are filled in one pass
+  with XML-escaped values (control characters refused); an optional param is a whole element,
+  dropped when left out; bodies must parse at startup; WS-Security UsernameToken (text or digest,
+  fresh nonce and Created, no Timestamp); a Fault of either version, any status, is
+  `The service refused the call: <reason> (<code>)`; a non-envelope error page passes its text;
+  answers become JSON without prefixes (repeats as lists, xsi:nil null, unprefixed attributes
+  kept, `_text` beside children), cut to `result` (`[]`: always a list) and `fields`;
+  `answerLimits` only on `readOnly` tools; verify is the vendor check `operation` running
+  `soap.verify`. OData: agents send typed values only (string, integer, number, decimal, boolean,
+  guid, datetime, datetimeoffset, each re-checked before a literal is written); v2 literals carry
+  their prefixes and suffixes; a limited `eq` filter left out is the OR of the agent's values,
+  and every listed item is checked on it; `answerLimits` on get, list and function, and an update
+  under them reads the entity first (`$select` of their fields); `cursor` is `s<skip>` or
+  `t<skiptoken>` read raw from the next link, never a URL, so the filter is rebuilt each page;
+  `paging: server` (v4 only) sends `Prefer: odata.maxpagesize`; writes with `csrf` fetch a token
+  and its cookies first (fresh per write); v4 create and update ask `return=representation`,
+  update sends `If-Match: *` (no Dynamics upsert), v2 update is POST with `X-HTTP-Method: MERGE`.
+  The audit target is the request sent. oauth2 takes an optional `scope` (Entra v2, Dynamics).
+  Tested only against fakes (connectors/soap/*.test.ts, connectors/odata/*.test.ts), never a live
+  SAP, Dynamics, SuccessFactors or SOAP service.
+- SQL (`connectors/sql`, any connector.json with an `sql` block): each tool is one statement
+  the company's developer wrote, `:name` params found outside quotes, comments and `::` casts
+  and bound by the driver (postgres `$n`, SQL Server `@name`, MySQL `?` through `execute`, a
+  server-side prepared statement, Oracle `:name`); the params declared must be exactly the
+  names used (checked at startup). Every call is its own transaction: tools without `write`
+  run read-only (Postgres and MySQL `read only` transactions, Oracle `set transaction read
+  only`, SQL Server `ApplicationIntent=ReadOnly` on a pool of its own: no read-only
+  transaction there, so the user's grants are the guard) and are rolled back; writes commit.
+  Answer limits (`column`) are checked on the rows inside the transaction, before commit, so a
+  write outside them is rolled back; under a limit, a write returning fewer rows than it
+  changed is refused. Rows are capped at `maxRows` (default 200, at most 1000) and 1 MB
+  (Postgres stops at a cursor batch, SQL Server `set rowcount`, MySQL `sql_select_limit`,
+  Oracle `maxRows`, each maxRows + 1 so `truncated` shows); `timeoutSeconds` (Postgres
+  `statement_timeout`, SQL Server requestTimeout, MySQL the driver's query timeout, Oracle
+  callTimeout). A write tool cannot be in a required capability; `destructive` needs `write`.
+  Pools: 3 connections, 60 s idle, keyed by user and password (a changed credential gets a
+  new pool; the old one idles at zero connections), never closed; a failed first connection
+  is tried again on the next call. TLS `verify` (default), `insecure` (refused for Oracle,
+  whose thin driver always checks the chain), `off`. Tested: Postgres in the suite; MySQL 8.4,
+  SQL Server 2022 and Oracle 23ai Free by the optional smoke test (TEST_MYSQL_URL,
+  TEST_SQLSERVER_URL, TEST_ORACLE_URL) against containers, 2026-10-27 (TLS `insecure` for the
+  first two, `off` for Oracle; `verify` against none); MariaDB never.
+- Slack (`slack`): a Slack app made from the manifest in the first setup step (YAML: a JSON
+  manifest cannot take the `{scope}` line repeat without a trailing comma), installed to one
+  workspace; the connect form takes its Bot User OAuth Token (`xoxb-`). `auth.test` proves it
+  (`teamId` is the `accountKey`); the `workspace` check compares Slack's `x-oauth-scopes`
+  header with the ceiling's scopes and warns about missing ones, and `channels` (discover)
+  lists the channels the bot is in (`users.conversations`, 5 pages of 200 at most) as the
+  `channels` limit's choices. Reads are GET with query arguments, writes POST JSON, all on
+  `https://slack.com/api`. Slack answers most failures 200 `{ok: false, error}`: the vendor turns
+  them into statuses (auth errors 401, missing_scope and the like 403, not found 404,
+  ratelimited 429, any other 400) so probes and VendorFailed work as for other apps, and
+  `slackError` puts common codes in words. A 429 is waited out (Retry-After, at most 10 s, twice:
+  Slack did not run the call, so even a post is safe to resend); longer, the agent is told when
+  to retry. The bot reaches only channels it is a member of (Slack refuses the rest with
+  not_in_channel; no `chat:write.public`), and no im or mpim scope is asked, so no direct
+  messages. Every tool takes a channel id (`C`/`G`), checked against the key's `channels` limit
+  before any call; `slack_list_channels` filters to it. Capabilities: read (required: list
+  channels, read a channel, read a thread, permalink), post (also thread replies), react
+  (`already_reacted` answers success), upload (text up to 1 MB through
+  files.getUploadURLExternal, the bytes POSTed to its `upload_url` only on `files.slack.com` with
+  no token, then files.completeUploadExternal), people (users.lookupByEmail; no email in the
+  answer), delete (destructive, chat.delete: a bot token deletes only the bot's own messages).
+  Messages come trimmed: ts and its ISO time, author id and name (users.info, at most 20 a call;
+  a failed lookup keeps the id), text with mentions, channel links and links made plain,
+  thread_ts, reply_count, reactions, file titles. Search is left out: search.messages takes only
+  a user token, which reads everything that person can (direct messages included), so a key's
+  channel limit could only filter answers after the person's whole reach was searched. Sources:
+  docs.slack.dev/reference/methods (files.getUploadURLExternal and files.completeUploadExternal
+  read October 27, 2026, both taking JSON or form arguments; the other methods, rate limits and
+  manifests from Slack's same reference, not re-read). Tested only against a fake Slack, never a
+  real workspace.
+- ServiceNow (`servicenow`): an integration user (web service access only) on
+  its instance: a bare name is `<name>.service-now.com`; any other https address (a company's
+  own domain, a port) is taken as the admin entered it, the admin being trusted to name their
+  instance (no IP literal check, as for the `http` connector). Every call goes to that origin:
+  paths must start with a single `/`, the token URL is built on it, and a redirect is refused
+  (`noRedirects`), never followed. Sign-in choice `auth`: `oauth` (default; an application
+  registry entry "OAuth API endpoint for external clients" whose OAuth Application User is the
+  integration user, client credentials at `/oauth_token.do`, which ServiceNow only allows once
+  the system property `glide.oauth.inbound.client.credential.grant_type.enabled` is true; the
+  kit's `clientCredentials`) or `basic` (user ID and password). `accountKey` is the instance.
+  Table API with `sysparm_display_value=all` (references and choices read by display value,
+  times by value, UTC) and `sysparm_fields`; Service Catalog API for items and `order_now`.
+  Agents never send an encoded query: tools build it from their parameters and the key's
+  limits, and refuse any value with `^` (a new condition, or `^NQ` a new query), a line break
+  or `javascript:` (evaluated by ServiceNow in query values). Limits `groups` (assignment
+  group names) and `companies` (company names) are ANDed into every incident and change query
+  (`assignment_group.name=a^ORassignment_group.name=b`; companies alone for CIs and requested
+  items, on `company` and `requested_for.company`) and checked again on every record answered
+  (case-insensitive, as ServiceNow compares); a record by number outside them is answered as
+  not found. Writes read the incident within the limits first and change it by sys_id;
+  groups, callers and people ordered for are resolved to exactly one active record (under
+  `companies`, only people of those companies). Knowledge and the catalog are not limited.
+  Roles per capability: `sn_incident_read`, `sn_incident_write` (create and work),
+  `sn_change_read`, `cmdb_read`, `itil` (requests placed by others), knowledge by the
+  knowledge bases' user criteria; nothing deletes. Tests: `connectors/servicenow/tools.test.ts`
+  against a fake instance. Not yet run against a real instance (client credentials, the
+  `gs.getUserID()` verify probe, `123TEXTQUERY321` knowledge search and `sysparm_requested_for`
+  on `order_now` are from ServiceNow's docs and community, read October 27, 2026).
+- Jamf Pro (`jamf`): a Jamf Pro API client (Settings > System > API roles and clients) whose API
+  role holds the ticked capabilities' privileges (`scopes`, filled into the role step). The
+  connect form takes the server address (https origin only, cloud or on premises: `config.url`,
+  `config.host` is the `accountKey`), client ID and secret. Token: client credentials at
+  `/api/v1/oauth/token` (form-encoded; current docs, the older `/api/oauth/token` is not used), on
+  the kit's oauth.ts. Verify reads `/api/v1/jamf-pro-version` (no privilege); discover lists site
+  ids with their names as labels (`/api/v1/sites`, Read Sites). Jamf Pro API: `/v4/computers-inventory` and
+  `/v2/mobile-devices/detail` (RSQL `filter`, `section`, `page`, `page-size`; one device is the
+  same listing with `id=in=(..)` / `mobileDeviceId=in=(..)`), group lists
+  `/v3/computer-groups/{static,smart}-groups` and `/v2/mobile-device-groups/{static,smart}-groups`,
+  `POST /v2/mdm/commands` (RESTART_DEVICE, DEVICE_LOCK, ERASE_DEVICE; by the device's
+  `general.managementId`) and `/v2/mdm/blank-push`. Classic API where the Jamf Pro API has no
+  equal: a group's members and static membership changes (`computergroups` /
+  `mobiledevicegroups` by id; PUT XML with `*_additions` / `*_deletions` changes only those
+  devices, where the Jamf Pro API's computer group PUT replaces the whole list), policies
+  (`/JSSResource/policies`, by id; no Jamf Pro API equal) and a computer's policy logs
+  (`computerhistory/id/{id}/subset/PolicyLogs`: Jamf keeps policy logs per computer). Update
+  inventory is left out: the Classic `UpdateInventory` mobile command is deprecated (11.28) with
+  no documented Jamf Pro API equal, and computers report inventory through their own agent.
+  Limit `sites` (Jamf site ids): the boundary because a device's site is set by Jamf
+  administrators and no tool here changes it; groups would not do, since an agent with
+  `group_membership` could add a device to its own group, and smart groups follow values the
+  device itself reports (its name, say). A device with no site is outside every sites limit.
+  Neither inventory listing filters by site, so listings filter here, reading on at most 5 pages
+  (`MAX_SCOPED_PAGES`); every lookup by id checks the device's site, and a device outside the
+  sites gets the same refusal as one Jamf does not have. Groups and policies are kept to the
+  key's sites too (policies listed under a limit are each read for their site, at most 50 per
+  call, `MAX_POLICY_READS`); a group's members are read back and checked. Capabilities: read
+  (required), groups, group_membership (destructive: removing a device can remove a scoped
+  profile or app), check_in (blank push), restart_lock, erase (destructive; the agent must give
+  the device's serial number, compared before the command), policies. A computer lock needs a
+  6-digit PIN. Sources: developer.jamf.com/jamf-pro/reference (Jamf Pro API 11.33 OpenAPI
+  files), docs/privileges-and-deprecations, docs/classic-api-minimum-required-privileges-and-endpoint-mapping,
+  docs/client-credentials, read October 27, 2026. Per-command Send privileges (Jamf Pro Server
+  Actions) are not all documented: `Send Computer Remote Lock Command`, `Send Mobile Device
+  Restart Device Command` and `Send Blank Pushes to Mobile Devices` come from Jamf community
+  threads, `Send Computer Remote Wipe Command` from Jamf's privileges table, `Send Mobile Device
+  Remote Wipe Command` by analogy; the 403 hint says to add the matching one. Nothing has run
+  against a real Jamf Pro server. Tests: `connectors/jamf/*.test.ts`, against a fake Jamf Pro.
+- SAP S/4HANA (`sap-s4hana`): SAP's released OData v2 APIs at `/sap/opu/odata/sap/<service>/`,
+  the same paths on S/4HANA Cloud (a communication user in one arrangement per scenario) and on
+  premise through SAP Gateway (a System-type technical user; `sapClient` appended as
+  `sap-client` to every call). The connect form's `deployment` choice switches the setup steps and
+  fields (`host` for Cloud; `gateway_host` and `sap_client` on premise); `auth` (asked only for Cloud) is basic or OAuth client credentials at
+  `/sap/bc/sec/oauth2/token` with the communication user as client (Basic client auth, token
+  cached and re-minted once on a 401). Host only, https only (an internal CA is the deployment's
+  `NODE_EXTRA_CA_CERTS`); calls go through the http connector's `guardedFetch` (that origin
+  only, no redirects, 1 MB). `accountKey` is `system` (host, plus client). Connect proves the
+  sign-in by reading the API_BUSINESS_PARTNER root (401 is a refused sign-in; 403/404 are not,
+  the arrangement may not exist yet); the `services` check opens each ticked capability's
+  service roots (capability `roles` are service names, `scopes` the Cloud scenario ids for the
+  `{scope}` line, `permissions` the services to activate on premise) and names the missing
+  ones. Writes fetch an `x-csrf-token` from the service root first and send it with the
+  session cookies it came with; a refused fetch is answered as is. Capabilities: partners
+  (A_BusinessPartner; master data, not narrowed by limits), read_sales / create_sales
+  (API_SALES_ORDER_SRV, deep insert of to_Item), read_purchasing / create_purchasing
+  (API_PURCHASEORDER_PROCESS_SRV; create is destructive and `costs`; no approve tool), stock
+  (API_PRODUCT_SRV descriptions, API_MATERIAL_STOCK_SRV A_MatlStkInAcctMod), finance
+  (API_SUPPLIERINVOICE_PROCESS_SRV, API_OPLACCTGDOCITEMCUBE_SRV open and cleared items).
+  Limits (lists): company_codes, sales_organizations, purchasing_organizations, plants. Reads put
+  them in `$filter` (values quoted with `'` doubled) and filter the answer rows again; a single
+  order outside them, or with a line at another plant, is refused after the read; creates check
+  every org value and each line's plant before any call. Lists page with `$top` (one extra row
+  asks whether there is more) and `$skip` as `cursor`. Scenario ids SAP_COM_0008, 0109, 0053,
+  0009, 0164, 0057 and 0303 (the last two from SAP's SDK docs and a support note) and the
+  OData field names come from SAP's API reference as remembered and searched on October 27,
+  2026; tested only against a fake SAP, never a real system.
+- Workday (`workday`): an API client for integrations signing in as an Integration System User
+  with a non-expiring refresh token (refresh token grant at `/ccx/oauth2/<tenant>/token`, client
+  id and secret as Basic). The connect form takes the REST API endpoint from View API Clients
+  (host and tenant read from it; the host must end myworkday.com or workday.com), and `account`
+  (`<host>/<tenant>`) is the `accountKey`. Workday's token answer may carry no lifetime: a token
+  is then reused 10 minutes; any is re-minted once on a 401. REST services: staffing v7 (workers,
+  supervisory organizations, org chart), common v1 (direct reports, a worker's organizations,
+  an organization's workers), absenceManagement v5 (balances, timeOffDetails,
+  eligibleAbsenceTypes, requestTimeOff with Workday's submit action). Paths are Workday's REST
+  directory (`developer.workday.com/.../services_oas3.json`, public); the spec files need a
+  Workday sign-in, so answer fields follow CData's Workday tables generated from them (read
+  October 27, 2026). No REST service lists job requisitions; they come through reports.
+  Reports (Reports-as-a-Service): the admin pastes each custom report's JSON link (`reports`,
+  at most 30, on the connected host and tenant, kept as `config.reports` JSON); its query names
+  are the prompts, a date example making a date prompt. `workday_run_report` sends only known
+  prompts, `format=json`, and returns `Report_Entry` rows (values cut to 500 characters, at most
+  200 rows). Capabilities: workers (required: search, get, direct reports, management chain,
+  organization, organization's workers), time_off (balances, entries), request_time_off
+  (types and submitting; not destructive, the request goes through the customer's approvals),
+  reports. No pay, personal or national id data in any REST answer; a report shows whatever
+  columns the admin built into it. Limits: `organizations` (Workday IDs) and `reports`. A worker
+  is in scope when its primary supervisory organization, or one above it (org chart
+  `superior`, at most 12 levels), is in the limit, or any of its organizations
+  (`/workers/{id}/organizations`, e.g. its company) is. Every worker read by id is checked on
+  the answer (an unknown id gets the same refusal as one outside), listings are filtered, the
+  management chain stops at the limit, balances whose `worker` is another are refused. Under
+  the limit, reports need `report_org_column` (`config.reportOrgColumn`): rows whose column is
+  not in scope are left out; without it reports are refused. Tested only against a fake Workday,
+  never a real tenant.
+- Oracle NetSuite (`netsuite`): one NetSuite role (Web Services Only) on an employee, through an
+  integration record. The connect form's `auth` choice: `oauth2` (default; OAuth 2.0 client
+  credentials: the admin makes an RSA key pair with the openssl line in the steps, uploads
+  public.pem in the M2M setup and pastes private.pem, sealed; tokens come from a JWT signed PS256,
+  header `kid` the certificate id, `iss` the client id, `scope` one of `rest_webservices` /
+  `restlets`, `aud` the token URL, 5 min; RSA under 3072 bits is refused, NetSuite's minimum;
+  each scope's token cached until near `expires_in` and re-minted once on a 401) or `tba`
+  (OAuth 1.0a HMAC-SHA256 per call, realm the account id). Each method's fields `requires` its
+  choice; connect reads only the chosen method's. `accountId` (`1234567_SB1`) is the `accountKey`; hosts are
+  `<account lowercase, _ as ->.suitetalk.api.netsuite.com` and, for the saved search script only,
+  `.restlets.api.netsuite.com`; redirects refused. Agents never write SuiteQL: tools build it
+  from validated params (ids digits only, dates YYYY-MM-DD, text in single quotes with quotes
+  doubled; SuiteQL over REST takes no bound parameters), POST `/services/rest/query/v1/suiteql`
+  with `Prefer: transient`, paging by `limit`/`offset` (cursor `<offset>:<size>`). A 400
+  "Record 'x' was not found" is what NetSuite answers for a record type the role cannot read, so
+  it is passed as a 403 (the capability's `forbidden` hint). Limits `subsidiaries` and
+  `locations` (internal ids) go into every WHERE (customers' and vendors' primary subsidiary,
+  a transaction's mainline subsidiary and location, a stock row's location and that location's
+  subsidiary) and every row returned is checked again; transaction lines at a location outside
+  the key are left out (`lines_hidden`). Writes: `netsuite_create_customer` (needs a key
+  subsidiary under that limit) and `netsuite_create_sales_order` (under a subsidiaries limit the
+  customer is read first and its subsidiary set on the order, not found and outside refused alike;
+  under a locations limit a key location is required, set on the order and each line). New ids
+  come from the 204's Location header (`VendorResponse.headers.location`). Saved searches: REST cannot run one, so the after-connect
+  step carries a SuiteScript 2.1 RESTlet the admin uploads (script and deployment ids
+  `customscript_agent_saved_search` / `customdeploy_agent_saved_search`), answering
+  `{columns, rows, pages, total}`; a key runs only the search ids in its `saved_searches` limit
+  (none listed: none run), and under a subsidiaries or locations limit the search needs that
+  column without a join, rows outside dropped. Sales lines' quantity and amount are negated
+  (NetSuite stores them with a credit's sign). Sources: Oracle NetSuite help (REST web services,
+  SuiteQL, OAuth 2.0 client credentials, TBA), community SuiteQL examples for
+  `aggregateitemlocation` and `transactionline.mainline`, read October 27, 2026. Tested only
+  against a fake NetSuite, never a real account: table and column names, status letters and the
+  sign of lines are unverified live.
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under

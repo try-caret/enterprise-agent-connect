@@ -749,7 +749,7 @@ export function createTeamsAdmin(deps: {
         updatedBy: by,
       };
       const secret = signingSecret ?? (existing ? openTriggerSecret(key, org, existing) : null);
-      await runner.verify({ ...row, updatedAt: "" }, org, secret, "save");
+      await runner.verify(row, org, secret, "save");
       // Another runner from now on: the old one's live sessions are stopped while it can.
       if (existing && existing.runner !== input.runner)
         await stopSessions(org, (r) => r.agentId === agentId, existing.runner);

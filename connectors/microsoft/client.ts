@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { brand } from "../../packages/connector-kit/src/branding.js";
 import { clientAssertion } from "../../packages/connector-kit/src/certificate.js";
 import type { Toolset } from "../../packages/connector-kit/src/common.js";
-import { choiceFields, type ConnectorModule } from "../../packages/connector-kit/src/connector.js";
+import {
+  choiceFields,
+  type ConnectorContext,
+  type ConnectorModule,
+} from "../../packages/connector-kit/src/connector.js";
+import { vendorFetch, vendorUrl } from "../../packages/connector-kit/src/fetch.js";
 import {
   ConnectError,
   TokenCache,
@@ -101,9 +106,10 @@ type TokenAnswer = {
 
 export function microsoftClient(
   options: { sharedApp: SharedApp | null },
-  fetchImpl: Fetch = fetch,
+  unguarded: Fetch = fetch,
   sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
 ) {
+  const fetchImpl = vendorFetch("Microsoft", unguarded, (s) => sleep(s * 1000));
   const { sharedApp } = options;
   const tokens = new TokenCache();
 
@@ -182,10 +188,45 @@ export function microsoftClient(
       )
       .digest("hex");
 
+  // A download read only up to `max` bytes: a file larger than its details said is stopped
+  // while it streams, never held whole.
+  async function readCapped(res: Response, max: number): Promise<Uint8Array> {
+    const tooLarge = () =>
+      new ConnectError(`The file is larger than ${max} bytes, so it was not downloaded`);
+    if (Number(res.headers.get("content-length") ?? 0) > max) {
+      await res.body?.cancel();
+      throw tooLarge();
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    const reader = res.body?.getReader();
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) {
+        await reader.cancel();
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+    const data = new Uint8Array(total);
+    let at = 0;
+    for (const c of chunks) {
+      data.set(c, at);
+      at += c.byteLength;
+    }
+    return data;
+  }
+
   async function send(token: string, request: VendorRequest, origin = GRAPH) {
     // Uploads send the file's bytes; everything else is JSON.
     const raw = request.body instanceof Uint8Array;
-    const res = await fetchImpl(`${origin}${request.path}`, {
+    // A file's content answers 302 to a pre-authenticated SharePoint download address, fetched
+    // without the token; any other redirect is refused.
+    const download = request.responseType ? unguarded : fetchImpl;
+    let res = await download(vendorUrl(origin, request.path), {
+      redirect: "manual",
       method: request.method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -202,9 +243,23 @@ export function microsoftClient(
             ? (request.body as Uint8Array<ArrayBuffer>)
             : JSON.stringify(request.body),
     });
+    if (download === unguarded && res.status >= 300 && res.status < 400) {
+      await res.body?.cancel();
+      res = await fetchImpl(sharePointUrl(res.headers.get("location") ?? ""));
+    }
+    if (request.responseType === "bytes" && res.ok)
+      return {
+        status: res.status,
+        data: await readCapped(res, request.maxBytes ?? Infinity),
+        headers: Object.fromEntries(res.headers),
+      };
     const text = await res.text();
     const asText = request.responseType === "text" && res.ok;
-    return { status: res.status, data: asText ? text : text ? safeJson(text) : null };
+    return {
+      status: res.status,
+      data: asText ? text : text ? safeJson(text) : null,
+      headers: Object.fromEntries(res.headers),
+    };
   }
 
   /** A request to Graph, or to `origin` with a token for it, re-minting the token once on a
@@ -421,10 +476,7 @@ export function microsoftClient(
   // Cancels an upload session. Its address is pre-authenticated, so no token is sent, and
   // only a SharePoint address is called.
   async function cancelUpload(uploadUrl: string): Promise<number> {
-    const url = new URL(uploadUrl);
-    if (url.protocol !== "https:" || !/\.sharepoint\.com$/i.test(url.hostname))
-      throw new Error(`Upload session address is not SharePoint: ${url.hostname}`);
-    return (await fetchImpl(url.toString(), { method: "DELETE" })).status;
+    return (await fetchImpl(sharePointUrl(uploadUrl), { method: "DELETE" })).status;
   }
 
   // An administrator signing in to the connection's own app, for what Microsoft allows only on
@@ -474,6 +526,20 @@ export function microsoftClient(
 
 export type MicrosoftClient = ReturnType<typeof microsoftClient>;
 
+/** What a built-in app's module is given: also the deployment's Microsoft client. */
+export type BuiltinContext = ConnectorContext & { microsoft: MicrosoftClient };
+export type BuiltinModule = ConnectorModule<BuiltinContext>;
+
+// Pre-authenticated addresses Graph hands out (downloads, upload sessions) are on SharePoint.
+function sharePointUrl(raw: string): string {
+  const url = URL.parse(raw);
+  if (url?.protocol !== "https:" || !/\.sharepoint\.com$/i.test(url.hostname))
+    throw new ConnectError(
+      `Microsoft pointed to an address that is not SharePoint: ${url?.hostname ?? "none"}`,
+    );
+  return url.toString();
+}
+
 type OrgInfo = { displayName?: string; verifiedDomains?: { name: string; isDefault: boolean }[] };
 
 /** Apps that need only the Microsoft connection: Outlook mail and calendar (mailboxes are
@@ -494,7 +560,7 @@ export function mailboxVendor(ms: MicrosoftClient, keep: readonly string[] = [])
 }
 
 // A Microsoft app keeps its own choice fields (its JSON) and nothing else.
-export const microsoftApp = (id: string, toolset: Toolset): ConnectorModule => ({
+export const microsoftApp = (id: string, toolset: Toolset): BuiltinModule => ({
   id,
   create: ({ microsoft, connector }) => ({
     vendor: mailboxVendor(microsoft, choiceFields(connector)),

@@ -26,6 +26,7 @@ import {
   type ApprovalRow,
 } from "./approval.js";
 import { validServiceUrl, type BotClient, type BotCredential } from "./bot.js";
+import { drainer } from "../queue.js";
 import { openTriggerSecret, type TriggerRunner } from "./runner.js";
 import { Unauthorized, type BotAuth } from "./jwt.js";
 import type { BotRow, ConversationRow, EventRow, RunRow, TeamsStore, TriggerRow } from "./store.js";
@@ -57,8 +58,13 @@ const REFUSED: Record<string, string> = {
 
 /** The body as text, or null once it passes `max` bytes (read no further). */
 export async function readCapped(req: Request, max = MAX_BODY): Promise<string | null> {
+  return (await readCappedBytes(req, max))?.toString("utf8") ?? null;
+}
+
+/** The body as sent (a signature covers these bytes), or null once it passes `max`. */
+export async function readCappedBytes(req: Request, max: number): Promise<Buffer | null> {
   if (Number(req.headers.get("content-length") ?? 0) > max) return null;
-  if (!req.body) return "";
+  if (!req.body) return Buffer.alloc(0);
   const chunks: Uint8Array[] = [];
   let size = 0;
   for await (const chunk of req.body as unknown as AsyncIterable<Uint8Array>) {
@@ -66,7 +72,7 @@ export async function readCapped(req: Request, max = MAX_BODY): Promise<string |
     if (size > max) return null;
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
 }
 
 export const botAad = (org: string, botId: string) => credentialAad(org, `teams-bot:${botId}`);
@@ -103,7 +109,8 @@ export type TeamsRuntimeDeps = {
   bots: BotClient;
   // By id: what answers each trigger.
   runners: Map<string, TriggerRunner>;
-  connector: Connector;
+  // Null when the deployment leaves Teams out: then no organization can connect it.
+  connector: Connector | null;
   // This service's public address (see createTeamsAdmin); the trigger's agent must use it.
   publicUrl: string | null;
 };
@@ -233,9 +240,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       await audit("denied", `unknown card action clicked by ${clicker ?? "unknown"}`);
       return invokeError("This card action is not one this agent knows");
     }
-    const approval = conversationId
-      ? await teams.approvalForBot(bot.id, id, conversationId)
-      : null;
+    const approval = conversationId ? await teams.approvalForBot(bot.id, id, conversationId) : null;
     if (!approval) {
       await audit(
         "denied",
@@ -304,36 +309,18 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
 
   // ---- the queue ----
 
-  // One drain at a time per process; a kick during one makes it look again before stopping.
-  let draining: Promise<void> | null = null;
-  let again = false;
-  let stopped = false;
-  function kick() {
-    if (stopped) return;
-    again = true;
-    draining ??= drain()
-      .catch((error) => console.error("[teams] worker", error))
-      .finally(() => {
-        draining = null;
-        if (again) kick();
-      });
-  }
-
-  async function drain() {
-    while (again) {
-      again = false;
-      while (!stopped) {
-        const event = await teams.claimEvent();
-        if (!event) break;
-        try {
-          await handle(event);
-        } catch (error) {
-          console.error(`[teams] event ${event.id} failed`, error);
-          await teams.finishEvent(event.id, "failed", "Internal error");
-        }
-      }
+  const queue = drainer("teams", async () => {
+    const event = await teams.claimEvent();
+    if (!event) return false;
+    try {
+      await handle(event);
+    } catch (error) {
+      console.error(`[teams] event ${event.id} failed`, error);
+      await teams.finishEvent(event.id, "failed", "Internal error");
     }
-  }
+    return true;
+  });
+  const kick = queue.kick;
 
   async function handle(event: EventRow) {
     const bot = await teams.botById(event.botId);
@@ -383,7 +370,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         ? await runner.unready(bot.organizationId)
         : `runner ${trigger.runner} is not offered by this deployment`;
     const capabilities =
-      state?.grant && state.connection?.status === "connected"
+      deps.connector && state?.grant && state.connection?.status === "connected"
         ? effectiveCapabilities(
             deps.connector,
             state.grant.capabilities,
@@ -710,7 +697,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     /** Drains the queue now and then (events from a worker that stopped) and watches sessions
      *  every few seconds. */
     start() {
-      stopped = false;
+      queue.start();
       timers = [
         setInterval(() => {
           kick();
@@ -727,9 +714,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
      *  in 'processing' nor answers it twice. */
     async stop() {
       for (const t of timers) clearInterval(t);
-      stopped = true;
-      again = false;
-      while (draining) await draining;
+      await queue.stop();
     },
     /** What an agent's Teams tools reach: only its own bot. */
     access(bot: BotRow): TeamsAccess {
@@ -790,9 +775,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       };
     },
     /** Settles the queue (tests). */
-    async idle() {
-      while (draining) await draining;
-    },
+    idle: queue.idle,
   };
 }
 

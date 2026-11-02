@@ -61,7 +61,7 @@
     "tools": [
       {
         "name": "orders_list",
-        "description": "List a customer's orders.",
+        "description": "List orders, or only one customer's. Pass next from the answer as cursor for the next page.",
         "method": "GET",
         "path": "/orders",
         "params": {
@@ -69,9 +69,25 @@
             "type": "string",
             "description": "The customer id",
             "in": "query",
+            "required": false,
             "limit": "customers"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["open", "shipped"],
+            "description": "Only orders in this status",
+            "in": "query",
+            "required": false
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next value of the previous answer",
+            "in": "query",
+            "required": false
           }
-        }
+        },
+        "paging": { "param": "cursor", "body": "next" },
+        "result": { "items": "orders", "fields": ["id", "customer", "status"] }
       },
       {
         "name": "orders_get",

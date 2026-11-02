@@ -6,7 +6,9 @@ const KEY = process.env.API_KEY || "example-key";
 const orders = new Map([
   ["1001", { id: "1001", customer: "acme", status: "shipped", notes: [] }],
   ["1002", { id: "1002", customer: "globex", status: "open", notes: [] }],
+  ["1003", { id: "1003", customer: "acme", status: "open", notes: [] }],
 ]);
+const PAGE = 2;
 
 const send = (res, status, data) => {
   res.writeHead(status, { "content-type": "application/json" });
@@ -18,12 +20,13 @@ createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/api/health") return send(res, 200, { name: "Orders", ok: true });
   if (req.method === "GET" && url.pathname === "/api/orders") {
-    const customer = url.searchParams.get("customer");
-    return send(
-      res,
-      200,
-      [...orders.values()].filter((o) => !customer || o.customer === customer),
+    const { customer, status, cursor } = Object.fromEntries(url.searchParams);
+    const all = [...orders.values()].filter(
+      (o) => (!customer || o.customer === customer) && (!status || o.status === status),
     );
+    const start = Number(cursor) || 0;
+    const next = start + PAGE < all.length ? String(start + PAGE) : undefined;
+    return send(res, 200, { orders: all.slice(start, start + PAGE), next });
   }
   const match = url.pathname.match(/^\/api\/orders\/([^/]+)(\/notes)?$/);
   const order = match && orders.get(decodeURIComponent(match[1]));

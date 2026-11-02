@@ -63,12 +63,18 @@
       "id": "read_files",
       "label": "Read files",
       "description": "List and read files in the sites you add, and only those.",
+      "note": "Agents can also get a short-lived link to download any file in those sites, which works without signing in for about an hour.",
       "scopes": ["Sites.Selected"],
       "permissions": [],
       "fill": {
         "site_role": "read"
       },
-      "tools": ["graph_list_sites", "graph_list_files", "graph_read_file"],
+      "tools": [
+        "graph_list_sites",
+        "graph_list_files",
+        "graph_read_file",
+        "graph_get_download_link"
+      ],
       "forbidden": "Microsoft refused this. An administrator has to give the app read access to this site (the SharePoint page in {brand.productName} shows the command). A new grant can take a few minutes to apply."
     },
     {
@@ -90,6 +96,18 @@
       "forbidden": "Microsoft refused this. An administrator has to give the app read access to this site (the SharePoint page in {brand.productName} shows the command). A new grant can take a few minutes to apply."
     },
     {
+      "id": "read_documents",
+      "label": "Read documents",
+      "description": "Read the text, tables and named fields of Word files, and the text of PDFs, in the sites you add, and only those.",
+      "scopes": ["Sites.Selected"],
+      "permissions": [],
+      "fill": {
+        "site_role": "read"
+      },
+      "tools": ["document_read"],
+      "forbidden": "Microsoft refused this. An administrator has to give the app read access to this site (the SharePoint page in {brand.productName} shows the command). A new grant can take a few minutes to apply."
+    },
+    {
       "id": "write_files",
       "label": "Add and change files",
       "destructive": true,
@@ -99,7 +117,7 @@
       "fill": {
         "site_role": "write"
       },
-      "tools": ["graph_upload_file"],
+      "tools": ["graph_upload_file", "graph_create_upload_link"],
       "forbidden": "Microsoft refused this. Adding or changing files needs the app to have write access to this site; a site given read access only refuses changes. The SharePoint page in {brand.productName} shows the command. A new grant can take a few minutes to apply."
     },
     {
@@ -113,6 +131,19 @@
       },
       "tools": ["excel_update_range", "excel_add_table_rows"],
       "forbidden": "Microsoft refused this. Editing spreadsheets needs the app to have write access to this site; a site given read access only refuses changes. The SharePoint page in {brand.productName} shows the command. A new grant can take a few minutes to apply."
+    },
+    {
+      "id": "edit_documents",
+      "label": "Edit documents",
+      "destructive": true,
+      "description": "Make new Word files from templates in those sites by filling in their named fields. The template itself is never changed. The app needs write access to each of those sites, not read.",
+      "scopes": ["Sites.Selected"],
+      "permissions": [],
+      "fill": {
+        "site_role": "write"
+      },
+      "tools": ["word_fill_template"],
+      "forbidden": "Microsoft refused this. Making Word files needs the app to have write access to this site; a site given read access only refuses changes. The SharePoint page in {brand.productName} shows the command. A new grant can take a few minutes to apply."
     },
     {
       "id": "read_directory",
@@ -178,7 +209,7 @@
       }
     ],
     "request": "Hello, please grant the Microsoft app {brand.microsoft.appName} (application ID {clientId}) {site_role} access to the SharePoint site {site}. It is the app our AI agents use, and it reaches only the sites it is given. A SharePoint or Global Administrator can do it with Microsoft Graph PowerShell:\n\n{grantCommands}\n\nThank you.",
-    "write": ["write_files", "write_sheets"]
+    "write": ["write_files", "write_sheets", "edit_documents"]
   },
   "verify": {
     "label": "Microsoft permissions the app has",

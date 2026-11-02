@@ -1,0 +1,126 @@
+{
+  "id": "erp",
+  "name": "Orders database",
+  "description": "Let agents look up customers' orders, add notes to them and cancel open ones, straight from the orders database.",
+  "logo": "/brand/registry/erp.svg",
+  "identity": "A database user for agents, allowed only what these actions need.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a database user for agents",
+      "body": "Ask your database administrator for a user that can read orders and customers, add order notes and change an order's status, and nothing else. In the example database it already exists: user agents, password agents-example.",
+      "shell": "bash",
+      "copy": [
+        "psql -c \"create role agents login password '<a strong password>'\"",
+        "psql -c \"grant select on customers, orders, order_notes to agents\"",
+        "psql -c \"grant insert on order_notes to agents\"",
+        "psql -c \"grant usage on sequence order_notes_id_seq to agents\"",
+        "psql -c \"grant update (status) on orders to agents\""
+      ],
+      "clickUnavailable": true
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    { "id": "db_user", "label": "Database user", "secret": false, "placeholder": "agents" },
+    { "id": "db_password", "label": "Password", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read orders",
+      "description": "List a customer's orders and look up one order.",
+      "required": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["erp_list_orders", "erp_get_order"]
+    },
+    {
+      "id": "notes",
+      "label": "Add notes",
+      "description": "Add a note to an order.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["erp_add_note"]
+    },
+    {
+      "id": "cancel",
+      "label": "Cancel orders",
+      "description": "Cancel an open order.",
+      "destructive": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["erp_cancel_order"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "customers",
+      "label": "Customers",
+      "help": "Only these customers' orders, by customer code. Leave empty for all.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Z0-9-]+$"
+    }
+  ],
+  "verify": { "label": "Database", "check": "database" },
+  "revoke": "Ask your database administrator to drop the agents user.",
+  "sql": {
+    "engine": "postgres",
+    "host": "legacy-db",
+    "database": "erp",
+    "tls": "off",
+    "auth": { "user": "db_user", "password": "db_password" },
+    "tools": [
+      {
+        "name": "erp_list_orders",
+        "description": "List a customer's orders, newest first. Optionally only those with one status (open, shipped or cancelled).",
+        "sql": "select order_no, customer_code as customer, status, total, created_on from orders where customer_code = :customer and (cast(:status as text) is null or status = :status) order by created_on desc",
+        "params": {
+          "customer": {
+            "type": "string",
+            "description": "The customer code, e.g. ACME",
+            "limit": "customers"
+          },
+          "status": {
+            "type": "string",
+            "description": "Only orders with this status",
+            "required": false
+          }
+        }
+      },
+      {
+        "name": "erp_get_order",
+        "description": "Read one order by its number, with the customer's name and the order's notes.",
+        "sql": "select o.order_no, o.customer_code as customer, c.name as customer_name, o.status, o.total, o.created_on, (select string_agg(n.note, ' | ' order by n.id) from order_notes n where n.order_no = o.order_no) as notes from orders o join customers c on c.code = o.customer_code where o.order_no = :order_no",
+        "params": {
+          "order_no": { "type": "integer", "description": "The order number" }
+        },
+        "answerLimits": [{ "column": "customer", "limit": "customers" }]
+      },
+      {
+        "name": "erp_add_note",
+        "description": "Add a note to an order.",
+        "write": true,
+        "sql": "with o as (select order_no, customer_code from orders where order_no = :order_no), n as (insert into order_notes (order_no, note) select order_no, :note from o returning id, order_no) select n.id as note_id, n.order_no, o.customer_code as customer from n join o using (order_no)",
+        "params": {
+          "order_no": { "type": "integer", "description": "The order number" },
+          "note": { "type": "string", "description": "The note" }
+        },
+        "answerLimits": [{ "column": "customer", "limit": "customers" }]
+      },
+      {
+        "name": "erp_cancel_order",
+        "description": "Cancel an open order. Shipped or already cancelled orders are left as they are (rows_affected 0).",
+        "write": true,
+        "destructive": true,
+        "sql": "update orders set status = 'cancelled' where order_no = :order_no and status = 'open' returning order_no, customer_code as customer, status",
+        "params": {
+          "order_no": { "type": "integer", "description": "The order number" }
+        },
+        "answerLimits": [{ "column": "customer", "limit": "customers" }]
+      }
+    ]
+  }
+}

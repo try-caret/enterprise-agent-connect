@@ -7,6 +7,8 @@ import { hashAgentKey, newAgentKey, tokensEqual } from "./secrets.js";
 import { InvalidInput, type Service } from "./service.js";
 import type { Store } from "./store.js";
 import { argumentsTarget, type ToolContext, type Toolset } from "../../connector-kit/src/common.js";
+import type { EventsAdmin } from "./events/admin.js";
+import type { EventsRuntime } from "./events/runtime.js";
 import type { TeamsAdmin } from "./teams/admin.js";
 import { readCapped, type TeamsRuntime } from "./teams/runtime.js";
 import { ConnectError } from "../../connector-kit/src/types.js";
@@ -95,16 +97,14 @@ type Handler<S extends RouteSpec> = (input: {
   body: BodyOf<S>;
   url: URL;
 }) => Promise<Reply<S>>;
-type Handlers<Teams extends boolean> = {
-  [
-    K in keyof Routes as Routes[K] extends { teams: true }
-      ? Teams extends true
-        ? K
-        : never
-      : Teams extends true
-        ? never
-        : K
-  ]: Handler<Routes[K]>;
+// Which part of the service serves a route: the core, Teams, or app events.
+type PartOf<S> = S extends { teams: true }
+  ? "teams"
+  : S extends { events: true }
+    ? "events"
+    : "core";
+type Handlers<Part extends "core" | "teams" | "events"> = {
+  [K in keyof Routes as PartOf<Routes[K]> extends Part ? K : never]: Handler<Routes[K]>;
 };
 
 // Literal answers, typed to the route's declared ones.
@@ -134,6 +134,7 @@ export function createApp(deps: {
   store: Store;
   adminToken: string;
   teams?: { admin: TeamsAdmin; runtime: TeamsRuntime };
+  events?: { admin: EventsAdmin; runtime: EventsRuntime };
   /** Tests: check every JSON answer against its declared shape, failing loudly. */
   validateResponses?: boolean;
 }) {
@@ -174,7 +175,7 @@ export function createApp(deps: {
     await store.audit(adminEntry(org, by, app, action, target));
   }
 
-  const handlers: Handlers<false> = {
+  const handlers: Handlers<"core"> = {
     listOrganizations: async () => ok(await store.listOrganizations()),
     createOrganization: async ({ body }) => ({
       status: 201,
@@ -342,7 +343,7 @@ export function createApp(deps: {
   };
 
   const teams = deps.teams?.admin;
-  const teamsHandlers: Handlers<true> | null = teams
+  const teamsHandlers: Handlers<"teams"> | null = teams
     ? {
         teamsBots: async ({ params: [org] }) => ok(await teams.listBots(org)),
         teamsSetupState: async ({ params: [org] }) => ok(await teams.setupState(org)),
@@ -406,9 +407,33 @@ export function createApp(deps: {
       }
     : null;
 
+  const ev = deps.events?.admin;
+  const limitOf = (url: URL) =>
+    Math.min(Math.max(Number(url.searchParams.get("limit") ?? 20) || 20, 1), 200);
+  const eventHandlers: Handlers<"events"> | null = ev
+    ? {
+        eventSubscriptions: async ({ params: [org] }) => ok(await ev.subscriptions(org)),
+        subscribeEvents: async ({ params: [org], body }) => ok(await ev.subscribe(org, body)),
+        rotateEventSecret: async ({ params: [org, id], body }) =>
+          some(await ev.rotateSecret(org, id, body.by)),
+        unsubscribeEvents: async ({ params: [org, id], body }) =>
+          found(await ev.unsubscribe(org, id, body.by)),
+        eventTriggers: async ({ params: [org, id] }) => ok(await ev.triggers(org, id)),
+        setEventTrigger: async ({ params: [org, id, app], body }) => {
+          const saved = await ev.setTrigger(org, id, app, body);
+          if (!saved) throw new InvalidInput("No such agent");
+          return ok(saved);
+        },
+        removeEventTrigger: async ({ params: [org, id, app], body }) =>
+          found(await ev.removeTrigger(org, id, app, body.by)),
+        eventRuns: async ({ params: [org, id], url }) => ok(await ev.runs(org, id, limitOf(url))),
+      }
+    : null;
+
   const table = (Object.entries(routes) as [keyof Routes, RouteSpec][]).flatMap(([id, spec]) => {
-    const run = (spec.teams ? teamsHandlers : handlers)?.[id as never] as
-      Handler<RouteSpec> | undefined;
+    const run = (spec.teams ? teamsHandlers : spec.events ? eventHandlers : handlers)?.[
+      id as never
+    ] as Handler<RouteSpec> | undefined;
     if (!run) return [];
     const pattern = new RegExp(
       `^${spec.path.replace(/\{(\w+)\}/g, (_, p: keyof typeof PARAMS) => `(${PARAMS[p]})`)}$`,
@@ -535,6 +560,10 @@ export function createApp(deps: {
         const bot = new RegExp(`^${BASE}/teams/bots/(${UUID})/messages$`).exec(url.pathname);
         if (bot && deps.teams && req.method === "POST")
           return await deps.teams.runtime.inbound(bot[1], req);
+        // An app's events: public, proven by the subscription's secret.
+        const sub = new RegExp(`^${BASE}/events/(${UUID})$`).exec(url.pathname);
+        if (sub && deps.events && req.method === "POST")
+          return await deps.events.runtime.inbound(sub[1], req);
         if (url.pathname.startsWith(`${ADMIN}/`)) return await admin(req, url);
         return reply(404, { error: "Not found" });
       } catch (error) {

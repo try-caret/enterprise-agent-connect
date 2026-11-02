@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { ToolContext } from "../../packages/connector-kit/src/common.ts";
 import type { TeamsAccess } from "../../packages/server/src/teams/runtime.ts";
 import type { ConversationRow } from "../../packages/server/src/teams/store.ts";
-import { teamsTools } from "./tools.ts";
+import { teamsTools, type TeamsToolContext } from "./tools.ts";
 
 // The Teams tools with a fake bot (TeamsAccess): one team with one channel.
 
@@ -31,7 +31,7 @@ type Handler = (input: any) => Promise<{ isError?: boolean; content: { text: str
 function tools(teams: Partial<TeamsAccess>, extra: Partial<ToolContext> = {}) {
   const handlers = new Map<string, Handler>();
   const audit: Parameters<ToolContext["audit"]>[0][] = [];
-  const ctx: ToolContext = {
+  const ctx: TeamsToolContext = {
     limits: {},
     config: {},
     call: async () => {

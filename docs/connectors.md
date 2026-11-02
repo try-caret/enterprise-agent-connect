@@ -7,11 +7,22 @@ connection is checked. Schema: `packages/connector-kit/src/connector.ts`.
 
 There are two ways to give an app its tools.
 
-## Without code: the `http` connector
+## Without code: the `http`, `soap`, `odata` and `sql` connectors
 
 For an app with a REST API, add an `http` block to `connector.json` and describe each tool as a
 method and path. The image runs it as is. See [http-connector.md](http-connector.md) and the
 example in `examples/internal-app`.
+
+For a SOAP service, a `soap` block describes each operation as a body template
+([soap-connector.md](soap-connector.md)); for an OData v2 or v4 service (SAP Gateway and
+S/4HANA, Dynamics 365, SuccessFactors), an `odata` block describes each tool as a list, get,
+create, update, function or action on an entity set ([odata-connector.md](odata-connector.md)).
+Scripts draft both from the service's own description: `scripts/wsdl-to-connector.ts` and
+`scripts/odata-to-connector.ts`. Examples: `examples/legacy-apps`.
+
+For an app best reached through its database, an `sql` block describes each tool as one named
+query with bound params. See [sql-connector.md](sql-connector.md)
+and the example in `examples/legacy-orders`.
 
 ## With code
 
@@ -19,13 +30,23 @@ For an app that needs logic JSON cannot express (paging, multi-step writes, chec
 delete), write a `ConnectorModule` next to the JSON:
 
 - `vendor.ts`: how it signs in and calls the app (`connect`, `call`), built on
-  `packages/connector-kit/src/types.ts`.
+  `packages/connector-kit/src/types.ts`. Send every request through `vendorFetch` (it refuses
+  redirects and waits out a short `Retry-After` on a 429) and build addresses with `vendorUrl`
+  (it refuses a path that leaves the app's address); `clientCredentials` does both. Return the
+  answer's headers in `VendorResponse.headers`.
 - `tools.ts`: the MCP tools, each wrapped in `audited(...)` from `connector-kit/src/common.ts`,
   enforcing the grant's limits with `listLimit`, `mapLimit` and friends.
-- `index.ts`: `export default { id, create }`.
+- `index.ts`: `export default { id, create }`. `create` gets a `ConnectorContext`, `{ connector }`
+  (its connector.json, parsed), and returns `{ vendor, toolset }`. The built-in Microsoft apps get
+  the deployment's Microsoft client too (`BuiltinContext`); a connector of your own does not need it.
 
 Then either add it to `packages/server/src/builtin.ts` (to contribute it here) or pass it to
-`createAgentConnect({ connectors: [...builtinConnectors, myApp] })` in your own Node app.
+`createAgentConnect({ connectors: [...builtinConnectors, myApp] })` in your own Node app. Outside
+this repo, import the same helpers and types from `@arbium/enterprise-agent-connect/kit`, and give
+the module its definition inline (`connector: { ...its connector.json }`) instead of a folder in
+`extraConnectorDirs`. A definition with an `http`, `soap` or `odata` block can go into
+`connectors` alone, with no module. A built-in app is offered only while its module is in `connectors`. Example: the
+README's "Use it in your code".
 
 At startup the service checks that every tool a capability names exists, that each tool is in
 at least one capability, and that every tool marked destructive sits in a destructive

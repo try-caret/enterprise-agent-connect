@@ -5,6 +5,8 @@ import type {
   CheckOutcome,
   Connection,
   Connector,
+  EventSubscriptionInput,
+  EventTriggerInput,
   Limits,
   SiteAccess,
   TeamsTrigger,
@@ -242,6 +244,26 @@ export function createClient(options: ClientOptions) {
       call<TeamsTrigger>("PUT", `${agent(o, id)}/teams-trigger`, body),
     teamsRuns: (o: string, id: string, limit = 20) =>
       call<Answer<"teamsRuns">>("GET", `${agent(o, id)}/teams-runs?limit=${limit}`),
+    // App events that start agents (docs/triggers.md). A webhook's secret is in the answer to
+    // subscribeEvents and rotateEventSecret only.
+    eventSubscriptions: (o: string) =>
+      call<Answer<"eventSubscriptions">>("GET", `${org(o)}/event-subscriptions`),
+    subscribeEvents: (o: string, body: EventSubscriptionInput) =>
+      call<Answer<"subscribeEvents">>("POST", `${org(o)}/event-subscriptions`, body),
+    rotateEventSecret: (o: string, id: string, by: string) =>
+      call<Answer<"rotateEventSecret">>("POST", `${org(o)}/event-subscriptions/${seg(id)}/secret`, {
+        by,
+      }),
+    unsubscribeEvents: (o: string, id: string, by: string) =>
+      call<void>("DELETE", `${org(o)}/event-subscriptions/${seg(id)}`, { by }),
+    eventTriggers: (o: string, id: string) =>
+      call<Answer<"eventTriggers">>("GET", `${agent(o, id)}/event-triggers`),
+    setEventTrigger: (o: string, id: string, a: string, body: EventTriggerInput) =>
+      call<Answer<"setEventTrigger">>("PUT", `${agent(o, id)}/event-triggers/${seg(a)}`, body),
+    removeEventTrigger: (o: string, id: string, a: string, by: string) =>
+      call<void>("DELETE", `${agent(o, id)}/event-triggers/${seg(a)}`, { by }),
+    eventRuns: (o: string, id: string, limit = 20) =>
+      call<Answer<"eventRuns">>("GET", `${agent(o, id)}/event-runs?limit=${limit}`),
     // The organization's Claude API key: write-only, shown by its last four characters.
     claudeKey: (o: string) => call<Answer<"claudeKey">>("GET", `${org(o)}/claude-key`),
     setClaudeKey: (o: string, apiKey: string, by: string) =>
@@ -307,6 +329,7 @@ export function createClient(options: ClientOptions) {
           connector,
           [...connector.setup, ...connector.afterConnect],
           connection?.config ?? {},
+          connection?.capabilities ?? [],
         ).filter((s) => s.live);
         return { connector, connection, liveSteps };
       });

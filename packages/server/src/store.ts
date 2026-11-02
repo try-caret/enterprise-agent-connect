@@ -1,6 +1,6 @@
 import postgres from "postgres";
 import { brand } from "../../connector-kit/src/branding.js";
-import { ConnectError } from "../../connector-kit/src/types.js";
+import { ConnectError, type Limits } from "../../connector-kit/src/types.js";
 
 export type Sql = ReturnType<typeof postgres>;
 
@@ -37,6 +37,10 @@ const TABLES = [
   "teams_runs",
   "teams_spend",
   "approvals",
+  "event_subscriptions",
+  "app_events",
+  "event_triggers",
+  "event_runs",
 ] as const;
 
 export type Tables = Record<(typeof TABLES)[number], postgres.Helper<string, []>>;
@@ -104,7 +108,7 @@ export type AgentRow = {
   createdAt: string;
 };
 
-export type Limits = Record<string, string[] | string | Record<string, string>>;
+export type { Limits };
 
 export type GrantRow = {
   agentId: string;

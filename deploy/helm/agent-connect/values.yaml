@@ -19,6 +19,14 @@ branding: {}
 # Further environment, e.g. DATABASE_SSL: disable.
 env: {}
 
+# Your own certificate authorities (PEM, one or more), for apps inside your network whose
+# certificates they signed. The bundle is mounted from a ConfigMap or a Secret key and given to
+# Node as NODE_EXTRA_CA_CERTS; public authorities stay trusted.
+caBundle:
+  configMap: ""
+  secret: ""
+  key: ca.crt
+
 service:
   port: 3000
 

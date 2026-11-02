@@ -1,0 +1,157 @@
+{
+  "id": "sap-sales-orders",
+  "name": "SAP sales orders",
+  "description": "Let agents find and read sales orders in SAP S/4HANA and set the customer's purchase order number on one.",
+  "logo": "/brand/registry/sap-sales-orders.svg",
+  "identity": "A technical (communication) user in SAP S/4HANA that may use the Sales Order API.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Turn on the Sales Order API",
+      "body": "S/4HANA Cloud: set up the communication arrangement for sales order integration (SAP_COM_0109) with a communication user. S/4HANA on premise: ask your SAP Basis team to activate the OData service API_SALES_ORDER_SRV in SAP Gateway and give a technical user a role for it.",
+      "click": [
+        "S/4HANA Cloud: Communication Systems > New: name it for this service, add an inbound communication user with a password",
+        "Communication Arrangements > New > scenario SAP_COM_0109 > choose that system and user > Save",
+        "On premise (SAP GUI): transaction /IWFND/MAINT_SERVICE > Add Service > API_SALES_ORDER_SRV"
+      ]
+    },
+    {
+      "title": "Limit what the user may change",
+      "body": "Give the user read access to sales orders, and change access only if agents may set purchase order numbers. Keep it to the sales organizations agents work in."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    { "id": "username", "label": "Communication user", "secret": false },
+    { "id": "password", "label": "Password", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Find and read sales orders",
+      "description": "List sales orders by sales organization, customer and date, and read one.",
+      "required": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["sap_list_sales_orders", "sap_get_sales_order"]
+    },
+    {
+      "id": "update",
+      "label": "Set purchase order numbers",
+      "description": "Change the customer's purchase order number on a sales order.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["sap_set_customer_po"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "sales_orgs",
+      "label": "Sales organizations",
+      "help": "Only orders of these sales organizations. Leave empty for all.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Z0-9]{1,4}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/",
+    "label": "SAP answers with the Sales Order API",
+    "show": "d.EntitySets[]"
+  },
+  "revoke": "Delete the communication arrangement (S/4HANA Cloud) or lock the technical user (on premise).",
+  "odata": {
+    "serviceRoot": "https://s4.internal.example.com/sap/opu/odata/sap/API_SALES_ORDER_SRV",
+    "version": "2",
+    "auth": { "type": "basic", "username": "username", "password": "password" },
+    "headers": { "sap-client": "100" },
+    "csrf": true,
+    "tools": [
+      {
+        "name": "sap_list_sales_orders",
+        "description": "List sales orders, newest first. Filter by sales organization, sold-to customer and creation date. Answers {items, next}; pass next as cursor for more.",
+        "kind": "list",
+        "entitySet": "A_SalesOrder",
+        "filters": {
+          "sales_org": {
+            "type": "string",
+            "property": "SalesOrganization",
+            "description": "Sales organization, e.g. 1010",
+            "limit": "sales_orgs"
+          },
+          "customer": {
+            "type": "string",
+            "property": "SoldToParty",
+            "description": "The sold-to customer number"
+          },
+          "created_from": {
+            "type": "datetime",
+            "property": "CreationDate",
+            "op": "ge",
+            "description": "Only orders created on or after this date, YYYY-MM-DD"
+          }
+        },
+        "select": [
+          "SalesOrder",
+          "SalesOrganization",
+          "SoldToParty",
+          "CreationDate",
+          "PurchaseOrderByCustomer",
+          "TotalNetAmount",
+          "TransactionCurrency",
+          "OverallSDProcessStatus"
+        ],
+        "orderBy": "CreationDate desc",
+        "top": 50
+      },
+      {
+        "name": "sap_get_sales_order",
+        "description": "Read one sales order by its number.",
+        "kind": "get",
+        "entitySet": "A_SalesOrder",
+        "key": {
+          "sales_order": {
+            "type": "string",
+            "property": "SalesOrder",
+            "description": "The sales order number, e.g. 1000123"
+          }
+        },
+        "select": [
+          "SalesOrder",
+          "SalesOrganization",
+          "SoldToParty",
+          "CreationDate",
+          "PurchaseOrderByCustomer",
+          "RequestedDeliveryDate",
+          "TotalNetAmount",
+          "TransactionCurrency",
+          "OverallSDProcessStatus"
+        ],
+        "answerLimits": [{ "field": "SalesOrganization", "limit": "sales_orgs" }]
+      },
+      {
+        "name": "sap_set_customer_po",
+        "description": "Set the customer's purchase order number on a sales order.",
+        "kind": "update",
+        "entitySet": "A_SalesOrder",
+        "key": {
+          "sales_order": {
+            "type": "string",
+            "property": "SalesOrder",
+            "description": "The sales order number"
+          }
+        },
+        "fields": {
+          "customer_po": {
+            "type": "string",
+            "property": "PurchaseOrderByCustomer",
+            "description": "The customer's purchase order number"
+          }
+        },
+        "answerLimits": [{ "field": "SalesOrganization", "limit": "sales_orgs" }]
+      }
+    ]
+  }
+}

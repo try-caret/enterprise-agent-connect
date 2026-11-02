@@ -59,9 +59,9 @@
     {
       "id": "read",
       "label": "Read issues",
-      "description": "Search and read issues and list projects.",
+      "description": "Search and read issues and list projects. It also reads who the service account is, so an agent's own changes start no trigger.",
       "required": true,
-      "scopes": ["read:jira-work"],
+      "scopes": ["read:jira-work", "read:jira-user"],
       "permissions": ["Browse projects"],
       "tools": ["jira_search_issues", "jira_get_issue", "jira_list_projects"]
     },
@@ -125,5 +125,148 @@
     "show": "projects[].key",
     "ifEmpty": "The service account cannot browse any project yet, so agents will find no issues. Give it a role with Browse projects in each project agents need, then check again."
   },
-  "revoke": "In Atlassian Administration, open Directory, then Service accounts, then {brand.microsoft.appName}, and revoke its credentials."
+  "revoke": "In Atlassian Administration, open Directory, then Service accounts, then {brand.microsoft.appName}, and revoke its credentials.",
+  "events": {
+    "types": [
+      {
+        "id": "jira:issue_created",
+        "label": "Issue created"
+      },
+      {
+        "id": "jira:issue_updated",
+        "label": "Issue updated"
+      },
+      {
+        "id": "jira:issue_deleted",
+        "label": "Issue deleted"
+      },
+      {
+        "id": "comment_created",
+        "label": "Comment added"
+      }
+    ],
+    "fields": {
+      "key": "issue.key",
+      "project": "issue.fields.project.key",
+      "issue_type": "issue.fields.issuetype.name",
+      "status": "issue.fields.status.name",
+      "priority": "issue.fields.priority.name",
+      "labels": "issue.fields.labels[]",
+      "summary": "issue.fields.summary",
+      "assignee": "issue.fields.assignee.accountId",
+      "reporter": "issue.fields.reporter.accountId",
+      "changed_by": "user.accountId",
+      "changed": "changelog.items[].field",
+      "comment": "comment.body",
+      "comment_by": "comment.author.accountId",
+      "updated": "issue.fields.updated"
+    },
+    "limits": {
+      "projects": "project"
+    },
+    "self": {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/myself"
+      },
+      "id": "accountId",
+      "fields": ["changed_by", "comment_by"]
+    },
+    "webhook": {
+      "verify": {
+        "type": "hmac-sha256",
+        "header": "X-Hub-Signature",
+        "prefix": "sha256="
+      },
+      "type": {
+        "field": "webhookEvent"
+      },
+      "deliveryId": {
+        "header": "X-Atlassian-Webhook-Identifier"
+      },
+      "timestamp": {
+        "at": {
+          "field": "timestamp"
+        },
+        "unit": "ms",
+        "toleranceSeconds": 86400
+      },
+      "setup": [
+        {
+          "title": "Add the webhook in Jira",
+          "body": "A Jira administrator adds a webhook that sends issue and comment events to {brand.productName}, signed with the secret shown when you added it (it is shown only once). Use the JQL filter to send only the projects agents should hear about. The service account cannot do this itself: it has no Jira administration role.",
+          "click": [
+            "Jira > Settings (gear) > System > WebHooks > Create a WebHook",
+            "Name: {brand.productName} events",
+            "URL: {url}",
+            "Secret: the secret shown when you added it",
+            "Events: Issue created, updated and deleted; Comment created. JQL filter: {filter}",
+            "Create"
+          ],
+          "shell": "bash",
+          "copy": [
+            "JIRA_SITE=your-company   # the part before .atlassian.net",
+            "JIRA_ADMIN=you@your-company.com   # a Jira administrator, with an API token from id.atlassian.com",
+            "read -rs JIRA_TOKEN; read -rs EVENT_SECRET   # the API token, then the secret shown when you added it",
+            "curl -sf -u \"$JIRA_ADMIN:$JIRA_TOKEN\" -H 'content-type: application/json' \"https://$JIRA_SITE.atlassian.net/rest/webhooks/1.0/webhook\" -d \"{\\\"name\\\": \\\"{brand.productName} events\\\", \\\"url\\\": \\\"{url}\\\", \\\"events\\\": [\\\"jira:issue_created\\\", \\\"jira:issue_updated\\\", \\\"jira:issue_deleted\\\", \\\"comment_created\\\"], \\\"filters\\\": {\\\"issue-related-events-section\\\": \\\"YOUR JQL, e.g. project = KAN\\\"}, \\\"excludeBody\\\": false, \\\"secret\\\": \\\"$EVENT_SECRET\\\"}\""
+          ],
+          "link": {
+            "label": "About Jira webhooks",
+            "href": "https://developer.atlassian.com/cloud/jira/platform/webhooks/"
+          }
+        }
+      ],
+      "register": {
+        "method": "POST",
+        "path": "/rest/webhooks/1.0/webhook",
+        "body": {
+          "name": "{name}",
+          "url": "{url}",
+          "events": "{events}",
+          "filters": {
+            "issue-related-events-section": "{filter}"
+          },
+          "excludeBody": false,
+          "secret": "{secret}"
+        },
+        "location": "self"
+      }
+    },
+    "poll": {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "body": {
+          "jql": "{filter}updated >= -{minutes}m ORDER BY updated ASC",
+          "fields": [
+            "summary",
+            "status",
+            "issuetype",
+            "project",
+            "priority",
+            "labels",
+            "assignee",
+            "reporter",
+            "created",
+            "updated"
+          ],
+          "maxResults": 100
+        }
+      },
+      "filter": "({value}) AND ",
+      "items": "issues",
+      "wrap": "issue",
+      "cursor": "issue.fields.updated",
+      "deliveryId": ["issue.key", "issue.fields.updated"],
+      "types": [
+        {
+          "type": "jira:issue_created",
+          "since": "issue.fields.created"
+        },
+        {
+          "type": "jira:issue_updated"
+        }
+      ]
+    }
+  }
 }

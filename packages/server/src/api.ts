@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { connectorSchema, providerSchema } from "../../connector-kit/src/connector.js";
+import { connectorSchema, providerSchema, setupStep } from "../../connector-kit/src/connector.js";
 import { brandingSchema } from "../../connector-kit/src/branding.js";
+import { eventTriggerSchema, subscriptionSchema } from "./events/admin.js";
 import { triggerSchema } from "./teams/admin.js";
 
 // The admin API's contract: every route once, with its body and the shapes it answers. The
@@ -41,6 +42,8 @@ export const schemas = (() => {
       label: z.string(),
       values: z.array(z.string()),
       warning: z.string().optional(),
+      // A label per value for the admin, e.g. a subsidiary's name for its id.
+      labels: z.record(z.string(), z.string()).optional(),
     }),
   );
   const Ok = z.strictObject({ ok: z.literal(true) });
@@ -213,6 +216,71 @@ export const schemas = (() => {
       replyTokenAt: iso,
     }),
   );
+  const EventSubscription = named(
+    "EventSubscription",
+    z.strictObject({
+      id: z.string(),
+      connectorId: z.string(),
+      source: z.enum(["webhook", "poll"]),
+      filter: z.string(),
+      intervalSeconds: z.number(),
+      cursor: z.string().nullable(),
+      polledAt: iso.nullable(),
+      lastError: z.string().nullable(),
+      registered: z.string().nullable(),
+      // Where the app sends a webhook's events; null for a poll.
+      url: z.string().nullable(),
+      createdBy: z.string(),
+      createdAt: iso,
+    }),
+  );
+  const EventTrigger = named(
+    "EventTrigger",
+    z.strictObject({
+      id: z.string(),
+      agentId: z.string(),
+      connectorId: z.string(),
+      enabled: z.boolean(),
+      eventTypes: z.array(z.string()),
+      conditions: z.array(
+        z.union([
+          z.strictObject({ field: z.string(), in: z.array(z.string()) }),
+          z.strictObject({ field: z.string(), notIn: z.array(z.string()) }),
+        ]),
+      ),
+      prompt: z.string(),
+      runner: z.string(),
+      settings: z.record(z.string(), z.unknown()),
+      hasSigningSecret: z.boolean(),
+      managedAgentId: z.string().nullable(),
+      environmentId: z.string().nullable(),
+      vaultIds: z.array(z.string()),
+      budgetCents: z.number(),
+      maxRunsPerHour: z.number(),
+      maxCentsPerDay: z.number(),
+      maxConcurrent: z.number(),
+      updatedBy: z.string().nullable(),
+      updatedAt: iso,
+    }),
+  );
+  const EventRun = named(
+    "EventRun",
+    z.strictObject({
+      id: z.string(),
+      agentId: z.string(),
+      triggerId: z.string(),
+      connectorId: z.string(),
+      eventType: z.string(),
+      deliveryId: z.string(),
+      runner: z.string(),
+      sessionId: z.string().nullable(),
+      state: z.enum(["starting", "running", "ended", "failed"]),
+      error: z.string().nullable(),
+      costCents: z.number().nullable(),
+      startedAt: iso,
+      finishedAt: iso.nullable(),
+    }),
+  );
   const keySet = z.strictObject({
     set: z.literal(true),
     ending: z.string(),
@@ -289,6 +357,21 @@ export const schemas = (() => {
     ),
     TeamsTrigger,
     TeamsRun,
+    EventSubscription,
+    EventSubscribed: named(
+      "EventSubscribed",
+      z.strictObject({
+        subscription: EventSubscription,
+        // Shown once: what the app signs deliveries with. Null for a poll.
+        secret: z.string().nullable(),
+        // Where to paste the address and secret in the app ({url} filled in).
+        setup: z.array(setupStep),
+        // Registering through the app's API, when asked.
+        registration: z.strictObject({ ok: z.boolean(), message: z.string() }).nullable(),
+      }),
+    ),
+    EventTrigger,
+    EventRun,
     ClaudeKey,
     ClaudeKeySaved,
     ClaudeAgent,
@@ -311,6 +394,8 @@ export type RouteSpec = {
   responses: Record<number, Answer>;
   /** Served only where Teams is set up. */
   teams?: true;
+  /** Served only where app events are set up. */
+  events?: true;
 };
 
 export const PARAMS = {
@@ -319,6 +404,7 @@ export const PARAMS = {
   app: "[a-z0-9-]+",
   provider: "[a-z0-9-]+",
   step: "[a-z0-9-]+",
+  subscription: "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
 } as const;
 
 const notFound = { 404: s.Error } as const;
@@ -745,6 +831,73 @@ export const routes = {
     query: { limit: "1 to 200, default 20" },
     responses: { 200: z.array(s.TeamsRun) },
     teams: true,
+  },
+  eventSubscriptions: {
+    method: "GET",
+    path: `${ORG}/event-subscriptions`,
+    summary: "The apps whose events reach this organization, by webhook or by polling",
+    responses: { 200: z.array(s.EventSubscription) },
+    events: true,
+  },
+  subscribeEvents: {
+    method: "POST",
+    path: `${ORG}/event-subscriptions`,
+    summary:
+      "Starts receiving an app's events: a webhook (answers its address and secret, shown " +
+      "once) or a poll on an interval",
+    body: subscriptionSchema,
+    responses: { 200: s.EventSubscribed },
+    events: true,
+  },
+  rotateEventSecret: {
+    method: "POST",
+    path: `${ORG}/event-subscriptions/{subscription}/secret`,
+    summary: "A new secret for a webhook, shown once; the old one stops working at once",
+    body: by,
+    responses: {
+      200: z.strictObject({ subscription: s.EventSubscription, secret: z.string() }),
+      ...notFound,
+    },
+    events: true,
+  },
+  unsubscribeEvents: {
+    method: "DELETE",
+    path: `${ORG}/event-subscriptions/{subscription}`,
+    summary: "Stops receiving an app's events (remove the webhook in the app too)",
+    body: by,
+    responses: { 204: null, ...notFound },
+    events: true,
+  },
+  eventTriggers: {
+    method: "GET",
+    path: `${AGENT}/event-triggers`,
+    summary: "The app events that start the agent",
+    responses: { 200: z.array(s.EventTrigger) },
+    events: true,
+  },
+  setEventTrigger: {
+    method: "PUT",
+    path: `${AGENT}/event-triggers/{app}`,
+    summary: "Sets which of an app's events start the agent and how, checked by its runner first",
+    body: eventTriggerSchema,
+    responses: { 200: s.EventTrigger },
+    events: true,
+  },
+  removeEventTrigger: {
+    method: "DELETE",
+    path: `${AGENT}/event-triggers/{app}`,
+    summary: "Stops an app's events starting the agent, stopping its live runs",
+    body: by,
+    responses: { 204: null, ...notFound },
+    events: true,
+  },
+  eventRuns: {
+    method: "GET",
+    path: `${AGENT}/event-runs`,
+    summary: "The agent's recent runs started by app events, newest first",
+    query: { limit: "1 to 200, default 20" },
+    responses: { 200: z.array(s.EventRun) },
+    events: true,
   },
   claudeKey: {
     method: "GET",

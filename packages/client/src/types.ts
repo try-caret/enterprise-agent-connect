@@ -46,6 +46,12 @@ export type InstallTarget = S["InstallTarget"];
 export type TeamsTrigger = S["TeamsTrigger"];
 export type TeamsTriggerInput = Body<"setTeamsTrigger">;
 export type TeamsRun = S["TeamsRun"];
+export type EventSubscription = S["EventSubscription"];
+export type EventSubscriptionInput = Body<"subscribeEvents">;
+export type EventSubscribed = S["EventSubscribed"];
+export type EventTrigger = S["EventTrigger"];
+export type EventTriggerInput = Body<"setEventTrigger">;
+export type EventRun = S["EventRun"];
 export type ClaudeKey = S["ClaudeKey"];
 export type ClaudeAgent = S["ClaudeAgent"];
 
@@ -54,7 +60,7 @@ export type Step = Connector["setup"][number];
 export type AgentStep = Provider["addAgent"][number];
 export type Setting = NonNullable<Step["settings"]>[number];
 export type ChosenOption = NonNullable<Step["option"]>;
-/** A connect form field; a provider's may be left empty (`optional`). */
+/** A connect form field; an `optional` one may be left empty. */
 export type Field = Connector["fields"][number] & { optional?: boolean };
 export type FieldOption = NonNullable<Field["options"]>[number];
 export type Limit = Connector["limits"][number];

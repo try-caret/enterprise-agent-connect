@@ -1,0 +1,182 @@
+{
+  "id": "jamf",
+  "name": "Jamf Pro",
+  "description": "Let agents look up the Macs, iPhones and iPads Jamf Pro manages, their groups and policies, and, if you allow it, send them commands such as check in, restart, lock or erase.",
+  "logo": "/brand/registry/jamf.svg",
+  "identity": "A Jamf Pro API client named \"{brand.microsoft.appName}\", with an API role holding only the privileges below. Each API key can be kept to the devices, groups and policies of chosen Jamf sites.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API role",
+      "body": "In Jamf Pro, create an API role named \"{brand.microsoft.appName}\" with exactly these privileges. Changing the role's privileges later takes effect at once, with no new secret. With Commands, run them on a Mac or Linux computer with curl and jq, signed in as a Jamf Pro administrator.",
+      "click": [
+        "In Jamf Pro, open Settings, then System, then API roles and clients, and select the API Roles tab.",
+        "Select New and enter the display name {brand.microsoft.appName}.",
+        "Under Jamf Pro API role privileges, add: {scopes}.",
+        "Select Save."
+      ],
+      "copy": [
+        "JAMF=https://your-company.jamfcloud.com",
+        "TOKEN=$(curl -s -u your-admin-username -X POST \"$JAMF/api/v1/auth/token\" | jq -r .token)",
+        "P=()",
+        "P+=(\"{scope}\")",
+        "curl -s -X POST \"$JAMF/api/v1/api-roles\" -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" -d \"$(jq -n --arg name \"{brand.microsoft.appName}\" '{displayName: $name, privileges: $ARGS.positional}' --args \"${P[@]}\")\""
+      ],
+      "shell": "bash",
+      "link": {
+        "label": "Jamf Pro API roles and clients",
+        "href": "https://learn.jamf.com/r/en-US/jamf-pro-documentation-current/API_Roles_and_Clients"
+      }
+    },
+    {
+      "title": "Create an API client",
+      "body": "Create an API client named \"{brand.microsoft.appName}\" with that role only, enable it, and generate its client secret. Leave the access token lifetime at its default. Copy the client ID and secret: Jamf Pro shows the secret only once.",
+      "click": [
+        "Still in API roles and clients, select the API Clients tab, then New.",
+        "Display name: {brand.microsoft.appName}. API roles: {brand.microsoft.appName}. Leave Access token lifetime as it is.",
+        "Select Enable API client, then Save.",
+        "Select Generate client secret, then Create secret, and copy the client ID and secret."
+      ],
+      "copy": [
+        "ID=$(curl -s -X POST \"$JAMF/api/v1/api-integrations\" -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" -d \"$(jq -n --arg name \"{brand.microsoft.appName}\" '{displayName: $name, authorizationScopes: [$name], enabled: true}')\" | jq -r .id)",
+        "curl -s -X POST \"$JAMF/api/v1/api-integrations/$ID/client-credentials\" -H \"Authorization: Bearer $TOKEN\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "url",
+      "label": "Jamf Pro address",
+      "help": "The address you open Jamf Pro at, with https.",
+      "placeholder": "https://your-company.jamfcloud.com",
+      "secret": false
+    },
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Look up devices",
+      "description": "Find computers and mobile devices by name, serial number or user, and read one device's system version, last check-in, FileVault or encryption, whether it is managed, its groups and, on request, its apps.",
+      "required": true,
+      "note": "Reaches every device unless you keep a key to chosen sites under API keys. Read-only.",
+      "scopes": ["Read Computers", "Read Mobile Devices", "Read Sites"],
+      "permissions": [],
+      "tools": ["jamf_search_devices", "jamf_get_device"],
+      "forbidden": "Jamf Pro refused this. Add {scopes} to the {brand.microsoft.appName} API role."
+    },
+    {
+      "id": "groups",
+      "label": "Read groups",
+      "description": "List computer and mobile device groups, smart and static, and read their members.",
+      "scopes": [
+        "Read Smart Computer Groups",
+        "Read Static Computer Groups",
+        "Read Smart Mobile Device Groups",
+        "Read Static Mobile Device Groups"
+      ],
+      "permissions": [],
+      "tools": ["jamf_list_groups", "jamf_get_group"],
+      "forbidden": "Jamf Pro refused this. Add {scopes} to the {brand.microsoft.appName} API role."
+    },
+    {
+      "id": "group_membership",
+      "label": "Change static group members",
+      "description": "Add devices to static groups and remove them. Smart groups cannot be changed.",
+      "destructive": true,
+      "note": "Policies, configuration profiles and apps scoped to a group follow its members, so removing a device from a group can remove a profile or an app (and the app's data) from it.",
+      "scopes": [
+        "Read Static Computer Groups",
+        "Update Static Computer Groups",
+        "Read Static Mobile Device Groups",
+        "Update Static Mobile Device Groups"
+      ],
+      "permissions": [],
+      "tools": ["jamf_change_group_members"],
+      "forbidden": "Jamf Pro refused this. Add {scopes} to the {brand.microsoft.appName} API role."
+    },
+    {
+      "id": "check_in",
+      "label": "Ask devices to check in",
+      "description": "Send a blank push, so devices check in now and pick up pending commands, profiles and apps. Changes nothing on the device.",
+      "scopes": [
+        "View MDM command information in Jamf Pro API",
+        "Send Blank Pushes to Mobile Devices"
+      ],
+      "permissions": [],
+      "tools": ["jamf_send_blank_push"],
+      "forbidden": "Jamf Pro refused this. Add {scopes} to the {brand.microsoft.appName} API role. Jamf Pro checks a send privilege for each command and kind of device: if it still refuses computers, add the matching one listed under Jamf Pro Server Actions."
+    },
+    {
+      "id": "restart_lock",
+      "label": "Restart and lock devices",
+      "description": "Restart a device, or lock it with a message and phone number on its lock screen. A locked Mac needs the PIN the agent chose.",
+      "note": "Whoever is using the device is interrupted and can lose unsaved work.",
+      "scopes": [
+        "View MDM command information in Jamf Pro API",
+        "Send Computer Remote Lock Command",
+        "Send Mobile Device Restart Device Command"
+      ],
+      "permissions": [],
+      "tools": ["jamf_restart_device", "jamf_lock_device"],
+      "forbidden": "Jamf Pro refused this. Add {scopes} to the {brand.microsoft.appName} API role. Jamf Pro checks a send privilege for each command and kind of device: if it still refuses, add the matching one listed under Jamf Pro Server Actions."
+    },
+    {
+      "id": "erase",
+      "label": "Erase devices",
+      "description": "Erase a device back to factory settings. Everything on it is deleted for good. The agent must give the device's serial number to confirm.",
+      "destructive": true,
+      "scopes": [
+        "View MDM command information in Jamf Pro API",
+        "Send Computer Remote Wipe Command",
+        "Send Mobile Device Remote Wipe Command"
+      ],
+      "permissions": [],
+      "tools": ["jamf_erase_device"],
+      "forbidden": "Jamf Pro refused this. Add {scopes} to the {brand.microsoft.appName} API role."
+    },
+    {
+      "id": "policies",
+      "label": "Read policies and their logs",
+      "description": "List policies, read one policy's triggers, scope, packages and scripts, and read the policy runs logged on a computer.",
+      "scopes": ["Read Policies"],
+      "permissions": [],
+      "tools": ["jamf_list_policies", "jamf_get_policy", "jamf_computer_policy_logs"],
+      "forbidden": "Jamf Pro refused this. Add {scopes} to the {brand.microsoft.appName} API role."
+    }
+  ],
+  "limits": [
+    {
+      "id": "sites",
+      "label": "Sites",
+      "help": "Optional: only the devices, groups and policies of these Jamf sites (their IDs: in Jamf Pro, open Settings, then Global, then Sites, and open a site; the ID is the number at the end of its address). Devices with no site are left out. Leave empty for every device.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[0-9]{1,10}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/api/v1/jamf-pro-version",
+    "label": "Jamf Pro version",
+    "show": "version"
+  },
+  "discover": {
+    "label": "Sites",
+    "check": "sites",
+    "ifEmpty": "Jamf Pro has no sites, so API keys cannot be kept to sites: each key reaches every device."
+  },
+  "revoke": "In Jamf Pro, open Settings, then System, then API roles and clients, select the API Clients tab, open {brand.microsoft.appName}, and disable or delete it."
+}

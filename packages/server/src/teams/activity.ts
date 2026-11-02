@@ -3,6 +3,7 @@
 // docs/teams.md 6.
 
 import { createHash, randomBytes } from "node:crypto";
+import { capReached } from "./runner.js";
 import type { ConversationRow, TriggerRow } from "./store.js";
 
 export type Activity = {
@@ -192,22 +193,20 @@ export function decide(input: DecideInput): Decision {
   if (place.kind !== "personal" && trigger.replyMode === "mentions" && !mentioned)
     return ignore("not mentioned");
 
-  if (input.counts.lastHour >= trigger.maxRunsPerHour)
+  const cap = capReached(input.counts, trigger);
+  if (cap === "hour")
     return {
       action: "limit",
       reason: "hourly limit reached",
       notice: "I've reached my limit for this hour. Please try again later.",
     };
-  if (
-    input.counts.spentToday + trigger.budgetCents * (input.counts.active + 1) >
-    trigger.maxCentsPerDay
-  )
+  if (cap === "day")
     return {
       action: "limit",
       reason: "daily spending limit reached",
       notice: "I've reached my spending limit for today. Please try again tomorrow.",
     };
-  if (input.counts.active >= trigger.maxConcurrent)
+  if (cap === "concurrent")
     return {
       action: "limit",
       reason: "too many conversations at once",
@@ -222,7 +221,7 @@ export type ThreadMessage = { from: string; text: string };
 
 // The person's message is the request; everything else is quoted material from other people.
 // Tags in their text cannot close ours: angle brackets are escaped.
-const quote = (s: string) => s.replace(/</g, "‹").replace(/>/g, "›");
+export const quote = (s: string) => s.replace(/</g, "‹").replace(/>/g, "›");
 // Names people control (display names, chat topics, channel names) go in the header as one
 // short JSON string each, so none can add lines or framing of its own.
 const name = (s: string | null | undefined) =>
