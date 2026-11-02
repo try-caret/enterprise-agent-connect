@@ -1,0 +1,127 @@
+{
+  "id": "lusha",
+  "name": "Lusha",
+  "description": "Let agents look up business contacts and companies in Lusha: job title, work email and phone, company size, industry and recent changes. For account research, call lists and matching event delegates to sponsors.",
+  "logo": "/brand/registry/lusha.svg",
+  "identity": "A Lusha API key. Every lookup that reveals an email or phone number spends your company's Lusha credits, so give the key its own credit limit.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API key with a credit limit",
+      "body": "You need a Lusha admin or manager for this, so the key can carry a credit limit of its own. The key acts as the person who made it and spends from your company's shared credits. Lusha shows the key on the API page; copy it for the form below.",
+      "link": {
+        "label": "Lusha: manage API keys",
+        "href": "https://dashboard.lusha.com/api/manage-api-keys"
+      },
+      "click": [
+        "In Lusha, open API & connectors in the left sidebar, then the Manage API Keys tab.",
+        "Create a key for agents and set its credit limit to what agents may spend.",
+        "Copy the key."
+      ],
+      "copy": [
+        "curl -s -H \"api_key: $LUSHA_API_KEY\" https://api.lusha.com/account/usage"
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [{ "id": "api_key", "label": "API key", "secret": true }],
+  "capabilities": [
+    {
+      "id": "contacts",
+      "label": "Look up contacts",
+      "description": "Find one person by email, LinkedIn address, Lusha id, or name and company: job title, seniority, department, start date and previous job, location, work email and phone.",
+      "required": true,
+      "note": "Each email or phone number revealed spends Lusha credits, up to the key's credit limit.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["lusha_find_contact"]
+    },
+    {
+      "id": "companies",
+      "label": "Look up companies",
+      "description": "Find one company by domain, name or Lusha id: size, revenue, industry, location and description, and optionally signals such as hiring surges, headcount changes and news.",
+      "note": "Spends Lusha credits.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["lusha_find_company"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/account/usage",
+    "label": "Lusha credits remaining",
+    "show": "usage.bulkCredits.remaining"
+  },
+  "revoke": "In Lusha, open API & connectors, then Manage API Keys, and delete the key. Agents lose access to Lusha at once.",
+  "http": {
+    "baseUrl": "https://api.lusha.com",
+    "auth": { "type": "header", "header": "api_key", "value": "api_key" },
+    "tools": [
+      {
+        "name": "lusha_find_contact",
+        "description": "Find one person in Lusha. Send email, or linkedin_url, or person_id, or first_name and last_name with company_name or company_domain. Spends credits for the emails and phone numbers revealed.",
+        "method": "GET",
+        "path": "/v2/person",
+        "params": {
+          "email": { "type": "string", "description": "The person's email address", "in": "query", "required": false },
+          "linkedin_url": { "type": "string", "name": "linkedinUrl", "description": "The person's LinkedIn profile address", "in": "query", "required": false },
+          "person_id": { "type": "string", "name": "personId", "description": "The person's Lusha id", "in": "query", "required": false },
+          "first_name": { "type": "string", "name": "firstName", "description": "First name", "in": "query", "required": false },
+          "last_name": { "type": "string", "name": "lastName", "description": "Last name", "in": "query", "required": false },
+          "company_name": { "type": "string", "name": "companyName", "description": "The company the person works at", "in": "query", "required": false },
+          "company_domain": { "type": "string", "name": "companyDomain", "description": "The domain of the company the person works at, such as acme.com", "in": "query", "required": false }
+        },
+        "result": {
+          "fields": [
+            "contact.data.personId",
+            "contact.data.fullName",
+            "contact.data.jobTitle",
+            "contact.data.companyId",
+            "contact.data.company.name",
+            "contact.data.company.fqdn",
+            "contact.data.jobStartDate",
+            "contact.data.location",
+            "contact.data.emailAddresses",
+            "contact.data.phoneNumbers",
+            "contact.data.socialLinks",
+            "contact.data.previousJob",
+            "contact.error"
+          ]
+        }
+      },
+      {
+        "name": "lusha_find_company",
+        "description": "Find one company in Lusha by domain, name or Lusha id: size, revenue, industry, locations and description. Spends credits.",
+        "method": "GET",
+        "path": "/v2/company",
+        "params": {
+          "domain": { "type": "string", "description": "The company's domain, such as acme.com", "in": "query", "required": false },
+          "company": { "type": "string", "description": "The company's name", "in": "query", "required": false },
+          "company_id": { "type": "string", "name": "companyId", "description": "The company's Lusha id", "in": "query", "required": false },
+          "signals": {
+            "type": "array",
+            "items": "string",
+            "enum": [
+              "allSignals",
+              "headcountIncrease3m",
+              "headcountDecrease3m",
+              "surgeInHiring",
+              "riskNews",
+              "commercialActivityNews",
+              "corporateStrategyNews",
+              "financialEventsNews",
+              "peopleNews"
+            ],
+            "description": "Also return recent signals of these kinds",
+            "in": "query",
+            "required": false
+          },
+          "signals_start_date": { "type": "string", "name": "signalsStartDate", "description": "Signals since this date, YYYY-MM-DD (default six months ago)", "in": "query", "required": false }
+        }
+      }
+    ]
+  }
+}

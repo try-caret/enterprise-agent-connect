@@ -375,6 +375,9 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # workday: an API client for integrations' refresh token;
                       # dynamics-365: the Microsoft connection signing in to one Dataverse
                       # environment)
+connectors/lusha/, connectors/churnzero/ # JSON only: Lusha on the http block, ChurnZero on the
+                      # odata block (v4, host from the connect form's instance field); each has one
+                      # test loading it and calling a tool against a local fake
 connectors/sql/       # the generic module for connector.json files with an `sql` block:
                       # index.ts (vendor: a pool per credential, the `database` check; tools),
                       # engines.ts (:name parsing, one adapter per engine: postgres, sqlserver
