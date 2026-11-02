@@ -207,6 +207,15 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     conn: { config: { host: "acme.onestreamcloud.com" }, secret: { token: "t" } },
     request: { method: "POST", path: "/DataProvider/GetAdoDataSetForAdapter", body: {} },
   },
+  zip: { conn: { config: {}, secret: { api_key: "k" } }, request: { method: "GET", path: "/requests" } },
+  "ukg-pro": {
+    conn: { config: { host: "service5.ultipro.com", username: "u" }, secret: { password: "p", customer_api_key: "k" } },
+    request: { method: "GET", path: "/configuration/v1/company-details" },
+  },
+  icims: {
+    conn: { config: { host: "api.icims.com", customer: "1234", username: "u" }, secret: { password: "p" } },
+    request: { method: "GET", path: "/v2/lists" },
+  },
 };
 for (const id of [
   "outlook-mail",

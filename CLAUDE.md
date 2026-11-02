@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad and OneStream) once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, Zip, UKG Pro and iCIMS) once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -468,6 +468,7 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
 connectors/http/described-apps.test.ts # every built-in described only in JSON loads and is
                       # offered; one representative tool per app against a fake app (method,
                       # address, auth headers, paging, limits). New described apps add a case here
+                      # (Zip, UKG Pro and iCIMS also connect through the service: verify only)
 connectors/http/apps.test.ts # every built-in app with only an `http` block (describedApp) loads,
                       # and one tool of each runs against a local fake (method, path, query, auth)
 connectors/http/legal-finance-apps.test.ts # Ironclad and OneStream load and are offered; one tool
@@ -1337,6 +1338,43 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   documentation.onestream.com REST API (Authentication2, OneStream WebAPI Endpoints, REST API
   Summary, Data Provider API) and IDM (Personal Access Tokens, Requirements for Using, Manage,
   Access the Manage page, About Using Personal Access Tokens in APIs).
+- Zip (`zip`, JSON only, `describedApp`; read November 2, 2026, tested only against fakes):
+  `https://api.ziphq.com`, a restricted read-only API key in `Zip-Api-Key` (no prefix). Search and
+  read requests (limit `departments` on `department_id`, answer limit `department.id` on one
+  request; discover `/departments`), approvals, a request's comments and questionnaire answers,
+  purchase orders, invoices, vendors and agreements, each group its own capability since only
+  requests can be held to departments. Paging `page_token`/`next_page_token`; times are Unix
+  seconds. Verify `GET /requests?page_size=1` (`total`). Read-only: IDC's agents draft but never
+  submit, so request edits, status changes, comments and every other write are left out. Left
+  out too: one agreement by id (the agreement schema has no id field), `/event_logs` (Premier
+  only); `po_number` on the PO search works only where Zip enabled extra PO filters. Sources:
+  Zip Public APIs OpenAPI 1.0.11 (dash.readme.com api-registry e3k9920mvu3gre3), Fivetran and
+  Trelica setup guides for the restricted key.
+- UKG Pro (`ukg-pro`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): `https://{host}` held to `*.ultipro.com`, `*.ultipro.ca` and `*.ukg.net` (the last from
+  Serval's guide only), Basic with a web service account plus `US-CUSTOMER-API-KEY` from a secret
+  field via fieldHeaders. Employment details, person details (answers trimmed to names, work
+  email, state and country: no national id, home address, health or I-9 fields), supervisors,
+  companies (no federal tax id), jobs, org levels (no budget salaries); time off plans; pay
+  (compensation and job history) in its own capability. Limit `companies` on `companyId` (query or
+  path), answer limit `companyId` on the all-employee time off list; discover and verify
+  `/configuration/v1/company-details`. Pages are `page`/`per_Page` with no next marker, so no
+  `paging` block. Left out: employee changes (stateful "since the last call" windows), demographics
+  (protected characteristics), pay statements, audit details (internal table names), every write.
+  Sources: developer.ukg.com/hcm reference pages (`.md` forms with their OpenAPI) for each
+  endpoint, docs web-service-account, welcome, api-rate-limiting; Serval and Lansweeper guides for
+  hosts.
+- iCIMS (`icims`, JSON only, `describedApp`; read November 2, 2026, tested only against fakes):
+  `https://{host}/customers/{customer}` held to `api.icims.com` and `api-eu.icims.com`, Basic with
+  iCIMS-issued API credentials (each IP-allowlisted by iCIMS). Search API for jobs, people and
+  applications (the search JSON a string param, ids back, at most 1000; next pages by an id
+  filter), profiles by id with `fields`, a person by email, profile schemas and lists. Two
+  capabilities: jobs (required) and candidates. No limits: searches are free-form JSON and
+  profiles carry no field to hold them to. Verify `GET /v2/lists` (the customer root has no
+  path of its own under baseUrl). Left out: OAuth (audience unconfirmed), the Offer API (OAuth
+  only), workflow status changes and every write (IDC's agents propose, recruiters decide).
+  Sources: developer.icims.com via the Wayback Machine (Connecting and Authenticating, Profiles,
+  Search API, Workflows, Customers, List API, Schema API, Error Handling, Recruiting Workflow).
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under
