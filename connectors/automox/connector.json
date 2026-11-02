@@ -3,20 +3,20 @@
   "name": "Automox",
   "description": "Let agents read your Automox devices, their missing patches and software, policies and compliance, and, if you allow it, ask a device to scan itself again. For helpdesk triage, compliance checks and troubleshooting.",
   "logo": "/brand/registry/automox.svg",
-  "identity": "An Automox API key. It can do whatever its owner's role allows in each organization, so create it as a user whose role only reads devices, packages, policies and reports.",
+  "identity": "An Automox organization API key. It can do whatever its owner's role allows in that organization, so create it as a user whose role only reads devices, packages, policies and reports.",
   "accountKey": "host",
   "connectionKind": "guided",
   "setup": [
     {
       "title": "Use an account that can only read",
-      "body": "An Automox API key acts with its owner's role. Create the key as a user, or a service user, whose role has read permissions for devices, packages, policies and reports, and nothing else. Add device manage permission only if agents may ask devices to scan.",
+      "body": "An Automox API key acts with its owner's role. Create the key as a user, or a service user, whose role has read permissions for the organization, devices, packages, policies and reports, and nothing else. Add device manage permission only if agents may ask devices to scan. The user also needs Personal API Key: Manage to create its own key.",
       "link": {
         "label": "Automox: using API keys and their permissions",
         "href": "https://docs.automox.com/product/Developer/Using_Global_API_Keys.htm"
       },
       "click": [
         "In the Automox console, sign in as the user agents should act as.",
-        "Check that its role grants Devices: Read, Packages: Read, Policies: Read and Reports: Read."
+        "Check that its role grants Organization: Read, Devices: Read, Packages: Read, Policies: Read and Reports: Read."
       ]
     },
     {
@@ -48,7 +48,7 @@
       "label": "Read devices and compliance",
       "description": "List devices and read one: operating system, last seen, missing patches and policy status. Read a device's software and patches, the devices that need attention, policies and how many devices each policy has made compliant.",
       "required": true,
-      "note": "Reaches every organization the key's owner can see unless you keep an agent to chosen organizations. Read-only.",
+      "note": "An organization API key reaches only the organization it was created in. Read-only.",
       "scopes": [],
       "permissions": [],
       "tools": [
