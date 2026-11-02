@@ -94,7 +94,7 @@
     {
       "id": "events",
       "label": "Events",
-      "help": "Optional: only these Cvent events (their ids). Attendee lists must then be filtered to one of them, such as event.id eq '<id>'. Leave empty for every event.",
+      "help": "Optional: only these Cvent events (their ids). Event and attendee lists must then be filtered to them, such as id eq '<id>' for events and event.id eq '<id>' for attendees. Leave empty for every event.",
       "kind": "list",
       "required": false,
       "pattern": "^[0-9A-Fa-f-]{36}$"
@@ -149,6 +149,7 @@
             "required": false
           }
         },
+        "answerLimits": [{ "field": "data.id", "limit": "events" }],
         "result": {
           "items": "data",
           "fields": ["id", "title", "code", "start", "end", "timezone", "status", "format", "capacity", "venues.name"]

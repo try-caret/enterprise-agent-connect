@@ -1302,14 +1302,15 @@ id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resource
   paging as `paging:page`, so a param's wire `name` may hold `:`; nothing launches a campaign,
   approval requests never send auto_launch; tests are destructive, kept to `test_addresses`),
   cvent (client credentials with `clientAuth: basic` on api-platform.cvent.com, North America
-  only since the token URL is fixed; read-only), forsta-decipher (`x-apikey` on `{host}/api/v1`;
+  only since the token URL is fixed; read-only; the events limit also checks event lists), forsta-decipher (`x-apikey` on `{host}/api/v1`;
   surveys only under `selfserve/<directory>/<project>`, since path values are encoded one segment
   each; read-only), intercom (bearer on `{host}` kept to its US, EU and AU API hosts,
   `Intercom-Version: 2.14`; replies are destructive, notes and assignment are not), sprout-social
   (bearer, the customer id a path segment of baseUrl; drafts only, `is_draft` fixed true),
   synthesia (raw key in `Authorization`; read-only, since creating a video needs nested objects)
   and wordpress (application password as Basic on `{host}/wp-json/wp/v2`; creates drafts or
-  pending posts, editing a post is destructive). Canva is left out: its API takes only a user's
+  pending posts, editing a post is destructive; lists and reads use the view context, since
+  the edit context drops or refuses every post the user may not edit). Canva is left out: its API takes only a user's
   OAuth consent. Sources: app.adestra.com/doc/page/current/index/api (REST pages),
   developers.cvent.com public OpenAPI spec and tutorials, docs.developer.focusvision.com and
   release.decipherinc.com/s/local/beacon.html, github.com/intercom/Intercom-OpenAPI 2.14,

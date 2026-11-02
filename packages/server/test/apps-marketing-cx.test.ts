@@ -171,4 +171,12 @@ test("one tool of each app reaches the app as its docs describe", async () => {
   assert.equal(req.url, "/wp-json/wp/v2/posts");
   assert.equal(req.headers.authorization, `Basic ${Buffer.from("agents:ap").toString("base64")}`);
   assert.deepEqual(JSON.parse(req.body), { title: "T", content: "<p>C</p>", status: "draft" });
+
+  // WordPress drops every post the user may not edit from an edit-context list, and refuses
+  // one by id, so lists and reads ask for the view a reader gets unless told otherwise.
+  const wp = { config: { username: "agents" }, secret: { app_password: "ap" } };
+  req = await call(app("wordpress"), "wordpress_list_posts", { search: "launch" }, wp);
+  assert.equal(req.url, "/wp-json/wp/v2/posts?search=launch&per_page=20");
+  req = await call(app("wordpress"), "wordpress_get_post", { id: 5 }, wp);
+  assert.equal(req.url, "/wp-json/wp/v2/posts/5?context=view");
 });

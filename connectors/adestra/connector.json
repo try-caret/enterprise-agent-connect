@@ -87,7 +87,7 @@
     {
       "id": "projects",
       "label": "Projects",
-      "help": "Optional: only these Adestra projects (their ids) when finding, reading and creating campaigns. Changes to a campaign by its id are not checked against this. Leave empty for every project.",
+      "help": "Optional: only these Adestra projects (their ids) when finding and creating campaigns and reading a campaign's details. A campaign's options and content, and changes to a campaign by its id, are not checked against this. Leave empty for every project.",
       "kind": "list",
       "required": false,
       "pattern": "^\\d{1,12}$"

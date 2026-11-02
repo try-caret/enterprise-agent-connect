@@ -105,10 +105,9 @@
             "required": false
           },
           "per_page": { "type": "integer", "description": "Posts per page, up to 100", "in": "query", "default": 20 },
-          "page": { "type": "integer", "description": "The page, from the previous answer", "in": "query", "required": false },
-          "context": { "type": "string", "description": "Always edit, to see drafts", "in": "query", "enum": ["edit"], "default": "edit" }
+          "page": { "type": "integer", "description": "The page, from the previous answer", "in": "query", "required": false }
         },
-        "result": { "fields": ["id", "date", "modified", "status", "title.raw", "excerpt.raw", "link", "author", "categories", "tags"] },
+        "result": { "fields": ["id", "date", "modified", "status", "title.rendered", "excerpt.rendered", "link", "author", "categories", "tags"] },
         "paging": { "param": "page", "link": true }
       },
       {
@@ -118,9 +117,32 @@
         "path": "/posts/{id}",
         "params": {
           "id": { "type": "integer", "description": "The post id", "in": "path" },
-          "context": { "type": "string", "description": "Always edit, to see drafts", "in": "query", "enum": ["edit"], "default": "edit" }
+          "context": {
+            "type": "string",
+            "description": "view shows the post as readers see it; edit also gives the content as written, to change it, and works only on posts the agents' user may edit",
+            "in": "query",
+            "enum": ["view", "edit"],
+            "default": "view"
+          }
         },
-        "result": { "fields": ["id", "date", "modified", "status", "title.raw", "content.raw", "excerpt.raw", "link", "author", "categories", "tags"] }
+        "result": {
+          "fields": [
+            "id",
+            "date",
+            "modified",
+            "status",
+            "title.rendered",
+            "title.raw",
+            "content.rendered",
+            "content.raw",
+            "excerpt.rendered",
+            "excerpt.raw",
+            "link",
+            "author",
+            "categories",
+            "tags"
+          ]
+        }
       },
       {
         "name": "wordpress_list_categories",
