@@ -9,7 +9,7 @@
   "setup": [
     {
       "title": "Create a read-only API key",
-      "body": "Give the key read access only. Choose Custom and tick only the read permissions below, or All read. Drata shows the full key once, so copy it for the form below. You can also limit the key to your deployment's outbound IP addresses.",
+      "body": "Give the key read access only. Choose Custom and tick only the read permissions below. Drata shows the full key once, so copy it for the form below. You can also limit the key to your deployment's outbound IP addresses.",
       "link": {
         "label": "Drata: create an API key",
         "href": "https://help.drata.com/en/articles/6695964"
@@ -18,9 +18,15 @@
         "In Drata, select your account at the bottom left, then Settings.",
         "Select API Keys, then Create API Key.",
         "Enter a name and an expiration date (12 months is the default).",
-        "Under Access, choose Custom and select: Workspaces: List Workspaces, Company Settings: Get Company Settings, Controls: List Controls, Controls: Get Control, Evidence Library: List Evidence, Monitoring: List Monitors, Monitoring: Get Monitor, Policies: List Policies, Vendors: List Vendors.",
+        "Under Access, choose Custom and select: Workspaces: List Workspaces, Company Settings: Get Company Settings, Controls: List Controls, Controls: Get Control, Evidence Library: List Evidence, Monitoring: List Monitors, Monitoring: Get Monitor, Policies: List Policies.",
         "Create the key and copy it."
       ]
+    },
+    {
+      "title": "Let the key read vendor reviews",
+      "body": "Vendor security reviews need one more read permission on the key.",
+      "capabilities": ["read_vendor_reviews"],
+      "click": ["Under Access, also select Vendors: List Vendors."]
     }
   ],
   "afterConnect": [],
@@ -102,6 +108,15 @@
         "method": "GET",
         "path": "/workspaces",
         "params": {
+          "expand": {
+            "type": "array",
+            "items": "string",
+            "enum": ["frameworks"],
+            "description": "Always frameworks, so each workspace lists its frameworks",
+            "in": "query",
+            "name": "expand[]",
+            "default": ["frameworks"]
+          },
           "cursor": {
             "type": "string",
             "description": "The next value from the previous page; leave out for the first page",
@@ -152,6 +167,15 @@
             "name": "hasPassingTest",
             "required": false
           },
+          "expand": {
+            "type": "array",
+            "items": "string",
+            "enum": ["owners", "frameworkTags", "testIds", "evidenceIds"],
+            "description": "What to add to each control; Drata leaves these out unless asked",
+            "in": "query",
+            "name": "expand[]",
+            "default": ["owners", "frameworkTags", "testIds", "evidenceIds"]
+          },
           "size": {
             "type": "integer",
             "description": "How many per page, up to 500",
@@ -187,6 +211,15 @@
             "type": "string",
             "description": "The control's numeric id, or its code prefixed with code:, such as code:DCF-1",
             "in": "path"
+          },
+          "expand": {
+            "type": "array",
+            "items": "string",
+            "enum": ["owners", "requirements", "frameworkTags", "testIds", "evidenceIds"],
+            "description": "What to add to the control; Drata leaves these out unless asked",
+            "in": "query",
+            "name": "expand[]",
+            "default": ["owners", "requirements", "frameworkTags", "testIds", "evidenceIds"]
           }
         }
       },
@@ -216,6 +249,15 @@
             "in": "query",
             "name": "evidenceStatuses[]",
             "required": false
+          },
+          "expand": {
+            "type": "array",
+            "items": "string",
+            "enum": ["owners", "artifacts", "controls"],
+            "description": "What to add to each item; Drata leaves these out unless asked",
+            "in": "query",
+            "name": "expand[]",
+            "default": ["owners", "artifacts", "controls"]
           },
           "size": {
             "type": "integer",
@@ -255,6 +297,15 @@
             "in": "query",
             "name": "checkResultStatus",
             "required": false
+          },
+          "expand": {
+            "type": "array",
+            "items": "string",
+            "enum": ["controls"],
+            "description": "Always controls, so each test lists the controls it covers",
+            "in": "query",
+            "name": "expand[]",
+            "default": ["controls"]
           },
           "size": {
             "type": "integer",
@@ -313,7 +364,7 @@
       },
       {
         "name": "drata_list_policies",
-        "description": "List published policies: name, status, version, owner, renewal date and the controls they cover. Filter by name or status.",
+        "description": "List published policies: name, status, version, owner and renewal date. Filter by name or status.",
         "method": "GET",
         "path": "/policies",
         "params": {
@@ -332,6 +383,15 @@
             "name": "statuses[]",
             "required": false
           },
+          "expand": {
+            "type": "array",
+            "items": "string",
+            "enum": ["owner"],
+            "description": "Always owner, so each policy names its owner",
+            "in": "query",
+            "name": "expand[]",
+            "default": ["owner"]
+          },
           "cursor": {
             "type": "string",
             "description": "The next value from the previous page; leave out for the first page",
@@ -341,7 +401,7 @@
         },
         "result": {
           "items": "data",
-          "fields": ["id", "name", "description", "status", "version", "renewalDate", "publishedAt", "approvedAt", "owner", "controls"]
+          "fields": ["id", "name", "description", "status", "version", "renewalDate", "publishedAt", "approvedAt", "owner"]
         },
         "paging": { "param": "cursor", "body": "pagination.cursor" }
       },
@@ -359,6 +419,15 @@
             "in": "query",
             "name": "status[]",
             "required": false
+          },
+          "expand": {
+            "type": "array",
+            "items": "string",
+            "enum": ["vendor", "user"],
+            "description": "Always vendor and user, so each review names its vendor and reviewer",
+            "in": "query",
+            "name": "expand[]",
+            "default": ["vendor", "user"]
           },
           "cursor": {
             "type": "string",

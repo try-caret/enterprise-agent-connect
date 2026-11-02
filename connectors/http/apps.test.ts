@@ -140,7 +140,8 @@ test("Drata lists a workspace's evidence a page at a time", async () => {
   assert.equal(call.method, "GET");
   assert.equal(
     call.url,
-    "/public/v2/workspaces/3/evidence?evidenceStatuses%5B%5D=EXPIRED&evidenceStatuses%5B%5D=NEEDS_ARTIFACT&size=50",
+    "/public/v2/workspaces/3/evidence?evidenceStatuses%5B%5D=EXPIRED&evidenceStatuses%5B%5D=NEEDS_ARTIFACT" +
+      "&expand%5B%5D=owners&expand%5B%5D=artifacts&expand%5B%5D=controls&size=50",
   );
   assert.equal(call.headers.authorization, "Bearer dk");
   assert.deepEqual(data.next, "c2");
