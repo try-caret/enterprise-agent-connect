@@ -3,13 +3,13 @@
   "name": "Druva",
   "description": "Let agents read which laptops and desktops Druva backs up, when each last backed up and who owns it. For checking that every device is protected.",
   "logo": "/brand/registry/druva.svg",
-  "identity": "Druva API credentials (a client ID and secret key) with a read-only token. For Druva's commercial cloud.",
+  "identity": "Druva API credentials (a client ID and secret key), restricted to an inSync role that can only view. For Druva's commercial cloud.",
   "accountKey": "host",
   "connectionKind": "guided",
   "setup": [
     {
       "title": "Create API credentials",
-      "body": "You need a Druva Cloud Administrator for this. Agents only read: they ask Druva for a read-only token. Druva's endpoint backup API takes only credentials a Druva Cloud Administrator authorized, so under authorization restrictions choose Druva Cloud Administrator or leave it open. Copy both values when Druva shows them; to see the secret again you must generate a new one.",
+      "body": "You need a Druva Cloud Administrator for this. Unrestricted credentials can use every Druva API, including changes and deletes, so restrict them to an inSync custom role that can only view users, devices and backups. Copy both values when Druva shows them; to see the secret again you must generate a new one.",
       "link": {
         "label": "Druva: create and manage API credentials",
         "href": "https://help.druva.com/en/articles/8580838-create-and-manage-api-credentials"
@@ -18,7 +18,9 @@
         "In the Druva Cloud Platform Console, open Global Navigation, then Integration Center.",
         "Select API Credentials in the left panel, then New Credentials.",
         "Enter a name, such as AI agents, and optionally restrict the networks it may be used from.",
-        "Select Save, then copy the Client ID and Secret Key from Credential Details."
+        "Select Save, then copy the Client ID and Secret Key from Credential Details.",
+        "Select the new credentials, then Edit.",
+        "Under authorization restrictions, choose Product Administrator, then for inSync a custom role that can only view users, devices and backups, and select Save."
       ]
     }
   ],
