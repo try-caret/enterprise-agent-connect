@@ -81,4 +81,7 @@ export const builtinConnectors: BuiltinModule[] = [
   describedApp("zip"),
   describedApp("ukg-pro"),
   describedApp("icims"),
+  describedApp("zoominfo"),
+  describedApp("docusign"),
+  describedApp("axonius"),
 ];

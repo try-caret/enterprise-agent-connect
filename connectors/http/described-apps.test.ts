@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { test } from "node:test";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ZodType } from "zod";
@@ -32,7 +32,7 @@ function fakeApp(answer: unknown, headers: Record<string, string> = {}) {
       headers: Object.fromEntries(new Headers(init?.headers)),
       body: init?.body === undefined ? "" : String(init.body),
     });
-    if (/\/oauth\/token$/.test(new URL(url).pathname))
+    if (/\/oauth\/(v1\/)?token$/.test(new URL(url).pathname))
       return Response.json({ access_token: "minted", expires_in: 3600 });
     return Response.json(answer, { headers });
   }) as typeof fetch;
@@ -353,4 +353,136 @@ test("connecting proves each sign-in with one cheap read: Zip, UKG Pro, iCIMS", 
   r = await connect("icims", ["jobs"], { host: "api.icims.com", customer: "1234", username: "u", password: "p" });
   assert.equal(icimsFake.seen[0].url, "https://api.icims.com/customers/1234/v2/lists");
   assert.deepEqual(r.checks[0].values, ["lists.job.folders"]);
+});
+
+test("ZoomInfo, DocuSign and Axonius: one tool each, against a fake app", async () => {
+  // ZoomInfo: Basic client auth at the GTM token service, then a JSON:API search body.
+  let fake = fakeApp({
+    data: [{ id: "344589814", type: "Company", attributes: { name: "ZoomInfo", country: "United States", logo: "x" } }],
+    meta: { totalResults: 1, page: { total: 1, number: 1 } },
+  });
+  let out = await run(
+    app("zoominfo"),
+    { config: { host: "api.zoominfo.com", client_id: "cid" }, secret: { client_secret: "cs" } },
+    "zoominfo_search_companies",
+    { company_name: "ZoomInfo", country: "United States" },
+    fake,
+  );
+  assert.equal(fake.seen[0].url, "https://api.zoominfo.com/gtm/oauth/v1/token");
+  assert.equal(fake.seen[0].headers.authorization, `Basic ${Buffer.from("cid:cs").toString("base64")}`);
+  assert.equal(fake.seen[1].method, "POST");
+  assert.equal(
+    fake.seen[1].url,
+    "https://api.zoominfo.com/gtm/data/v1/companies/search?page%5Bnumber%5D=1&page%5Bsize%5D=25",
+  );
+  assert.equal(fake.seen[1].headers["content-type"], "application/vnd.api+json");
+  assert.equal(fake.seen[1].headers.accept, "application/vnd.api+json");
+  assert.equal(fake.seen[1].headers.authorization, "Bearer minted");
+  assert.deepEqual(JSON.parse(fake.seen[1].body), {
+    data: {
+      type: "CompanySearch",
+      attributes: { companyName: "ZoomInfo", country: "United States", excludeDefunctCompanies: true },
+    },
+  });
+  const company = JSON.parse(out.text)[0];
+  assert.equal(company["attributes.name"], "ZoomInfo");
+  assert.equal(company["attributes.logo"], undefined);
+  // Enrich matches one company by id, in the list ZoomInfo wants.
+  fake = fakeApp({ data: [] });
+  await run(
+    app("zoominfo"),
+    { config: { host: "api.zoominfo.com", client_id: "cid" }, secret: { client_secret: "cs" } },
+    "zoominfo_enrich_company",
+    { company_id: 344589814, output_fields: ["id", "name", "parentName"] },
+    fake,
+  );
+  assert.deepEqual(JSON.parse(fake.seen[1].body), {
+    data: {
+      type: "CompanyEnrich",
+      attributes: { matchCompanyInput: [{ companyId: 344589814 }], outputFields: ["id", "name", "parentName"] },
+    },
+  });
+
+  // DocuSign: a JWT Grant at the chosen sign-in host, then the account's own base address.
+  const key = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+    type: "pkcs8",
+    format: "pem",
+  }) as string;
+  const docusign = {
+    config: {
+      auth_host: "account-d.docusign.com",
+      host: "demo.docusign.net",
+      account: GUID,
+      integration_key: "ik",
+      user_id: GUID,
+    },
+    secret: { private_key: key },
+  };
+  fake = fakeApp({
+    resultSetSize: "1",
+    envelopes: [{ envelopeId: "e1", status: "sent", emailSubject: "NDA", sender: { userName: "Ann", email: "a@x" }, documentsUri: "/d" }],
+  });
+  out = await run(
+    app("docusign"),
+    docusign,
+    "docusign_list_envelopes",
+    { from_date: "2026-10-01", status: "sent,delivered" },
+    fake,
+  );
+  assert.equal(fake.seen[0].url, "https://account-d.docusign.com/oauth/token");
+  const form = new URLSearchParams(fake.seen[0].body);
+  assert.equal(form.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
+  const claims = JSON.parse(Buffer.from(form.get("assertion")!.split(".")[1], "base64url").toString());
+  assert.equal(claims.aud, "account-d.docusign.com");
+  assert.equal(claims.iss, "ik");
+  assert.equal(claims.sub, GUID);
+  assert.equal(claims.scope, "signature impersonation");
+  assert.equal(
+    fake.seen[1].url,
+    `https://demo.docusign.net/restapi/v2.1/accounts/${GUID}/envelopes?from_date=2026-10-01&status=sent%2Cdelivered&from_to_status=changed&order=desc&count=25&start_position=0`,
+  );
+  assert.equal(fake.seen[1].headers.authorization, "Bearer minted");
+  const envelope = JSON.parse(out.text)[0];
+  assert.equal(envelope["sender.userName"], "Ann");
+  assert.equal(envelope.documentsUri, undefined);
+  // Resending is a PUT with an empty body, nothing else.
+  fake = fakeApp({ envelopeId: "e1" });
+  await run(app("docusign"), docusign, "docusign_resend_envelope", { envelope_id: "e1" }, fake);
+  assert.equal(fake.seen[1].method, "PUT");
+  assert.equal(
+    fake.seen[1].url,
+    `https://demo.docusign.net/restapi/v2.1/accounts/${GUID}/envelopes/e1?resend_envelope=true`,
+  );
+  assert.equal(fake.seen[1].body, "{}");
+  // The account address is held to DocuSign's hosts.
+  fake = fakeApp({});
+  out = await run(
+    app("docusign"),
+    { ...docusign, config: { ...docusign.config, host: "docusign.attacker.example" } },
+    "docusign_get_envelope",
+    { envelope_id: "e1" },
+    fake,
+  );
+  assert.equal(out.isError, true);
+  assert.equal(fake.seen.length, 0);
+
+  // Axonius: both keys as headers, an AQL search with a nested page, and its cursor.
+  fake = fakeApp({ assets: [{ internal_axon_id: "a1" }], meta: { page: { totalResources: 9 }, next_page: "c2" } });
+  out = await run(
+    app("axonius"),
+    { config: { host: "acme.on.axonius.com" }, secret: { api_key: "k", api_secret: "s" } },
+    "axonius_search_devices",
+    { query: '("specific_data.data.hostname" == regex("IDC-", "i"))', fields: ["specific_data.data.hostname"], cursor: "c1" },
+    fake,
+  );
+  assert.equal(fake.seen[0].method, "POST");
+  assert.equal(fake.seen[0].url, "https://acme.on.axonius.com/api/v2/assets/devices");
+  assert.equal(fake.seen[0].headers["api-key"], "k");
+  assert.equal(fake.seen[0].headers["api-secret"], "s");
+  assert.deepEqual(JSON.parse(fake.seen[0].body), {
+    query: '("specific_data.data.hostname" == regex("IDC-", "i"))',
+    fields: ["specific_data.data.hostname"],
+    page: { limit: 50, cursor: "c1" },
+  });
+  assert.deepEqual(JSON.parse(out.text), { items: [{ internal_axon_id: "a1" }], next: "c2" });
 });
