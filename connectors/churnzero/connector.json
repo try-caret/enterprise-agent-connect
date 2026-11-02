@@ -1,0 +1,238 @@
+{
+  "id": "churnzero",
+  "name": "ChurnZero",
+  "description": "Let agents read your customer accounts in ChurnZero: contract value, renewal dates, licenses and products, health scores, contacts, product usage events, meetings and notes. For renewal decks, usage reviews and meeting prep.",
+  "logo": "/brand/registry/churnzero.svg",
+  "identity": "A ChurnZero user's API key. Agents read what that user's permission group may read in bulk, and change nothing.",
+  "accountKey": "instance",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Turn on the REST API",
+      "body": "The ChurnZero REST API is an add-on. If your ChurnZero admin pages have no API Keys page, ask your ChurnZero Customer Success Manager to turn it on.",
+      "link": {
+        "label": "ChurnZero: REST API reference",
+        "href": "https://app.churnzero.net/developers"
+      }
+    },
+    {
+      "title": "Give a user only the access agents need",
+      "body": "Use a ChurnZero user for agents, in a permission group with the Developer Tools permission and only these bulk read permissions: Accounts, Contacts, Events, Meetings and Notes. Leave the other bulk read permissions off. The group's permissions apply to everyone in it, so a group of its own is safest.",
+      "click": [
+        "In ChurnZero, go to Admin, then User Permission Groups, and create or open the agents' group.",
+        "Turn on Developer Tools.",
+        "Turn on Bulk Read - Accounts, Bulk Read - Contacts, Bulk Read - Events, Bulk Read - Meetings and Bulk Read - Notes. Leave every other bulk read permission off.",
+        "Add the agents' user to the group."
+      ]
+    },
+    {
+      "title": "Create an API key",
+      "body": "Signed in as that user, create an API key and copy it for the form below. Your ChurnZero address is the one you sign in at, such as acme.us1app.churnzero.net: enter the part before .us1app.",
+      "click": ["In ChurnZero, go to Admin, then API Keys, and create a new API key."],
+      "copy": [
+        "curl -s -u \"$CHURNZERO_USERNAME:$CHURNZERO_API_KEY\" \"https://acme.us1app.churnzero.net/public/v1/Account?\\$top=1&\\$select=Name\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "instance",
+      "label": "ChurnZero instance",
+      "help": "The part before .us1app.churnzero.net in your ChurnZero address.",
+      "placeholder": "acme",
+      "secret": false
+    },
+    { "id": "username", "label": "Username", "secret": false },
+    { "id": "api_key", "label": "API key", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "accounts",
+      "label": "Read accounts",
+      "description": "Find customer accounts by name, id, CRM id or renewal date, and read one: contract value, renewal and end dates, licenses, products, health and relationship scores, NPS and owner.",
+      "required": true,
+      "note": "Reaches every account unless you keep an agent to chosen accounts. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["churnzero_list_accounts", "churnzero_get_account"]
+    },
+    {
+      "id": "contacts",
+      "label": "Read contacts",
+      "description": "List an account's contacts: names, emails and products.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["churnzero_list_contacts"]
+    },
+    {
+      "id": "usage",
+      "label": "Read usage",
+      "description": "List product usage events by account, contact, event type and date, and the event types.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["churnzero_list_events", "churnzero_list_event_types"]
+    },
+    {
+      "id": "activity",
+      "label": "Read meetings and notes",
+      "description": "List an account's meetings and notes: subject, date, attendees, summary and sentiment.",
+      "note": "Notes and meeting summaries hold what your team wrote about the customer.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["churnzero_list_meetings", "churnzero_list_notes"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "accounts",
+      "label": "Accounts",
+      "help": "Optional: only these ChurnZero accounts, by their ChurnZero id (the number in the account's address). Leave empty for every account.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,18}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/Account?$top=5&$select=Name",
+    "label": "ChurnZero accounts",
+    "show": "value[].Name"
+  },
+  "revoke": "In ChurnZero, go to Admin, then API Keys, and delete the key. Agents lose access to ChurnZero at once.",
+  "odata": {
+    "serviceRoot": "https://{instance}.us1app.churnzero.net/public/v1",
+    "version": "4",
+    "auth": { "type": "basic", "username": "username", "password": "api_key" },
+    "tools": [
+      {
+        "name": "churnzero_list_accounts",
+        "description": "List customer accounts, soonest renewal first. Filter by part of the name, ChurnZero id, CRM id, external id, renewal date or active. Answers {items, next}; pass next as cursor for more.",
+        "kind": "list",
+        "entitySet": "Account",
+        "filters": {
+          "name": { "type": "string", "property": "Name", "op": "contains", "description": "Part of the account name (at least 2 letters)" },
+          "id": { "type": "integer", "property": "Id", "description": "The ChurnZero account id", "limit": "accounts" },
+          "crm_id": { "type": "string", "property": "CrmId", "description": "The account's id in your CRM" },
+          "external_id": { "type": "string", "property": "ExternalId", "description": "The account's external id" },
+          "renewal_from": { "type": "datetime", "property": "NextRenewalDate", "op": "ge", "description": "Next renewal on or after this date" },
+          "renewal_to": { "type": "datetime", "property": "NextRenewalDate", "op": "le", "description": "Next renewal on or before this date" },
+          "active": { "type": "boolean", "property": "IsActive", "description": "Only active (true) or inactive (false) accounts" }
+        },
+        "select": [
+          "Id",
+          "Name",
+          "CrmId",
+          "ExternalId",
+          "IsActive",
+          "TotalContractAmount",
+          "NextRenewalDate",
+          "EndDate",
+          "LicenseCount",
+          "PrimaryChurnScoreValue",
+          "UserAccountId"
+        ],
+        "orderBy": "NextRenewalDate",
+        "top": 100
+      },
+      {
+        "name": "churnzero_get_account",
+        "description": "Read one account by its external id (the id your systems send ChurnZero): contract value, renewal and end dates, licenses, product subscriptions, scores, NPS, parent accounts and owner.",
+        "kind": "get",
+        "entitySet": "Account",
+        "key": {
+          "external_id": { "type": "string", "property": "AccountExternalId", "description": "The account's external id" }
+        },
+        "select": [
+          "Id",
+          "Name",
+          "CrmId",
+          "ExternalId",
+          "IsActive",
+          "StartDate",
+          "EndDate",
+          "NextRenewalDate",
+          "TenureInDays",
+          "TotalContractAmount",
+          "LicenseCount",
+          "ProductSubscriptions",
+          "PrimaryChurnScoreValue",
+          "RelationshipScore",
+          "NpsScore",
+          "CsatScore",
+          "UsageFrequency",
+          "Tags",
+          "ParentAccountId",
+          "UltimateParentAccountId",
+          "UserAccountId",
+          "BillingAddressCity",
+          "BillingAddressState",
+          "BillingAddressCountry"
+        ],
+        "answerLimits": [{ "field": "Id", "limit": "accounts" }]
+      },
+      {
+        "name": "churnzero_list_contacts",
+        "description": "List an account's contacts, or find a contact by email. Answers {items, next}; pass next as cursor for more.",
+        "kind": "list",
+        "entitySet": "Contact",
+        "filters": {
+          "account_id": { "type": "integer", "property": "AccountId", "description": "The ChurnZero account id", "limit": "accounts" },
+          "email": { "type": "string", "property": "Email", "description": "The contact's email address" }
+        },
+        "select": ["Id", "AccountId", "FullName", "Email", "ExternalId", "Products", "Tags"],
+        "top": 100
+      },
+      {
+        "name": "churnzero_list_events",
+        "description": "List product usage events, newest first, by account, contact, event type and date. Each has a date, type, quantity and description. Answers {items, next}; pass next as cursor for more.",
+        "kind": "list",
+        "entitySet": "Event",
+        "filters": {
+          "account_id": { "type": "integer", "property": "AccountId", "description": "The ChurnZero account id", "limit": "accounts" },
+          "contact_id": { "type": "integer", "property": "ContactId", "description": "The ChurnZero contact id" },
+          "event_type_id": { "type": "integer", "property": "EventTypeId", "description": "The event type id, from churnzero_list_event_types" },
+          "from": { "type": "datetime", "property": "EventDate", "op": "ge", "description": "Events on or after this date" },
+          "to": { "type": "datetime", "property": "EventDate", "op": "lt", "description": "Events before this date" }
+        },
+        "select": ["Id", "AccountId", "ContactId", "EventTypeId", "EventDate", "Quantity", "Description"],
+        "orderBy": "EventDate desc",
+        "top": 200
+      },
+      {
+        "name": "churnzero_list_event_types",
+        "description": "List the usage event types, to name the event type ids of events.",
+        "kind": "list",
+        "entitySet": "EventType",
+        "top": 200
+      },
+      {
+        "name": "churnzero_list_meetings",
+        "description": "List an account's meetings, newest first: subject, start and end, organizer, attendees, summary and sentiment. Answers {items, next}; pass next as cursor for more.",
+        "kind": "list",
+        "entitySet": "Meeting",
+        "filters": {
+          "account_id": { "type": "integer", "property": "AccountId", "description": "The ChurnZero account id", "limit": "accounts" },
+          "from": { "type": "datetime", "property": "StartDate", "op": "ge", "description": "Meetings starting on or after this date" }
+        },
+        "select": ["Id", "AccountId", "Subject", "StartDate", "EndDate", "Organizer", "Attendees", "Summary", "Sentiment", "Topics"],
+        "orderBy": "StartDate desc",
+        "top": 50
+      },
+      {
+        "name": "churnzero_list_notes",
+        "description": "List an account's notes, newest first: title, date, text, contacts, topics and sentiment. Answers {items, next}; pass next as cursor for more.",
+        "kind": "list",
+        "entitySet": "Note",
+        "filters": {
+          "account_id": { "type": "integer", "property": "AccountId", "description": "The ChurnZero account id", "limit": "accounts" },
+          "from": { "type": "datetime", "property": "NoteDate", "op": "ge", "description": "Notes on or after this date" }
+        },
+        "select": ["Id", "AccountId", "Name", "NoteDate", "Content", "Contacts", "Topics", "Sentiment"],
+        "orderBy": "NoteDate desc",
+        "top": 50
+      }
+    ]
+  }
+}

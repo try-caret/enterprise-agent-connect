@@ -1,0 +1,192 @@
+{
+  "id": "zephyr",
+  "name": "Zephyr",
+  "description": "Let agents read test cases, test cycles and test results in Zephyr (Zephyr Scale for Jira Cloud), and record test results. For running regression cycles and triaging failures into Jira defects.",
+  "logo": "/brand/registry/zephyr.svg",
+  "identity": "A Zephyr API access token. It acts as the Jira user who created it, with that user's access to Jira projects, so create it as a user made for agents.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a Jira user for agents",
+      "body": "Zephyr tokens belong to the Jira user who creates them and reach every project that user can see. Make a user for agents and give it access only to the projects whose tests agents should read or run.",
+      "click": [
+        "In Atlassian Administration, invite a user named AI agents and give it Jira access.",
+        "In each Jira project agents should work in, add AI agents to a role that can browse the project."
+      ]
+    },
+    {
+      "title": "Create a Zephyr API access token",
+      "body": "Sign in to Jira as the agents' user and create the token. Zephyr shows it only once. You can test it with the command below: it lists your Zephyr projects and changes nothing.",
+      "link": {
+        "label": "Zephyr: API access tokens",
+        "href": "https://support.smartbear.com/zephyr/docs/en/rest-api/api-access-tokens-management.html"
+      },
+      "click": [
+        "In Jira, select your profile picture, then Zephyr API Access Tokens.",
+        "Select Create access token and copy it."
+      ],
+      "copy": [
+        "curl -s -H \"Authorization: Bearer $ZEPHYR_TOKEN\" \"https://api.zephyrscale.smartbear.com/v2/projects?maxResults=5\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "API address",
+      "help": "api.zephyrscale.smartbear.com, or for data kept in another region eu.api.zephyrscale.smartbear.com, au.api.zephyrscale.smartbear.com or de.api.zephyrscale.smartbear.com.",
+      "placeholder": "api.zephyrscale.smartbear.com",
+      "secret": false
+    },
+    { "id": "token", "label": "API access token", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read tests and results",
+      "description": "List a project's test cases, test cycles and test executions, filtered by cycle, test case or Jira version, and the status names behind their status ids.",
+      "required": true,
+      "note": "Read-only. Reaches every project the token's user can see unless you keep a key to chosen projects.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "zephyr_list_test_cases",
+        "zephyr_list_test_cycles",
+        "zephyr_list_test_executions",
+        "zephyr_list_statuses"
+      ]
+    },
+    {
+      "id": "record",
+      "label": "Record test results",
+      "description": "Record the result of running a test case in a test cycle, such as Pass or Fail, with a comment.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["zephyr_create_test_execution"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "projects",
+      "label": "Jira projects",
+      "help": "Optional: only these Jira projects, by key, such as QA. Leave empty for every project the token's user can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Z][A-Z0-9_]+$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/projects?maxResults=50",
+    "label": "Zephyr projects",
+    "show": "values[].key"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/projects?maxResults=1000",
+    "label": "Zephyr projects",
+    "show": "values[].key"
+  },
+  "revoke": "Sign in to Jira as the agents' user, select the profile picture, then Zephyr API Access Tokens, and revoke the token. Agents lose access to Zephyr at once.",
+  "http": {
+    "baseUrl": "https://{host}/v2",
+    "allowedHosts": ["api.zephyrscale.smartbear.com", "*.api.zephyrscale.smartbear.com"],
+    "auth": { "type": "bearer", "token": "token" },
+    "tools": [
+      {
+        "name": "zephyr_list_test_cases",
+        "description": "List a project's test cases. Pass start_at to read further pages; isLast in the answer says whether there are more.",
+        "method": "GET",
+        "path": "/testcases",
+        "params": {
+          "project_key": { "type": "string", "description": "The Jira project key", "in": "query", "name": "projectKey", "limit": "projects" },
+          "folder_id": { "type": "integer", "description": "Only test cases in this folder", "in": "query", "name": "folderId", "required": false },
+          "max_results": { "type": "integer", "description": "How many per page", "in": "query", "name": "maxResults", "default": 50 },
+          "start_at": { "type": "integer", "description": "How many to skip", "in": "query", "name": "startAt", "default": 0 }
+        },
+        "result": {
+          "fields": ["isLast", "values.key", "values.name", "values.objective", "values.status.id", "values.priority.id", "values.labels", "values.folder.id"]
+        }
+      },
+      {
+        "name": "zephyr_list_test_cycles",
+        "description": "List a project's test cycles, optionally for one Jira version. Pass start_at to read further pages.",
+        "method": "GET",
+        "path": "/testcycles",
+        "params": {
+          "project_key": { "type": "string", "description": "The Jira project key", "in": "query", "name": "projectKey", "limit": "projects" },
+          "jira_version_id": { "type": "integer", "description": "Only cycles for this Jira version (release) id", "in": "query", "name": "jiraProjectVersionId", "required": false },
+          "max_results": { "type": "integer", "description": "How many per page", "in": "query", "name": "maxResults", "default": 50 },
+          "start_at": { "type": "integer", "description": "How many to skip", "in": "query", "name": "startAt", "default": 0 }
+        },
+        "result": {
+          "fields": ["isLast", "values.key", "values.name", "values.status.id", "values.plannedStartDate", "values.plannedEndDate", "values.jiraProjectVersion.id"]
+        }
+      },
+      {
+        "name": "zephyr_list_test_executions",
+        "description": "List test results, filtered by test cycle, test case or Jira version, such as every failure in a regression cycle. Pass start_at to read further pages.",
+        "method": "GET",
+        "path": "/testexecutions",
+        "params": {
+          "project_key": { "type": "string", "description": "The Jira project key", "in": "query", "name": "projectKey", "limit": "projects" },
+          "test_cycle": { "type": "string", "description": "Only this test cycle, by key such as QA-R12", "in": "query", "name": "testCycle", "required": false },
+          "test_case": { "type": "string", "description": "Only this test case, by key such as QA-T40", "in": "query", "name": "testCase", "required": false },
+          "only_last": { "type": "boolean", "description": "Only the latest result of each test case", "in": "query", "name": "onlyLastExecutions", "required": false },
+          "max_results": { "type": "integer", "description": "How many per page", "in": "query", "name": "maxResults", "default": 50 },
+          "start_at": { "type": "integer", "description": "How many to skip", "in": "query", "name": "startAt", "default": 0 }
+        },
+        "result": {
+          "fields": [
+            "isLast",
+            "values.key",
+            "values.testCase.self",
+            "values.testCycle.id",
+            "values.testExecutionStatus.id",
+            "values.actualEndDate",
+            "values.executedById",
+            "values.comment",
+            "values.links.issues"
+          ]
+        }
+      },
+      {
+        "name": "zephyr_list_statuses",
+        "description": "List a project's statuses with their ids and names, such as Pass and Fail for test executions, to read the status ids in other answers.",
+        "method": "GET",
+        "path": "/statuses",
+        "params": {
+          "project_key": { "type": "string", "description": "The Jira project key", "in": "query", "name": "projectKey", "limit": "projects" },
+          "status_type": {
+            "type": "string",
+            "enum": ["TEST_CASE", "TEST_PLAN", "TEST_CYCLE", "TEST_EXECUTION"],
+            "description": "Which kind of status",
+            "in": "query",
+            "name": "statusType",
+            "default": "TEST_EXECUTION"
+          },
+          "max_results": { "type": "integer", "description": "How many per page", "in": "query", "name": "maxResults", "default": 100 }
+        },
+        "result": { "fields": ["isLast", "values.id", "values.name", "values.archived"] }
+      },
+      {
+        "name": "zephyr_create_test_execution",
+        "description": "Record a test result: a test case run in a test cycle, with its status name, such as Pass or Fail, and a comment.",
+        "method": "POST",
+        "path": "/testexecutions",
+        "params": {
+          "project_key": { "type": "string", "description": "The Jira project key", "in": "body", "name": "projectKey", "limit": "projects" },
+          "test_case_key": { "type": "string", "description": "The test case key, such as QA-T40", "in": "body", "name": "testCaseKey" },
+          "test_cycle_key": { "type": "string", "description": "The test cycle key, such as QA-R12", "in": "body", "name": "testCycleKey" },
+          "status_name": { "type": "string", "description": "The result's status name in Zephyr, such as Pass, Fail or Blocked", "in": "body", "name": "statusName" },
+          "comment": { "type": "string", "description": "What happened, such as the failure seen", "in": "body", "required": false },
+          "environment_name": { "type": "string", "description": "The environment it ran in, as named in Zephyr", "in": "body", "name": "environmentName", "required": false },
+          "actual_end_date": { "type": "string", "description": "When it finished, such as 2026-10-01T13:15:13Z", "in": "body", "name": "actualEndDate", "required": false }
+        }
+      }
+    ]
+  }
+}

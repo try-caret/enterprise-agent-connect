@@ -9,6 +9,7 @@ import {
   openZip,
   parseXml,
   serializeXml,
+  shownPart,
   val,
   W,
 } from "./ooxml.js";
@@ -731,6 +732,7 @@ function plan(doc: Document, fields: Record<string, FillValue>): { plans: Plan[]
   for (const s of found) byTag.set(tagOf(s)!, [...(byTag.get(tagOf(s)!) ?? []), s]);
   const plans: Plan[] = [];
   for (const tag of tags) {
+    // The caller's own key, echoed back: a tag found in the template is that same text.
     const name = clip(tag, 100);
     const sdts = byTag.get(tag);
     if (!sdts) throw new Denied(`${name} is not a field in the template`);
@@ -809,7 +811,7 @@ export function guard(
     throw new Denied("The filled file's parts differ from the template's, so it was not saved (a bug)");
   for (const name of names)
     if (name !== DOCUMENT && !same(template.get(name)!, after.get(name)!))
-      throw new Denied(`The fill changed ${clip(name, 100)}, so it was not saved (a bug)`);
+      throw new Denied(`The fill changed ${shownPart(name, "another part")}, so it was not saved (a bug)`);
   const doc = parseXml(after.get(DOCUMENT)!, DOCUMENT);
   if (before !== skeleton(doc, allFields(doc).filter((s) => tags.has(tagOf(s)!))))
     throw new Denied("The fill changed text outside the fields, so it was not saved (a bug)");

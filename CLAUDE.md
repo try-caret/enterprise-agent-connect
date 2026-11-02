@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, Zip, UKG Pro, iCIMS, ZoomInfo, DocuSign and Axonius) once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -31,7 +31,21 @@ host. Its own tables live in its own schema (`agent_connect`, see Database below
   {name?} makes it with that id if missing; a name given replaces the kept one). DEPRECATED:
   the unversioned `/agent-connect/admin/*` serves the same routes for one release (an admin of
   the previous release during an upgrade), and creates an organization it does not know on its
-  first `/orgs/<org>/` request; it goes in the release after. Routes: `GET connectors`,
+  first `/orgs/<org>/` request; it goes in the release after. Routes: `GET connectors` (the
+  deployment's apps), `GET orgs/:org/connectors` (those plus the organization's internal apps),
+  internal apps (docs/http-connector.md "Add internal apps through the admin API"): `GET
+  orgs/:org/internal-apps`, `GET/PUT/DELETE …/:app` (PUT {definition, by}: a connector.json
+  with an http, soap, odata or sql block, parsed by parseConnector and built and checked by the
+  same `build` as a loaded app; no `events` or `signsInAs`; the id may not be a connectors/
+  folder, a loaded app or `agents`, and its tool names must be new to the organization; a
+  loaded app added later with a saved internal app's id is offered to neither that
+  organization (its kept connection was entered for its own app) until the internal app goes; a
+  replace keeps the connection only when `signIn()` (form fields, accountKey, the block but its
+  tools) is unchanged, then cuts the ceiling and grants to the new capabilities and removes
+  grants whose limits no longer validate; otherwise removes the connection and grants; DELETE
+  removes the definition, connection and grants; each in one transaction with its audit row
+  `admin:create_internal_app` / `replace_internal_app` / `delete_internal_app`) and `POST
+  internal-apps/draft` {spec, id, operations|tags} (connectors/http/openapi.ts),
   `orgs/:org/connections` (GET; `PUT/PATCH/DELETE …/:app`; `POST …/:app/check`, which marks the
   connection connected or needs_reconnect unless `?record=false` (read only: limit choices, opening an app page, the Integrations tab; only the admin's Check again records, with body {by}, and a recorded check that changes the status is audited as `admin:check_app`);
   `PUT …/:app/sites` {sites} (apps with `siteAccess`: the whole list of added sites, normalized)
@@ -186,7 +200,7 @@ deliveryId, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: fa
 
 Schema `agent_connect` (`DATABASE_SCHEMA`), tables without a prefix (`agents`, `providers`,
 `connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`,
-`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`); index and
+`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`, `internal_apps`); index and
 constraint names keep the `agent_connect_<table>_...` spelling they had in public (`store.ts`
 matches `agent_connect_providers_one_org_per_tenant`). `packages/server/src/migrate.ts` applies
 `packages/server/migrations/NNNN_*.sql` on start, all pending in one transaction under an advisory lock, with
@@ -201,7 +215,8 @@ the org ids already in them, 0003 drops two never-used columns, 0004 gives trigg
 (`claude-managed-agents` for every earlier row), its settings and a sealed signing secret, 0005
 records each run's runner (a trigger moved to another runner stops the old runner's live
 sessions and never reuses them), 0006 makes `approvals` (Teams approval cards; the
-rollback drops it), 0007 the app event tables (rollback drops them). The adopting run then makes simple views
+rollback drops it), 0007 the app event tables (rollback drops them), 0008 `internal_apps` (organizations' own
+connector definitions; rollback drops it). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -311,7 +326,8 @@ packages/server/src/index.ts # createAgentConnect(options): checks and wires eve
                       # while its module is passed;
                       # a module may carry its connector.json inline as `connector`) and
                       # http-only definitions; checked like a folder's. Teams may be left out
-packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<id>/index.ts)
+packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<id>/index.ts);
+                      # describedApp(id): a built-in with only a connector.json `http` block
 packages/connector-kit/src/branding.ts # names shown and created in tenants (BRANDING), {brand.*} placeholders
 packages/server/src/server.ts # the container's entry: env (old names for one release) → createAgentConnect, listen
 packages/server/src/app.ts # HTTP routing, agent auth, admin API handlers (typed against api.ts)
@@ -324,7 +340,9 @@ packages/client/      # @arbium/enterprise-agent-connect-client: createClient (t
                       # shapes), src/steps.ts (pure step and status logic the admin pages share).
                       # `npm run client` regenerates schema.ts and builds lib/; CI fails when
                       # openapi.json or schema.ts is stale
-packages/server/src/service.ts # connect (verify before save), check, grants, agent sessions
+packages/server/src/service.ts # connect (verify before save), check, grants, agent sessions; the
+                      # one per-organization app lookup (`app(org, id)`, `orgApps(org)`): loaded
+                      # apps, then the organization's internal apps, built once per definition
 packages/server/src/store.ts # Postgres; every table named through tables() in the configured schema,
                       # never through search_path. Timestamps out as ISO 8601
 packages/server/src/migrate.ts # the schema runner (see Database)
@@ -343,7 +361,20 @@ scripts/openapi-to-connector.ts # drafts an http connector.json from an OpenAPI 
 packages/server/src/consent.ts # signed approval state (org, app, capability ceiling, return address, tenant once
                       # approved, nonce, 15 min expiry)
 connectors/http/      # the generic module for a connector.json `http` block; exports guardedFetch,
-                      # authHeaders, formValues, paramLimits and answerWithin for its siblings
+                      # authHeaders, formValues, paramLimits, answerWithin and connectionAddress
+                      # (an address's and an http tokenUrl's {field}s filled per connection,
+                      # connector-kit fillAddress, held to allowedHosts, one guarded fetch per
+                      # origin pair) for its siblings. A tool param with `field` is filled from
+                      # that connect form field and never offered to the agent. With a tool's
+                      # `nestedBody`, a body param's name is a dot path (numeric segment = list
+                      # index, 0-99) into a body that starts from the tool's fixed `body`, else
+                      # one key as before; clashes, a place both list and object, and prototype
+                      # keys are refused at parse, and setPath follows only own keys;
+                      # `contentType` (block or tool) is application/json or +json; `readOnly`
+                      # marks a POST search read-only to clients. Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # connector-kit oauth.ts jwtAssertion, http blocks only);
+                      # openapi.ts: draftConnector (the OpenAPI drafter the script and the
+                      # admin API's internal app drafts share)
 connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
                       # templates with XML-escaped values, faults, result path), xml.ts (the XML
                       # reader: no DTD, five entities, depth 100; also used by the scripts)
@@ -364,7 +395,8 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
                       # gong: an API access key as Basic auth on the company's *.api.gong.io,
-                      # short 429 waits retried;
+                      # short 429 waits retried; lusha: an API key in the api_key header, v3
+                      # search-and-enrich (v2 ends November 30, 2026), one person or company a call;
                       # sap-s4hana: OData v2 with basic auth or Cloud OAuth, sap-client, CSRF;
                       # servicenow: OAuth client credentials or basic, on the instance;
                       # fedex, dell-techdirect, jamf on the kit's oauth.ts (client credentials, a
@@ -375,6 +407,9 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # workday: an API client for integrations' refresh token;
                       # dynamics-365: the Microsoft connection signing in to one Dataverse
                       # environment)
+connectors/churnzero/ # JSON only, on the odata block (v4, host from the connect form's instance
+                      # field); not a built-in until address placeholders land. Its test loads it
+                      # and calls a tool against a local fake
 connectors/sql/       # the generic module for connector.json files with an `sql` block:
                       # index.ts (vendor: a pool per credential, the `database` check; tools),
                       # engines.ts (:name parsing, one adapter per engine: postgres, sqlserver
@@ -425,6 +460,10 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # upgrade.test.ts: an install from fixtures/legacy-20261023200000.sql (a
                       # frozen copy of the earlier layout) adopted, against a fresh one, and
                       # by an owner that cannot bypass RLS
+                      # internal-apps.test.ts: internal apps through the admin API on Postgres
+                      # (save, refusals, id and tool clashes, org isolation, an agent calling
+                      # a local fake app, the replace and delete rules, OpenAPI drafts, a deployment app
+                       # later taking an internal app's id)
                       # events.test.ts: app events on a made-up app (signatures, replays,
                       # repeats, limits, conditions, own changes, caps, poll cursor, the signed
                       # webhook runner end to end, admin); deliver.test.ts its pure rules
@@ -433,6 +472,15 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
                       # trigger off; each store guard and two clicks at once)
                       # Generic machinery only: no suite or case for one connector's behavior
+connectors/http/described-apps.test.ts # every built-in described only in JSON loads and is
+                      # offered; one representative tool per app against a fake app (method,
+                      # address, auth headers, paging, limits). New described apps add a case here
+                      # (Zip, UKG Pro and iCIMS also connect through the service: verify only)
+connectors/http/apps.test.ts # every built-in app with only an `http` block (describedApp) loads,
+                      # and one tool of each runs against a local fake (method, path, query, auth)
+connectors/http/legal-finance-apps.test.ts # Ironclad and OneStream load and are offered; one tool
+                      # each against a fake app, and connecting each through the service (token,
+                      # verify body)
 connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's test harness
                       # (packages/server/test/helpers.ts) with its fake vendor answers; run by
                       # npm test, typechecked by tsconfig.test.json, left out of the build
@@ -701,11 +749,15 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   (`liveParses()`). Each parse costs a Node process start (tens of ms). The parse process never
   outlives the server: it exits when its IPC channel closes, on a clock of its own (the
   server's timeout plus 2 s, 10 s with no job), and when its answer cannot be sent. The server
-  takes one answer only, of the expected shape (`{ok: true, value}` or `{ok: false, denied:
+  takes one answer only (a second voids the first and kills the process at once; tested
+  through a stand-in parse process, `sandboxed`'s test-only `host` argument), of the expected shape (`{ok: true, value}` or `{ok: false, denied:
   string}`) and at most 80 MB serialized (checked in both processes); anything else is "could not
   be read". The parse process runs as the same user as the server, with no OS sandbox (no
-  seccomp, namespaces or separate user): its limits are memory, time and an empty environment. Anything but a refusal inside a worker becomes "could not be read"; file-controlled
-  text in refusals is cut to about 100 characters. Zips through fflate's `unzipSync` only, with a filter checking every size
+  seccomp, namespaces or separate user): its limits are memory, time and an empty environment. Anything but a refusal inside a worker becomes "could not be read". A refusal never quotes
+  the file (it reaches the agent and the audit row's reason): fixed wording, no parser message,
+  tag or attribute, and a part named only when the name is one of Word's own (`shownPart` in
+  ooxml.ts), else "a part"; the server also cuts a parse process's refusal to one line of 300
+  characters. Zips through fflate's `unzipSync` only, with a filter checking every size
   from the directory before anything is inflated (2,000 entries, 50 MB in all, a ratio over 200
   past 1 MB, compression 0 or 8, no `..` or rooted names, no repeated names), then each part's
   length and CRC-32 against the directory (fflate checks neither: a header that lies about a
@@ -962,6 +1014,24 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   only after approval. `dell_warranty_lookup` returns model, ship date and each entitlement
   with an `active` flag; an answer that is not a list fails loudly. Asset components (parts)
   are left out: a separate API not confirmed under the same key. No limits.
+- JSON-only built-ins (`describedApp`, `http` block, no code; read October/November 2026 from
+  each vendor's own reference): Automox (`automox`, console.automox.com/api/docs console-api
+  OpenAPI; bearer API key, `o` the org id under the `organizations` limit, discover `GET /orgs`;
+  read plus a "Scan devices" capability whose only command is `GetOS`), Qualys (`qualys`, VM
+  API v2 `/api/2.0/fo/...` host list, host detection list and KnowledgeBase, basic auth of a
+  Reader user, fixed `X-Requested-With`, host per platform from qualys.com/platform-identification
+  held to `allowedHosts`; answers are XML passed as text, so no `result` or paging, the agent
+  passes `id_min`; `ag_ids` under the `asset_groups` limit), Druva (`druva`, developer.druva.com
+  inSync Endpoints v1/v2; token `https://apis.druva.com/token` with `clientAuth: basic` and
+  scope `read`; commercial cloud only), Drata (`drata`, public API v2 OpenAPI at
+  developers.drata.com; bearer key, host per region held to `allowedHosts`, cursor paging from
+  `pagination.cursor`, `workspaces` limit), SafeBase (`safebase`, docs.safebase.io reference;
+  `x-sb-api-key` with per-operation scopes, `products` limit and an answer limit on documents)
+  and Adobe Admin Console (`adobe-admin-console`, User Management API at usermanagement.adobe.io;
+  IMS token v2 with scope `openid,AdobeID,user_management_sdk`, `fieldHeaders` x-api-key = the
+  client id; the org id is a path segment mid-path, so agents send it under a required
+  `organizations` limit). All read-only except Automox's scan. Axonius was left out: its API v2
+  reference needs a customer login. Tested only against fakes (connectors/http/apps.test.ts).
 - Generic `soap` and `odata` modules (docs/soap-connector.md, docs/odata-connector.md), siblings
   of `http`, sharing its guarded fetch (origin, no redirects, 30 s, 1 MB; SOAP also takes XML
   types), auth headers, form values and limit checks. At most one of http, soap, odata, sql
@@ -1196,6 +1266,175 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   `aggregateitemlocation` and `transactionline.mainline`, read October 27, 2026. Tested only
   against a fake NetSuite, never a real account: table and column names, status letters and the
   sign of lines are unverified live.
+- Described built-ins, JSON only (`connectors/<id>/connector.json`, an `http` block, registered with
+  `describedApp`; read November 1, 2026, tested only against fakes in
+  `connectors/http/described-apps.test.ts`, never a live account):
+  - GitLab (`gitlab`): `https://{host}/api/v4`, `PRIVATE-TOKEN` from a project or group access
+    token (Reporter + `read_api`; Developer + `api` to comment). Merge requests, their `/diffs`
+    (`/changes` is deprecated since 15.7), notes, pipelines, jobs (`scope[]`), a job's `/trace`
+    (text, over 1 MB refused) and commits; paging from `X-Next-Page`. Limit `projects` by full
+    path, sent as one encoded segment (GitLab takes `group%2Fproject`). Retrying jobs is left
+    out: a retried deploy job deploys. Sources: docs.gitlab.com api/rest, merge_requests,
+    pipelines, jobs, notes, project_access_tokens.
+  - Argo CD (`argo-cd`): `https://{host}`, bearer token of a local `apiKey` account bound to
+    `role:readonly` (argocd-cm, argocd-rbac-cm; `argocd account generate-token`). Reads only:
+    applications, one application (answer limit `spec.project`), resource tree, events and revision
+    metadata. Those three take `project`, which the `projects` limit forces: the server answers
+    NotFound when the application is in another project (`getAppEnforceRBAC`, server/application
+    in argo-cd stable). Sync is left out. Sources: assets/swagger.json (stable), operator-manual
+    user-management and rbac.
+  - SonarQube (`sonarqube`): `https://{host}` (Server, or sonarcloud.io), bearer user token of a
+    user with Browse. Quality gate status (`projectKey`), issues (`componentKeys`: Cloud's name,
+    and Server's deprecated alias of `components` since 10.2), measures, analyzed pull requests.
+    Limit `projects` by key. `inNewCodePeriod` and hotspots are left out (Cloud has neither under
+    those names). Sources: docs.sonarsource.com web-api and managing-tokens, sonarcloud.io
+    `/api/webservices/list`, SonarQube's issue SearchAction.java.
+  - Datadog (`datadog`): `https://{host}` held to `*.datadoghq.com`, `*.datadoghq.eu`,
+    `*.ddog-gov.com`; `DD-API-KEY` as auth and `DD-APPLICATION-KEY` as a field header (an
+    application key of a Read Only service account, scoped `monitors_read`, `events_read`,
+    `logs_read_data`, `timeseries_query`). Monitor search, one monitor, events v2 and logs v2
+    (cursor `meta.page.after`), `/api/v1/query`. No limits. Verify counts monitors (both keys;
+    `/api/v1/validate` proves only the API key). Sources: docs.datadoghq.com api/latest monitors,
+    events, logs, metrics, service_accounts, api-app-keys.
+  - PagerDuty (`pagerduty`): `https://{host}` held to `api.pagerduty.com` and
+    `api.eu.pagerduty.com`, `Authorization: Token token=` from a read-only general access key,
+    Accept `application/vnd.pagerduty+json;version=2`. Incidents (`service_ids[]` limited to
+    `services`), one incident, its alerts and log entries (answer limits on `service.id`),
+    services, on-calls; offset paging. Notes are left out (no service in their answer; writing one
+    needs a user's `From`). Sources: PagerDuty/api-schema openapiv3.json, support.pagerduty.com
+    api-access-keys.
+  - Grafana (`grafana`): `https://{host}`, bearer Viewer service account token. Search (limit
+    `folders` on `folderUIDs`), dashboard by UID (answer limit `meta.folderUid`), provisioning
+    alert rules (answer limit `folderUID`; deprecated for `/apis/rules.alerting.grafana.app` but
+    served), annotations in their own capability since they cannot be held to folders. No
+    documented endpoint lists firing alert instances. Sources: grafana.com developers/http_api
+    folder_dashboard_search, dashboard, alerting_provisioning, annotations, org, service-accounts.
+  - Zephyr (`zephyr`): Zephyr Scale Cloud, `https://{host}/v2` held to
+    `api.zephyrscale.smartbear.com` and its regional `*.api.` hosts, bearer token of the Jira user
+    who made it. Lists of test cases, cycles, executions and statuses by `projectKey` (limit
+    `projects`), and creating a test execution. Reads by key are left out: their answers name the
+    project by id only, so a project limit cannot be checked. Zephyr Squad is not supported: its
+    API wants each request signed with a JWT. Sources: support.smartbear.com zephyr-scale-cloud
+    api-docs (api.cloud.stripped.yml).
+  - Confluence (`confluence`): `https://api.atlassian.com/ex/confluence/{cloud}/wiki`, an
+    Atlassian service account's OAuth 2.0 client credentials at `auth.atlassian.com/oauth/token`
+    (form-encoded), scopes `read:page:confluence`, `read:space:confluence`. v2 spaces, pages by
+    `space-id` (limit `spaces`, comma-joined) and one page (answer limit `spaceId`); paging from
+    the Link header. CQL search and writes are left out: CQL cannot be held to spaces, and page
+    and comment bodies are nested objects the http block does not send. Sources: Atlassian
+    create-oauth-2-0-credential-for-service-accounts, Confluence openapi-v2.v3.json.
+- Ironclad (`ironclad`, JSON only, `describedApp`; read November 1, 2026, tested only against
+  fakes): `https://{host}/public/api/v1` and token `https://{host}/oauth/token`, host held to
+  `ironcladapp.com` and `*.ironcladapp.com` (US, eu1, demo); client credentials with no `scope`
+  (only `grant_type` is required), so the token carries the app's registered scopes;
+  `x-as-user-email` from a plain field via fieldHeaders (Ironclad answers as that user).
+  Workflows, approvals, sign status, records (limit `record_types` on `types`, answer limit on
+  `type`), a workflow comment, a signer reminder. Left out: approving (a judgment in a user's
+  name), creating records and launching workflows (nested bodies the http block does not send),
+  document downloads (files, not JSON). Paging is `page`/`pageSize` with only a total `count`,
+  so no `paging` block. Unverified live: Ironclad documents a JSON token request; the service
+  sends the RFC 6749 form. Sources: developer.ironcladapp.com reference client-credentials-grant,
+  register-oauth-client, authenticate-a-request, list-all-workflows, retrieve-a-workflow,
+  list-all-workflow-approvals, get-sign-status, remind-signer, create-a-comment-on-a-workflow,
+  list-all-records, retrieve-a-record, oauth-token-1, filter-query-param.
+- OneStream (`onestream`, JSON only): hosted only, a personal access token as bearer at
+  `https://{host}/OneStreamApi/api`. The 5.2.0 endpoints take the token alone (7.2.0 needs a
+  SessionInfo from Logon/OpenApplication passed between calls, which the http block cannot
+  carry); every body needs `BaseWebServerUrl`, a `field` param from the connect form. Verify is
+  7.2.0 `Authentication/Logon` (body `{web_server_url}`, shows `Message`). Adapter and cube view
+  data, and ExecuteSequence (destructive, limit `sequences`); limits `applications`, `adapters`,
+  `cube_views`. Left out: SQL and method commands (Administrator role), ExecuteStep (would
+  bypass the sequence limit), self-hosted OAuth (an external IdP's token with a per-customer
+  scope). ExecuteSequence is synchronous and the service waits 30 seconds. Sources:
+  documentation.onestream.com REST API (Authentication2, OneStream WebAPI Endpoints, REST API
+  Summary, Data Provider API) and IDM (Personal Access Tokens, Requirements for Using, Manage,
+  Access the Manage page, About Using Personal Access Tokens in APIs).
+- Zip (`zip`, JSON only, `describedApp`; read November 2, 2026, tested only against fakes):
+  `https://api.ziphq.com`, a restricted read-only API key in `Zip-Api-Key` (no prefix). Search and
+  read requests (limit `departments` on `department_id`, answer limit `department.id` on one
+  request; discover `/departments`), approvals, a request's comments and questionnaire answers,
+  purchase orders, invoices, vendors and agreements, each group its own capability since only
+  requests can be held to departments. Paging `page_token`/`next_page_token`; times are Unix
+  seconds. Verify `GET /requests?page_size=1` (`total`). Read-only: IDC's agents draft but never
+  submit, so request edits, status changes, comments and every other write are left out. Left
+  out too: one agreement by id (the agreement schema has no id field), `/event_logs` (Premier
+  only); `po_number` on the PO search works only where Zip enabled extra PO filters. Sources:
+  Zip Public APIs OpenAPI 1.0.11 (dash.readme.com api-registry e3k9920mvu3gre3), Fivetran and
+  Trelica setup guides for the restricted key.
+- UKG Pro (`ukg-pro`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): `https://{host}` held to `*.ultipro.com`, `*.ultipro.ca` and `*.ukg.net` (the last from
+  Serval's guide only), Basic with a web service account plus `US-CUSTOMER-API-KEY` from a secret
+  field via fieldHeaders. Employment details, person details (answers trimmed to names, work
+  email, state and country: no national id, home address, health or I-9 fields), supervisors,
+  companies (no federal tax id), jobs, org levels (no budget salaries); time off plans; pay
+  (compensation and job history) in its own capability. Limit `companies` on `companyId` (query or
+  path), answer limit `companyId` on the all-employee time off list; discover and verify
+  `/configuration/v1/company-details`. Pages are `page`/`per_Page` with no next marker, so no
+  `paging` block. Left out: employee changes (stateful "since the last call" windows), demographics
+  (protected characteristics), pay statements, audit details (internal table names), every write.
+  Sources: developer.ukg.com/hcm reference pages (`.md` forms with their OpenAPI) for each
+  endpoint, docs web-service-account, welcome, api-rate-limiting; Serval and Lansweeper guides for
+  hosts.
+- iCIMS (`icims`, JSON only, `describedApp`; read November 2, 2026, tested only against fakes):
+  `https://{host}/customers/{customer}` held to `api.icims.com` and `api-eu.icims.com`, Basic with
+  iCIMS-issued API credentials (each IP-allowlisted by iCIMS). Search API for jobs, people and
+  applications (the search JSON a string param, ids back, at most 1000; next pages by an id
+  filter), profiles by id with `fields`, a person by email, profile schemas and lists. Two
+  capabilities: jobs (required) and candidates. No limits: searches are free-form JSON and
+  profiles carry no field to hold them to. Verify `GET /v2/lists` (the customer root has no
+  path of its own under baseUrl). Left out: OAuth (audience unconfirmed), the Offer API (OAuth
+  only), workflow status changes and every write (IDC's agents propose, recruiters decide).
+  Sources: developer.icims.com via the Wayback Machine (Connecting and Authenticating, Profiles,
+  Search API, Workflows, Customers, List API, Schema API, Error Handling, Recruiting Workflow).
+- ZoomInfo (`zoominfo`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): the GTM Data API at `https://api.zoominfo.com/gtm`, client credentials at
+  `/gtm/oauth/v1/token` with `clientAuth: basic` (ZoomInfo's recommended form) and no `scope`
+  (the token gets the app's configured scopes, `api:data:company`, `api:data:contact`).
+  JSON:API bodies: `contentType` and `Accept` `application/vnd.api+json`, each tool's fixed
+  `data.type` (CompanySearch, CompanyEnrich, ContactSearch, ContactEnrich) and params under
+  `data.attributes`; enrich matches one record at `matchCompanyInput.0` / `matchPersonInput.0`
+  with `outputFields` (enum from the spec, a default set). Search companies and contacts (no
+  credits) in a required capability; enrich (one credit per match) in its own. Paging is
+  `page[number]`/`page[size]` with a total in `meta`, so no `paging` block. Left out: lookup,
+  intent, news, scoops and webhooks (no IDC use), bulk enrich past one record, and anything
+  that writes. Verify is a one-result company search for "ZoomInfo" (uses no credits).
+  Sources: docs.gtm.ai client-credentials-flow, reference searchinterface_searchcompany,
+  searchinterface_searchcontact, enrichinterface_enrichcompany, enrichinterface_enrichcontact
+  (their OpenAPI blocks).
+- DocuSign (`docusign`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): eSignature REST v2.1 at `https://{host}/restapi/v2.1/accounts/{account}`, the host
+  (the account's base URI) and token host held to `*.docusign.net`, `account.docusign.com` and
+  `account-d.docusign.com`. Auth `oauth2_jwt` (JWT Grant) at `https://{auth_host}/oauth/token`,
+  `iss` the integration key, `sub` the user agents act as, `aud` `{auth_host}` (a bare host, as
+  the official Node SDK's `generateAndSignJWTAssertion` sends it), scope `signature
+  impersonation`; consent is granted once in the browser (setup step). Envelopes by date and
+  status (`from_date` required, `start_position`/`count`, no `paging` block), one envelope,
+  recipients, documents' details, audit events; resending is `PUT /envelopes/{id}` with
+  `resend_envelope=true` and a fixed empty body, in its own capability. Left out: sending,
+  voiding, correcting or purging envelopes (the same PUT with a body; IDC's rules forbid sending
+  without a human), document downloads (files, not JSON), templates. Verify lists folders.
+  Sources: docusign-esign-node-client ApiClient.js (JWT claims, token request) and
+  EnvelopesApi.js, FoldersApi.js and models (paths, query names, fields); developers.docusign.com
+  JWT Grant (client-rendered, read through the SDK).
+- Axonius (`axonius`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): each customer's own host (`https://{host}`, no `allowedHosts`: no public host
+  pattern), `api-key` as the header auth and `api-secret` through fieldHeaders, as the SDK and
+  XSOAR send them. Device and user search is the v2 POST `/api/v2/assets/{devices|users}` with
+  body `{query, fields, page: {limit, cursor}}` (nested `page.*` params), paged by
+  `meta.next_page`; default fields are the SDK's `fields_default`. One asset by
+  `internal_axon_id` (v1 `GET /api/{asset_type}/{id}`), fields (`GET /api/{asset_type}/fields`)
+  and saved queries (`GET /api/v2/queries`). Read-only: enforcements (list or run), labels,
+  custom data, saved query writes and destroy endpoints are left out. Verify is
+  `GET /api/v2/assets/asset_types`. The v2 reference needs a customer login, so every path is
+  from axonius-api-client 5.0.22 (api_endpoints.py, assets/devices.py, users.py, asset_mixin.py,
+  auth/api_key.py) and the XSOAR Axonius integration (Axonius.py, its tests and README).
+- SAP Concur: not built. Company-level sign-in is only the password grant with
+  `credtype=authtoken` and a one-time company request token; it answers a refresh token that
+  rotates on every use (six months) and a geolocation that becomes the API host, both of which
+  must be stored back after each refresh. A Vendor's `call` cannot write the connection's
+  secret, so the store cannot keep the rotating token; adding that is a store change, not an
+  http block one. Source: developer.concur.com api-reference/authentication/apidoc (read
+  November 2, 2026).
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under
@@ -1294,6 +1533,25 @@ id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resource
   `onPremiseAadUser`) and `from_kind` (`user` / `application`). Sources:
   learn.microsoft.com/graph/api/resources/chatmessagefromidentityset and teamworkuseridentity
   (read October 25, 2026).
+- Marketing and customer apps described only in `connector.json` (http block, `describedApp` in
+  builtin.ts): adestra (`Authorization: TOKEN <key>`; search params go as `search:<field>` and
+  paging as `paging:page`, so a param's wire `name` may hold `:`; nothing launches a campaign,
+  approval requests never send auto_launch; tests are destructive, kept to `test_addresses`),
+  cvent (client credentials with `clientAuth: basic` on api-platform.cvent.com, North America
+  only since the token URL is fixed; read-only; the events limit also checks event lists), forsta-decipher (`x-apikey` on `{host}/api/v1`;
+  surveys only under `selfserve/<directory>/<project>`, since path values are encoded one segment
+  each; read-only), intercom (bearer on `{host}` kept to its US, EU and AU API hosts,
+  `Intercom-Version: 2.14`; replies are destructive, notes and assignment are not), sprout-social
+  (bearer, the customer id a path segment of baseUrl; drafts only, `is_draft` fixed true),
+  synthesia (raw key in `Authorization`; read-only, since creating a video needs nested objects)
+  and wordpress (application password as Basic on `{host}/wp-json/wp/v2`; creates drafts or
+  pending posts, editing a post is destructive; lists and reads use the view context, since
+  the edit context drops or refuses every post the user may not edit). Canva is left out: its API takes only a user's
+  OAuth consent. Sources: app.adestra.com/doc/page/current/index/api (REST pages),
+  developers.cvent.com public OpenAPI spec and tutorials, docs.developer.focusvision.com and
+  release.decipherinc.com/s/local/beacon.html, github.com/intercom/Intercom-OpenAPI 2.14,
+  api.sproutsocial.com/docs, docs.synthesia.io/reference, developer.wordpress.org/rest-api, read
+  November 1, 2026. Tested against a local fake only (`packages/server/test/apps-marketing-cx.test.ts`).
 
 ## Commands
 

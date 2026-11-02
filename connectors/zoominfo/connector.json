@@ -1,0 +1,669 @@
+{
+  "id": "zoominfo",
+  "name": "ZoomInfo",
+  "description": "Let agents look up companies and people in ZoomInfo: search by name, website or role, and read a company's profile (parent, revenue, employees, industry codes) or a contact's work email and phone. For account research, finding decision-makers and checking company details.",
+  "logo": "/brand/registry/zoominfo.svg",
+  "identity": "A ZoomInfo API app using the client credentials grant, signed in as the integration user you pick when you create the app. Agents use that user's ZoomInfo access and its credits.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an app in the ZoomInfo Developer Portal",
+      "body": "Create an app that signs in with client credentials, and pick the integration user it acts as: agents get what that user may see, and enriching uses its credits. Give the app the company and contact data scopes, api:data:company and api:data:contact. ZoomInfo shows the client secret when the app is created.",
+      "link": {
+        "label": "ZoomInfo: client credentials flow",
+        "href": "https://docs.gtm.ai/docs/client-credentials-flow"
+      },
+      "copy": [
+        "{scopes}"
+      ]
+    },
+    {
+      "title": "Enter the client ID and secret",
+      "body": "Copy the app's client ID and client secret into the form below."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Client secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "search",
+      "label": "Search companies and people",
+      "description": "Search ZoomInfo's companies and people by name, website, location, role or company. Answers basic details and ZoomInfo ids, not emails or phone numbers.",
+      "required": true,
+      "note": "Read-only. Searching uses no ZoomInfo credits, but counts against your request limits.",
+      "scopes": [
+        "api:data:company",
+        "api:data:contact"
+      ],
+      "permissions": [],
+      "tools": [
+        "zoominfo_search_companies",
+        "zoominfo_search_contacts"
+      ]
+    },
+    {
+      "id": "enrich",
+      "label": "Read full company and contact profiles",
+      "description": "Read a company's full profile (address, parent, revenue, employees, industry codes) or a person's work email, phone and job details.",
+      "note": "Each company or person matched uses one ZoomInfo credit of the integration user's account.",
+      "scopes": [
+        "api:data:company",
+        "api:data:contact"
+      ],
+      "permissions": [],
+      "tools": [
+        "zoominfo_enrich_company",
+        "zoominfo_enrich_contact"
+      ]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "POST",
+    "path": "/data/v1/companies/search?page%5Bsize%5D=1",
+    "label": "Companies named ZoomInfo",
+    "show": "meta.totalResults",
+    "body": {
+      "data": {
+        "type": "CompanySearch",
+        "attributes": {
+          "companyName": "ZoomInfo"
+        }
+      }
+    }
+  },
+  "revoke": "In the ZoomInfo Developer Portal, delete the app or reset its client secret. Agents lose access to ZoomInfo at once.",
+  "http": {
+    "baseUrl": "https://api.zoominfo.com/gtm",
+    "auth": {
+      "type": "oauth2",
+      "tokenUrl": "https://api.zoominfo.com/gtm/oauth/v1/token",
+      "clientId": "client_id",
+      "clientSecret": "client_secret",
+      "clientAuth": "basic"
+    },
+    "contentType": "application/vnd.api+json",
+    "headers": {
+      "Accept": "application/vnd.api+json"
+    },
+    "tools": [
+      {
+        "name": "zoominfo_search_companies",
+        "description": "Search ZoomInfo's companies by name, website, location, parent or industry keywords. Answers basic details (name, city, country, website, revenue, employees) and ZoomInfo's company id; enrich a company for its full profile. Uses no credits. Answers one page; ask for the next page while a page comes back full.",
+        "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
+        "path": "/data/v1/companies/search",
+        "body": {
+          "data": {
+            "type": "CompanySearch"
+          }
+        },
+        "params": {
+          "company_name": {
+            "type": "string",
+            "description": "Company name",
+            "in": "body",
+            "name": "data.attributes.companyName",
+            "required": false
+          },
+          "website": {
+            "type": "string",
+            "description": "Company website, such as www.example.com. Several separated by commas",
+            "in": "body",
+            "name": "data.attributes.companyWebsite",
+            "required": false
+          },
+          "company_id": {
+            "type": "string",
+            "description": "ZoomInfo company id",
+            "in": "body",
+            "name": "data.attributes.companyId",
+            "required": false
+          },
+          "parent_id": {
+            "type": "string",
+            "description": "Only subsidiaries, divisions and locations of this ZoomInfo parent company id",
+            "in": "body",
+            "name": "data.attributes.parentId",
+            "required": false
+          },
+          "ultimate_parent_id": {
+            "type": "string",
+            "description": "Only companies whose ultimate parent is this ZoomInfo company id",
+            "in": "body",
+            "name": "data.attributes.ultimateParentId",
+            "required": false
+          },
+          "country": {
+            "type": "string",
+            "description": "Country of the company's primary address",
+            "in": "body",
+            "name": "data.attributes.country",
+            "required": false
+          },
+          "state": {
+            "type": "string",
+            "description": "State or province of the company's address",
+            "in": "body",
+            "name": "data.attributes.state",
+            "required": false
+          },
+          "industry_keywords": {
+            "type": "string",
+            "description": "Industry keywords, with AND or OR, such as software AND security",
+            "in": "body",
+            "name": "data.attributes.industryKeywords",
+            "required": false
+          },
+          "exclude_defunct": {
+            "type": "boolean",
+            "description": "Leave out defunct companies",
+            "in": "body",
+            "name": "data.attributes.excludeDefunctCompanies",
+            "default": true
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page[number]",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "How many per page, at most 100",
+            "in": "query",
+            "name": "page[size]",
+            "default": 25
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": [
+            "id",
+            "attributes.name",
+            "attributes.website",
+            "attributes.city",
+            "attributes.state",
+            "attributes.country",
+            "attributes.revenue",
+            "attributes.employeeCount"
+          ]
+        }
+      },
+      {
+        "name": "zoominfo_enrich_company",
+        "description": "Read one company's full ZoomInfo profile: legal name, headquarters address, parent and ultimate parent, founding year, revenue, employees, industries and SIC and NAICS codes. Send at least one of these: best ZoomInfo company id from a search, otherwise name, website or ticker with its country. Each matched company uses one ZoomInfo credit.",
+        "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
+        "path": "/data/v1/companies/enrich",
+        "body": {
+          "data": {
+            "type": "CompanyEnrich"
+          }
+        },
+        "params": {
+          "company_id": {
+            "type": "integer",
+            "description": "ZoomInfo company id, from a company search",
+            "in": "body",
+            "name": "data.attributes.matchCompanyInput.0.companyId",
+            "required": false
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name",
+            "in": "body",
+            "name": "data.attributes.matchCompanyInput.0.companyName",
+            "required": false
+          },
+          "website": {
+            "type": "string",
+            "description": "Company website, such as www.example.com",
+            "in": "body",
+            "name": "data.attributes.matchCompanyInput.0.companyWebsite",
+            "required": false
+          },
+          "ticker": {
+            "type": "string",
+            "description": "Stock ticker symbol",
+            "in": "body",
+            "name": "data.attributes.matchCompanyInput.0.companyTicker",
+            "required": false
+          },
+          "country": {
+            "type": "string",
+            "description": "Country of the company's primary address",
+            "in": "body",
+            "name": "data.attributes.matchCompanyInput.0.companyCountry",
+            "required": false
+          },
+          "output_fields": {
+            "type": "array",
+            "items": "string",
+            "enum": [
+              "alternateLogos",
+              "businessModel",
+              "certificationDate",
+              "certified",
+              "city",
+              "companyFunding",
+              "companyStatus",
+              "companyStatusDate",
+              "competitors",
+              "continent",
+              "country",
+              "createdDate",
+              "departmentBudgets",
+              "description",
+              "domainList",
+              "employeeCount",
+              "employeeCountByDepartment",
+              "employeeGrowth",
+              "employeeRange",
+              "engagements",
+              "fax",
+              "foundedYear",
+              "id",
+              "industries",
+              "industryCodes",
+              "isDefunct",
+              "lastUpdatedDate",
+              "locationCount",
+              "locationMatch",
+              "logo",
+              "metroArea",
+              "naicsCodes",
+              "name",
+              "numberOfContactsInZoomInfo",
+              "parentId",
+              "parentName",
+              "phone",
+              "primaryIndustry",
+              "primaryIndustryCode",
+              "primarySubIndustryCode",
+              "products",
+              "recentFundingAmount",
+              "recentFundingDate",
+              "revenue",
+              "revenueRange",
+              "sicCodes",
+              "socialMediaUrls",
+              "state",
+              "street",
+              "subUnitIndustries",
+              "subUnitType",
+              "ticker",
+              "totalFundingAmount",
+              "type",
+              "ultimateParentEmployees",
+              "ultimateParentId",
+              "ultimateParentName",
+              "ultimateParentRevenue",
+              "website",
+              "zipCode"
+            ],
+            "description": "The fields to answer",
+            "in": "body",
+            "name": "data.attributes.outputFields",
+            "default": [
+              "id",
+              "name",
+              "website",
+              "ticker",
+              "street",
+              "city",
+              "state",
+              "zipCode",
+              "country",
+              "phone",
+              "parentId",
+              "parentName",
+              "ultimateParentId",
+              "ultimateParentName",
+              "foundedYear",
+              "revenue",
+              "revenueRange",
+              "employeeCount",
+              "employeeRange",
+              "primaryIndustry",
+              "industries",
+              "sicCodes",
+              "naicsCodes",
+              "companyStatus",
+              "isDefunct",
+              "type"
+            ]
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": [
+            "id",
+            "meta",
+            "attributes"
+          ]
+        }
+      },
+      {
+        "name": "zoominfo_search_contacts",
+        "description": "Search ZoomInfo's people by name, email, job title, management level, department or company; send at least one. Answers names, job titles, the company and whether ZoomInfo holds an email or phone, with ZoomInfo's person id; enrich a contact for the email and phone. Uses no credits. Answers one page; ask for the next page while a page comes back full.",
+        "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
+        "path": "/data/v1/contacts/search",
+        "body": {
+          "data": {
+            "type": "ContactSearch"
+          }
+        },
+        "params": {
+          "full_name": {
+            "type": "string",
+            "description": "Full name",
+            "in": "body",
+            "name": "data.attributes.fullName",
+            "required": false
+          },
+          "first_name": {
+            "type": "string",
+            "description": "First name",
+            "in": "body",
+            "name": "data.attributes.firstName",
+            "required": false
+          },
+          "last_name": {
+            "type": "string",
+            "description": "Last name",
+            "in": "body",
+            "name": "data.attributes.lastName",
+            "required": false
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address. Several separated by commas",
+            "in": "body",
+            "name": "data.attributes.emailAddress",
+            "required": false
+          },
+          "person_id": {
+            "type": "string",
+            "description": "ZoomInfo person id. Several separated by commas",
+            "in": "body",
+            "name": "data.attributes.personId",
+            "required": false
+          },
+          "job_title": {
+            "type": "string",
+            "description": "Job title; several joined with OR",
+            "in": "body",
+            "name": "data.attributes.jobTitle",
+            "required": false
+          },
+          "management_level": {
+            "type": "string",
+            "description": "Management levels separated by commas, such as C Level Exec,VP Level Exec,Director",
+            "in": "body",
+            "name": "data.attributes.managementLevel",
+            "required": false
+          },
+          "department": {
+            "type": "string",
+            "description": "Departments separated by commas, such as Finance,Marketing",
+            "in": "body",
+            "name": "data.attributes.department",
+            "required": false
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name",
+            "in": "body",
+            "name": "data.attributes.companyName",
+            "required": false
+          },
+          "company_id": {
+            "type": "string",
+            "description": "ZoomInfo company id",
+            "in": "body",
+            "name": "data.attributes.companyId",
+            "required": false
+          },
+          "company_website": {
+            "type": "string",
+            "description": "Company website, such as www.example.com",
+            "in": "body",
+            "name": "data.attributes.companyWebsite",
+            "required": false
+          },
+          "country": {
+            "type": "string",
+            "description": "Country of the company's primary address",
+            "in": "body",
+            "name": "data.attributes.country",
+            "required": false
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page[number]",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "How many per page, at most 100",
+            "in": "query",
+            "name": "page[size]",
+            "default": 25
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": [
+            "id",
+            "attributes.firstName",
+            "attributes.lastName",
+            "attributes.jobTitle",
+            "attributes.managementLevel",
+            "attributes.company.id",
+            "attributes.company.name",
+            "attributes.hasEmail",
+            "attributes.hasDirectPhone",
+            "attributes.contactAccuracyScore",
+            "attributes.lastUpdatedDate"
+          ]
+        }
+      },
+      {
+        "name": "zoominfo_enrich_contact",
+        "description": "Read one person's ZoomInfo profile, such as work email, phone, job title and company. Send at least one of these: best ZoomInfo person id from a search, otherwise email, or name with the company. Each matched person uses one ZoomInfo credit.",
+        "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
+        "path": "/data/v1/contacts/enrich",
+        "body": {
+          "data": {
+            "type": "ContactEnrich"
+          }
+        },
+        "params": {
+          "person_id": {
+            "type": "integer",
+            "description": "ZoomInfo person id, from a contact search",
+            "in": "body",
+            "name": "data.attributes.matchPersonInput.0.personId",
+            "required": false
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address",
+            "in": "body",
+            "name": "data.attributes.matchPersonInput.0.emailAddress",
+            "required": false
+          },
+          "full_name": {
+            "type": "string",
+            "description": "Full name",
+            "in": "body",
+            "name": "data.attributes.matchPersonInput.0.fullName",
+            "required": false
+          },
+          "first_name": {
+            "type": "string",
+            "description": "First name",
+            "in": "body",
+            "name": "data.attributes.matchPersonInput.0.firstName",
+            "required": false
+          },
+          "last_name": {
+            "type": "string",
+            "description": "Last name",
+            "in": "body",
+            "name": "data.attributes.matchPersonInput.0.lastName",
+            "required": false
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name",
+            "in": "body",
+            "name": "data.attributes.matchPersonInput.0.companyName",
+            "required": false
+          },
+          "company_id": {
+            "type": "integer",
+            "description": "ZoomInfo company id",
+            "in": "body",
+            "name": "data.attributes.matchPersonInput.0.companyId",
+            "required": false
+          },
+          "output_fields": {
+            "type": "array",
+            "items": "string",
+            "enum": [
+              "city",
+              "companyAlternateLogos",
+              "companyCity",
+              "companyContinent",
+              "companyCountry",
+              "companyDescription",
+              "companyDivision",
+              "companyEmployeeCount",
+              "companyEmployeeGrowth",
+              "companyEmployeeRange",
+              "companyFax",
+              "companyId",
+              "companyIndustries",
+              "companyIndustryCodes",
+              "companyLogo",
+              "companyNaicsCodes",
+              "companyName",
+              "companyPhone",
+              "companyPrimaryIndustry",
+              "companyPrimaryIndustryCode",
+              "companyPrimarySubIndustryCode",
+              "companyRanking",
+              "companyRevenue",
+              "companyRevenueNumeric",
+              "companyRevenueRange",
+              "companySicCodes",
+              "companySocialMediaUrls",
+              "companyState",
+              "companyStreet",
+              "companyTicker",
+              "companyType",
+              "companyWebsite",
+              "companyZipCode",
+              "contactAccuracyScore",
+              "continent",
+              "country",
+              "directPhoneAlt",
+              "directPhoneDoNotCall",
+              "education",
+              "email",
+              "emailAlt",
+              "employmentHistory",
+              "engagements",
+              "externalUrls",
+              "firstName",
+              "hasCanadianEmail",
+              "hashedEmails",
+              "id",
+              "isDefunct",
+              "jobFunction",
+              "jobTitle",
+              "lastName",
+              "lastUpdatedDate",
+              "locationCompanyId",
+              "managementLevel",
+              "metroArea",
+              "middleName",
+              "mobilePhone",
+              "mobilePhoneAlt",
+              "mobilePhoneDoNotCall",
+              "noticeProvidedDate",
+              "personHasMoved",
+              "phone",
+              "picture",
+              "positionStartDate",
+              "region",
+              "salutation",
+              "state",
+              "street",
+              "suffix",
+              "supplementalEmail",
+              "techSkills",
+              "validDate",
+              "withinCalifornia",
+              "withinCanada",
+              "withinEu",
+              "yearsOfExperience",
+              "zipCode"
+            ],
+            "description": "The fields to answer",
+            "in": "body",
+            "name": "data.attributes.outputFields",
+            "default": [
+              "id",
+              "firstName",
+              "lastName",
+              "jobTitle",
+              "jobFunction",
+              "managementLevel",
+              "email",
+              "phone",
+              "companyId",
+              "companyName",
+              "companyWebsite",
+              "country",
+              "personHasMoved",
+              "lastUpdatedDate",
+              "contactAccuracyScore"
+            ]
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": [
+            "id",
+            "meta",
+            "attributes"
+          ]
+        }
+      }
+    ]
+  }
+}

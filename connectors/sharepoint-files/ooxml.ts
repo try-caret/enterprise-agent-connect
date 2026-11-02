@@ -2,13 +2,16 @@ import { crc32 } from "node:zlib";
 import { DOMParser, XMLSerializer, type Document, type Element, type Node } from "@xmldom/xmldom";
 import { unzipSync, zipSync, type Zippable } from "fflate";
 import { Denied } from "../../packages/connector-kit/src/common.js";
-import { clip } from "./sandbox.js";
 
 // Untrusted Office files (zip of XML parts), opened with the limits of the library vetting
 // (LIBRARY-SECURITY-VETTING, 2026-11-01): sizes are read from the zip's own directory and
 // checked before anything is inflated, every inflated part must match its recorded CRC (fflate
 // checks none, and a header that lies about a size would otherwise cut a part short), and XML
 // that declares a DOCTYPE or an entity is never parsed.
+//
+// A refusal reaches the agent and the audit row's reason, so it never quotes the file: not a
+// parser message (xmldom's quote the document's tags, attributes and entities), not a tag,
+// and a part's name only when it is one of Word's own (shownPart).
 
 export const MAX_ENTRIES = 2_000;
 export const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
@@ -21,6 +24,20 @@ const MAX_RATIO = 200;
 // Below this a part cannot be a bomb, whatever its ratio (a run of spaces compresses well).
 const RATIO_FLOOR = 1024 * 1024;
 const MAX_DEPTH = 256;
+
+// Word's own part names, from a fixed vocabulary with numbers. Any other name is the file
+// maker's text (a newline, a quote, an instruction to the agent) and is never shown.
+const WORD_PART = new RegExp(
+  "^(?:\\[Content_Types\\]\\.xml|_rels/\\.rels|docProps/(?:app|core|custom)\\.xml" +
+    "|word/(?:_rels/)?(?:document|styles|stylesWithEffects|settings|webSettings|fontTable|numbering" +
+    "|comments|commentsExtended|commentsIds|commentsExtensible|footnotes|endnotes|people" +
+    "|(?:header|footer)\\d{0,4})\\.xml(?:\\.rels)?" +
+    "|word/theme/theme\\d{0,4}\\.xml|word/media/image\\d{1,5}\\.(?:png|jpe?g|gif|bmp|tiff?|emf|wmf|svg)" +
+    "|customXml/(?:_rels/)?item(?:Props)?\\d{1,4}\\.xml(?:\\.rels)?)$",
+);
+
+/** A part's name for a refusal: Word's own name, or `other`. */
+export const shownPart = (name: string, other = "a part") => (WORD_PART.test(name) ? name : other);
 
 type Directory = { name: string; crc: number; size: number; originalSize: number }[];
 
@@ -78,7 +95,7 @@ export function openZip(
         if (index > MAX_ENTRIES)
           throw new Denied(`That file has more than ${MAX_ENTRIES} parts, so it is not read`);
         if (seen.has(file.name))
-          throw new Denied(`That file holds ${clip(file.name, 100)} twice, so it is not read`);
+          throw new Denied(`That file holds ${shownPart(file.name, "one part")} twice, so it is not read`);
         seen.add(file.name);
         if (/(^|[/\\])\.\.([/\\]|$)/.test(file.name) || /^[/\\]/.test(file.name))
           throw new Denied("That file has a part outside the document, so it is not read");
@@ -111,9 +128,9 @@ export function openZip(
   for (const [name, bytes] of Object.entries(files)) {
     const want = expected.get(name)!;
     if (bytes.length !== want.size)
-      throw new Denied(`That file's zip directory disagrees with ${clip(name, 100)}, so it is not read`);
+      throw new Denied(`That file's zip directory disagrees with ${shownPart(name)}, so it is not read`);
     if ((crc32(bytes) >>> 0) !== want.crc)
-      throw new Denied(`That file is damaged: ${clip(name, 100)} does not match its checksum`);
+      throw new Denied(`That file is damaged: ${shownPart(name)} does not match its checksum`);
     parts.set(name, bytes);
   }
   return parts;
@@ -126,41 +143,36 @@ export function makeZip(parts: Map<string, Uint8Array>): Uint8Array {
   return zipSync(input);
 }
 
-const stop = (level: string, message: string): never => {
-  throw new Denied(`That file has XML that could not be read (${level}: ${clip(message.split("\n")[0], 150)})`);
-};
-
 /** One XML part, parsed without any DTD, with one root and a bounded depth. */
 export function parseXml(bytes: Uint8Array, name: string): Document {
-  if (bytes.length > MAX_XML_BYTES)
-    throw new Denied(`${clip(name, 100)} is larger than ${MAX_XML_BYTES / 1024 / 1024} MB, so it is not read`);
+  const part = shownPart(name);
+  const refuse = (why: string) => new Denied(`That file is not read: ${part} ${why}`);
+  if (bytes.length > MAX_XML_BYTES) throw refuse(`is larger than ${MAX_XML_BYTES / 1024 / 1024} MB`);
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    throw new Denied(`${clip(name, 100)} is not UTF-8 XML, so it is not read`);
+    throw refuse("is not UTF-8 XML");
   }
   if (/<!DOCTYPE|<!ENTITY/i.test(text))
-    throw new Denied(`${clip(name, 100)} declares a DOCTYPE or an entity, so it is not read`);
+    throw refuse("declares a DOCTYPE or an entity");
+  // Any report from xmldom, a warning included, stops the parse; its message stays here.
+  const stop = (): never => {
+    throw refuse("is not well-formed XML");
+  };
   let doc: Document;
   try {
-    doc = new DOMParser({ locator: false, onError: stop }).parseFromString(
-      text,
-      "application/xml",
-    );
-  } catch (error) {
-    if (error instanceof Denied) throw error;
-    const cause = (error as { cause?: unknown }).cause;
-    if (cause instanceof Denied) throw cause;
-    throw new Denied(`${clip(name, 100)} is not well-formed XML, so it is not read`);
+    doc = new DOMParser({ locator: false, onError: stop }).parseFromString(text, "application/xml");
+  } catch {
+    throw refuse("is not well-formed XML");
   }
   const roots = Array.from(doc.childNodes).filter((n) => n.nodeType === 1);
-  if (roots.length !== 1) throw new Denied(`${clip(name, 100)} must have exactly one root element`);
+  if (roots.length !== 1) throw refuse("does not have exactly one root element");
   // Iterative, so a deep document cannot exhaust the stack here.
   const stack: [Node, number][] = [[roots[0], 1]];
   while (stack.length) {
     const [node, depth] = stack.pop()!;
-    if (depth > MAX_DEPTH) throw new Denied(`${clip(name, 100)} is nested too deeply, so it is not read`);
+    if (depth > MAX_DEPTH) throw refuse("is nested too deeply");
     for (let c = node.firstChild; c; c = c.nextSibling) if (c.nodeType === 1) stack.push([c, depth + 1]);
   }
   return doc;

@@ -6,7 +6,11 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
 
 - **Built-in apps:** Jira, Microsoft 365 (Outlook mail and calendar, SharePoint files and Excel,
   Teams, Entra ID, Intune, Dynamics 365), Jamf Pro, Okta, Slack, Salesforce, Gong, SAP S/4HANA,
-  Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect.
+  Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect; and, described in JSON only,
+  GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr Scale, Confluence, Lusha,
+  ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia,
+  WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream,
+  Zip, UKG Pro, iCIMS, ZoomInfo, DocuSign, Axonius.
 - **Your own apps without code:** describe an internal REST API or a SaaS app's in one
   `connector.json`, or draft one from its OpenAPI spec
   ([docs/http-connector.md](docs/http-connector.md)); a SOAP service
@@ -185,6 +189,10 @@ const orders: ConnectorJson = {
 };
 ```
 
+**Your own app, per organization.** Each organization can add its own apps through the admin
+API, as many as it wants, without a restart: see [Add internal apps through the admin
+API](docs/http-connector.md#add-internal-apps-through-the-admin-api).
+
 **Your own app, as code.** Build a `ConnectorModule` on the connector kit and give it its
 definition as `connector` ([docs/connectors.md](docs/connectors.md)). `create` gets a
 `ConnectorContext`, `{ connector }`: the definition parsed, with the branding filled in.
@@ -244,12 +252,14 @@ authority signed, name a ConfigMap or Secret holding its bundle in `caBundle`
   migrations) and its tests
 - `packages/connector-kit`: what a connector builds on (schemas, tool helpers, vendor types)
 - `packages/client`: typed admin API client
-- `connectors/<app>`: one folder per app: `connector.json`, `index.ts`, `tools.ts`, `vendor.ts`
+- `connectors/<app>`: one folder per app: `connector.json`, and for apps with code `index.ts`,
+  `tools.ts`, `vendor.ts`
 - `connectors/http`, `connectors/soap`, `connectors/odata`, `connectors/sql`: run any app
   described only in its `connector.json` (docs/http-connector.md, docs/soap-connector.md,
   docs/odata-connector.md, docs/sql-connector.md)
 - `examples/internal-app`: a small internal API and its connector, for the quick start
-- `scripts/openapi-to-connector.ts`: drafts an http connector from an OpenAPI 3.x spec
+- `scripts/openapi-to-connector.ts`: drafts an http connector from an OpenAPI 3.x spec (the
+  drafting itself is `connectors/http/openapi.ts`, also behind the admin API's internal app drafts)
 - `examples/legacy-apps`: a SOAP and an SAP OData connector, described only in JSON
 - `scripts/wsdl-to-connector.ts`, `scripts/odata-to-connector.ts`: draft a connector from a WSDL
   or an OData `$metadata`

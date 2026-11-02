@@ -1,0 +1,247 @@
+{
+  "id": "pagerduty",
+  "name": "PagerDuty",
+  "description": "Let agents read PagerDuty incidents, their alerts and timelines, the services they hit and who is on call. For first response to production alerts and incident summaries for on-call.",
+  "logo": "/brand/registry/pagerduty.svg",
+  "identity": "A read-only PagerDuty general access REST API key. It is not tied to a person and can read every incident, service and schedule in your account.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a read-only API key",
+      "body": "You need a PagerDuty Admin or Account Owner for this. Create a general access key and tick Read-only, so agents can never change incidents. PagerDuty shows the key only once. You can test it with the command below: it lists a few services and changes nothing.",
+      "link": {
+        "label": "PagerDuty: API access keys",
+        "href": "https://support.pagerduty.com/main/docs/api-access-keys"
+      },
+      "click": [
+        "In PagerDuty, go to Integrations > API Access Keys > Create New API Key.",
+        "Description: AI agents. Tick Read-only API Key, then Create Key and copy it."
+      ],
+      "copy": [
+        "curl -s -H \"Authorization: Token token=$PAGERDUTY_KEY\" -H \"Accept: application/vnd.pagerduty+json;version=2\" \"https://api.pagerduty.com/services?limit=5\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "API address",
+      "help": "api.pagerduty.com, or api.eu.pagerduty.com for an account in the EU service region.",
+      "placeholder": "api.pagerduty.com",
+      "secret": false
+    },
+    { "id": "api_key", "label": "API key", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read incidents",
+      "description": "List incidents by status, service, urgency and time, read one incident with its alerts and timeline, list services and see who is on call.",
+      "required": true,
+      "note": "Read-only. Reaches every incident unless you keep a key to chosen services; who is on call is read for the whole account.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "pagerduty_list_incidents",
+        "pagerduty_get_incident",
+        "pagerduty_list_incident_alerts",
+        "pagerduty_list_incident_log",
+        "pagerduty_list_services",
+        "pagerduty_list_oncalls"
+      ]
+    }
+  ],
+  "limits": [
+    {
+      "id": "services",
+      "label": "Services",
+      "help": "Optional: only incidents on these PagerDuty services (their ids, shown under Services after connecting). Leave empty for every service.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Z0-9]{5,20}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/abilities",
+    "label": "PagerDuty account abilities",
+    "show": "abilities[]"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/services?limit=100",
+    "label": "Services",
+    "show": "services[].id",
+    "name": "services[].name"
+  },
+  "revoke": "In PagerDuty, go to Integrations > API Access Keys and remove the key. Agents lose access to PagerDuty at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "allowedHosts": ["api.pagerduty.com", "api.eu.pagerduty.com"],
+    "auth": { "type": "header", "header": "Authorization", "prefix": "Token token=", "value": "api_key" },
+    "headers": { "Accept": "application/vnd.pagerduty+json;version=2" },
+    "tools": [
+      {
+        "name": "pagerduty_list_incidents",
+        "description": "List incidents, newest first by default. Without since and until, only those of the last month. Pass offset to read further pages; more in the answer says whether there are any.",
+        "method": "GET",
+        "path": "/incidents",
+        "params": {
+          "statuses": {
+            "type": "array",
+            "items": "string",
+            "enum": ["triggered", "acknowledged", "resolved"],
+            "description": "Only incidents in these statuses",
+            "in": "query",
+            "name": "statuses[]",
+            "required": false
+          },
+          "service_ids": {
+            "type": "array",
+            "items": "string",
+            "description": "Only incidents on these services",
+            "in": "query",
+            "name": "service_ids[]",
+            "required": false,
+            "limit": "services"
+          },
+          "urgencies": {
+            "type": "array",
+            "items": "string",
+            "enum": ["high", "low"],
+            "description": "Only incidents with these urgencies",
+            "in": "query",
+            "name": "urgencies[]",
+            "required": false
+          },
+          "since": { "type": "string", "description": "Start of the window, such as 2026-10-01T00:00:00Z", "in": "query", "required": false },
+          "until": { "type": "string", "description": "End of the window", "in": "query", "required": false },
+          "sort_by": { "type": "string", "description": "Such as created_at:desc", "in": "query", "default": "created_at:desc" },
+          "limit": { "type": "integer", "description": "Incidents per page, at most 100", "in": "query", "default": 25 },
+          "offset": { "type": "integer", "description": "How many to skip", "in": "query", "default": 0 }
+        },
+        "result": {
+          "fields": [
+            "more",
+            "incidents.id",
+            "incidents.incident_number",
+            "incidents.title",
+            "incidents.status",
+            "incidents.urgency",
+            "incidents.priority.summary",
+            "incidents.service.id",
+            "incidents.service.summary",
+            "incidents.assignments.assignee.summary",
+            "incidents.created_at",
+            "incidents.html_url"
+          ]
+        }
+      },
+      {
+        "name": "pagerduty_get_incident",
+        "description": "Read one incident: title, status, urgency, priority, service, escalation policy, who it is assigned to and acknowledged by, and when.",
+        "method": "GET",
+        "path": "/incidents/{id}",
+        "params": { "id": { "type": "string", "description": "The incident id, such as PT4KHLK", "in": "path" } },
+        "answerLimits": [{ "field": "incident.service.id", "limit": "services" }]
+      },
+      {
+        "name": "pagerduty_list_incident_alerts",
+        "description": "List an incident's alerts, with what each monitoring tool sent. Pass offset to read further pages.",
+        "method": "GET",
+        "path": "/incidents/{id}/alerts",
+        "params": {
+          "id": { "type": "string", "description": "The incident id", "in": "path" },
+          "limit": { "type": "integer", "description": "Alerts per page, at most 100", "in": "query", "default": 25 },
+          "offset": { "type": "integer", "description": "How many to skip", "in": "query", "default": 0 }
+        },
+        "answerLimits": [{ "field": "alerts.service.id", "limit": "services" }],
+        "result": {
+          "fields": [
+            "more",
+            "alerts.id",
+            "alerts.summary",
+            "alerts.status",
+            "alerts.severity",
+            "alerts.created_at",
+            "alerts.service.summary",
+            "alerts.body.details",
+            "alerts.body.cef_details.source_origin"
+          ]
+        }
+      },
+      {
+        "name": "pagerduty_list_incident_log",
+        "description": "List an incident's timeline: triggers, notifications, acknowledgements, escalations, notes and resolution. Pass offset to read further pages.",
+        "method": "GET",
+        "path": "/incidents/{id}/log_entries",
+        "params": {
+          "id": { "type": "string", "description": "The incident id", "in": "path" },
+          "is_overview": { "type": "boolean", "description": "Only the most important changes", "in": "query", "default": false },
+          "limit": { "type": "integer", "description": "Entries per page, at most 100", "in": "query", "default": 50 },
+          "offset": { "type": "integer", "description": "How many to skip", "in": "query", "default": 0 }
+        },
+        "answerLimits": [{ "field": "log_entries.service.id", "limit": "services" }],
+        "result": {
+          "fields": ["more", "log_entries.type", "log_entries.summary", "log_entries.note", "log_entries.created_at", "log_entries.agent.summary", "log_entries.channel.summary"]
+        }
+      },
+      {
+        "name": "pagerduty_list_services",
+        "description": "List services with their status and escalation policy, or find one by name.",
+        "method": "GET",
+        "path": "/services",
+        "params": {
+          "query": { "type": "string", "description": "Only services whose name contains this", "in": "query", "required": false },
+          "limit": { "type": "integer", "description": "Services per page, at most 100", "in": "query", "default": 25 },
+          "offset": { "type": "integer", "description": "How many to skip", "in": "query", "default": 0 }
+        },
+        "result": {
+          "fields": ["more", "services.id", "services.name", "services.status", "services.escalation_policy.summary", "services.html_url"]
+        }
+      },
+      {
+        "name": "pagerduty_list_oncalls",
+        "description": "List who is on call now, by escalation policy and level, or within a window.",
+        "method": "GET",
+        "path": "/oncalls",
+        "params": {
+          "escalation_policy_ids": {
+            "type": "array",
+            "items": "string",
+            "description": "Only these escalation policies",
+            "in": "query",
+            "name": "escalation_policy_ids[]",
+            "required": false
+          },
+          "schedule_ids": {
+            "type": "array",
+            "items": "string",
+            "description": "Only these schedules",
+            "in": "query",
+            "name": "schedule_ids[]",
+            "required": false
+          },
+          "since": { "type": "string", "description": "Start of the window; now when left out", "in": "query", "required": false },
+          "until": { "type": "string", "description": "End of the window", "in": "query", "required": false },
+          "limit": { "type": "integer", "description": "Entries per page, at most 100", "in": "query", "default": 25 },
+          "offset": { "type": "integer", "description": "How many to skip", "in": "query", "default": 0 }
+        },
+        "result": {
+          "fields": [
+            "more",
+            "oncalls.user.summary",
+            "oncalls.escalation_policy.summary",
+            "oncalls.escalation_level",
+            "oncalls.schedule.summary",
+            "oncalls.start",
+            "oncalls.end"
+          ]
+        }
+      }
+    ]
+  }
+}
