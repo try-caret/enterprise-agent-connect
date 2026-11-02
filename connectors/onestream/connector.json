@@ -1,0 +1,191 @@
+{
+  "id": "onestream",
+  "name": "OneStream",
+  "description": "Let agents pull data from the OneStream dashboard data adapters and cube views you choose, and run the data management sequences you allow. For month-end close checks, balance sheet reconciliations and flux, business reviews, and budget and forecast work.",
+  "logo": "/brand/registry/onestream.svg",
+  "identity": "A personal access token of a OneStream user. Agents get exactly that user's access, so use a user made for agents, not an administrator. For OneStream-hosted environments only.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Set up a user for agents",
+      "body": "Personal access tokens work on OneStream-hosted environments set up for OneStream IdentityServer. A token takes on the identity and access of the user who creates it, so sign in as a user made for agents: not in the Administrators group, with access only to the applications, data adapters, cube views and data management sequences agents should use. That user needs the AccessAsNonInteractiveUser security role through a group.",
+      "link": {
+        "label": "OneStream: requirements for using personal access tokens",
+        "href": "https://documentation.onestream.com/docs/Content/IDM/Requirements%20for%20Using%20Personal%20Access%20Tokens.html"
+      },
+      "click": [
+        "System > Administration > Security > Create Group. Name: PATs Users.",
+        "Group Membership: Add Users > the agents' user > Save.",
+        "System Security Roles > the ellipsis next to AccessAsNonInteractiveUser > PATs Users > OK > Save."
+      ]
+    },
+    {
+      "title": "Create a personal access token as that user",
+      "body": "Sign in to OneStream as the agents' user and create the token. OneStream shows it only once.",
+      "link": {
+        "label": "OneStream: manage personal access tokens",
+        "href": "https://documentation.onestream.com/docs/Content/IDM/Manage%20Personal%20Access%20Tokens.html"
+      },
+      "click": [
+        "Select the Identity & Access Management Portal icon > Manage Personal Access Tokens.",
+        "Create Token. Description: AI agents > CREATE TOKEN > COPY."
+      ]
+    },
+    {
+      "title": "Find your OneStream addresses",
+      "body": "Enter the host name of your OneStream environment, such as acme.onestreamcloud.com, and the web server address you sign in at, such as https://acme.onestreamcloud.com/OneStreamWeb. OneStream asks for that address in every request."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "OneStream host",
+      "help": "The host name only, such as acme.onestreamcloud.com.",
+      "placeholder": "acme.onestreamcloud.com",
+      "secret": false
+    },
+    {
+      "id": "web_server_url",
+      "label": "Web server address",
+      "help": "The address of your OneStream web server, such as https://acme.onestreamcloud.com/OneStreamWeb.",
+      "placeholder": "https://acme.onestreamcloud.com/OneStreamWeb",
+      "secret": false
+    },
+    { "id": "token", "label": "Personal access token", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read data",
+      "description": "Get the rows of a dashboard data adapter or a cube view, such as trial balances, reconciliations, variances or forecast workbooks.",
+      "required": true,
+      "note": "Changes nothing. Reaches every adapter and cube view the token's user can open, unless you keep a key to chosen ones.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["onestream_get_adapter_data", "onestream_get_cube_view_data"]
+    },
+    {
+      "id": "run",
+      "label": "Run data management sequences",
+      "description": "Run a data management sequence, such as an import, a calculation or a consolidation, and wait for it to finish.",
+      "note": "Sequences can clear, load and recalculate data. Keep each key to chosen sequences.",
+      "destructive": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": ["onestream_run_sequence"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "applications",
+      "label": "Applications",
+      "help": "Optional: only these OneStream applications, by name. Leave empty for every application the token's user can open.",
+      "kind": "list",
+      "required": false
+    },
+    {
+      "id": "adapters",
+      "label": "Data adapters",
+      "help": "Optional: only these dashboard data adapters, by name.",
+      "kind": "list",
+      "required": false
+    },
+    {
+      "id": "cube_views",
+      "label": "Cube views",
+      "help": "Optional: only these cube views, by name.",
+      "kind": "list",
+      "required": false
+    },
+    {
+      "id": "sequences",
+      "label": "Data management sequences",
+      "help": "Optional: only these data management sequences, by name. Leave empty for every sequence the token's user can run.",
+      "kind": "list",
+      "required": false
+    }
+  ],
+  "verify": {
+    "method": "POST",
+    "path": "/Authentication/Logon?api-version=7.2.0",
+    "body": { "BaseWebServerUrl": "{web_server_url}" },
+    "label": "OneStream sign-in",
+    "show": "Message"
+  },
+  "revoke": "Sign in to OneStream, open the Identity & Access Management Portal > Manage Personal Access Tokens, select REVOKE on the token and confirm. Agents lose access to OneStream at once.",
+  "http": {
+    "baseUrl": "https://{host}/OneStreamApi/api",
+    "auth": { "type": "bearer", "token": "token" },
+    "tools": [
+      {
+        "name": "onestream_get_adapter_data",
+        "description": "Get the rows a dashboard data adapter returns, as a table under the name you give it.",
+        "method": "POST",
+        "path": "/DataProvider/GetAdoDataSetForAdapter",
+        "params": {
+          "api_version": { "type": "string", "enum": ["5.2.0"], "description": "The API version", "in": "query", "name": "api-version", "default": "5.2.0" },
+          "web_server_url": { "type": "string", "description": "The web server address", "in": "body", "name": "BaseWebServerUrl", "field": "web_server_url" },
+          "application": { "type": "string", "description": "The OneStream application's name", "in": "body", "name": "ApplicationName", "limit": "applications" },
+          "adapter": { "type": "string", "description": "The data adapter's name", "in": "body", "name": "AdapterName", "limit": "adapters" },
+          "table_name": { "type": "string", "description": "Name of the table the rows come back under", "in": "body", "name": "ResultDataTableName", "default": "ResultsTable" },
+          "variables": {
+            "type": "string",
+            "description": "Values for the adapter's substitution variables, as Name1=[Value1],Name2=[Value2]",
+            "in": "body",
+            "name": "CustomSubstVarsAsCommaSeparatedPairs",
+            "required": false
+          }
+        }
+      },
+      {
+        "name": "onestream_get_cube_view_data",
+        "description": "Get the rows of a cube view, as a table under the name you give it.",
+        "method": "POST",
+        "path": "/DataProvider/GetAdoDataSetForCubeViewCommand",
+        "params": {
+          "api_version": { "type": "string", "enum": ["5.2.0"], "description": "The API version", "in": "query", "name": "api-version", "default": "5.2.0" },
+          "web_server_url": { "type": "string", "description": "The web server address", "in": "body", "name": "BaseWebServerUrl", "field": "web_server_url" },
+          "application": { "type": "string", "description": "The OneStream application's name", "in": "body", "name": "ApplicationName", "limit": "applications" },
+          "cube_view": { "type": "string", "description": "The cube view's name", "in": "body", "name": "CubeViewName", "limit": "cube_views" },
+          "table_per_row": {
+            "type": "boolean",
+            "description": "One table per cube view row instead of one table",
+            "in": "body",
+            "name": "DataTablePerCubeViewRow",
+            "default": false
+          },
+          "table_name": { "type": "string", "description": "Name of the table the rows come back under", "in": "body", "name": "ResultDataTableName", "default": "ResultsTable" },
+          "variables": {
+            "type": "string",
+            "description": "Values for the cube view's substitution variables, as Name1=[Value1],Name2=[Value2]",
+            "in": "body",
+            "name": "CustomSubstVarsAsCommaSeparatedPairs",
+            "required": false
+          }
+        }
+      },
+      {
+        "name": "onestream_run_sequence",
+        "description": "Run a data management sequence and wait for it to finish; the answer says whether it completed. The wait is at most 30 seconds: a longer sequence keeps running in OneStream, and its outcome is in OneStream's error and activity logs.",
+        "method": "POST",
+        "path": "/DataManagement/ExecuteSequence",
+        "destructive": true,
+        "params": {
+          "api_version": { "type": "string", "enum": ["5.2.0"], "description": "The API version", "in": "query", "name": "api-version", "default": "5.2.0" },
+          "web_server_url": { "type": "string", "description": "The web server address", "in": "body", "name": "BaseWebServerUrl", "field": "web_server_url" },
+          "application": { "type": "string", "description": "The OneStream application's name", "in": "body", "name": "ApplicationName", "limit": "applications" },
+          "sequence": { "type": "string", "description": "The data management sequence's name", "in": "body", "name": "SequenceName", "limit": "sequences" },
+          "variables": {
+            "type": "string",
+            "description": "Values for the sequence's substitution variables, as Name1=[Value1],Name2=[Value2]",
+            "in": "body",
+            "name": "CustomSubstVarsAsCommaSeparatedPairs",
+            "required": false
+          }
+        }
+      }
+    ]
+  }
+}

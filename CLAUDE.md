@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, Ironclad and OneStream once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -345,8 +345,10 @@ packages/server/src/consent.ts # signed approval state (org, app, capability cei
                       # approved, nonce, 15 min expiry)
 connectors/http/      # the generic module for a connector.json `http` block; exports guardedFetch,
                       # authHeaders, formValues, paramLimits, answerWithin and connectionAddress
-                      # (an address's {field}s filled per connection, connector-kit fillAddress,
-                      # held to allowedHosts, one guarded fetch per origin) for its siblings
+                      # (an address's and an http tokenUrl's {field}s filled per connection,
+                      # connector-kit fillAddress, held to allowedHosts, one guarded fetch per
+                      # origin pair) for its siblings. A tool param with `field` is filled from
+                      # that connect form field and never offered to the agent
 connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
                       # templates with XML-escaped values, faults, result path), xml.ts (the XML
                       # reader: no DTD, five entities, depth 100; also used by the scripts)
@@ -436,6 +438,9 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
                       # trigger off; each store guard and two clicks at once)
                       # Generic machinery only: no suite or case for one connector's behavior
+connectors/http/legal-finance-apps.test.ts # Ironclad and OneStream load and are offered; one tool
+                      # each against a fake app, and connecting each through the service (token,
+                      # verify body)
 connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's test harness
                       # (packages/server/test/helpers.ts) with its fake vendor answers; run by
                       # npm test, typechecked by tsconfig.test.json, left out of the build
@@ -1199,6 +1204,32 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   `aggregateitemlocation` and `transactionline.mainline`, read October 27, 2026. Tested only
   against a fake NetSuite, never a real account: table and column names, status letters and the
   sign of lines are unverified live.
+- Ironclad (`ironclad`, JSON only, `describedApp`; read November 1, 2026, tested only against
+  fakes): `https://{host}/public/api/v1` and token `https://{host}/oauth/token`, host held to
+  `ironcladapp.com` and `*.ironcladapp.com` (US, eu1, demo); client credentials with no `scope`
+  (only `grant_type` is required), so the token carries the app's registered scopes;
+  `x-as-user-email` from a plain field via fieldHeaders (Ironclad answers as that user).
+  Workflows, approvals, sign status, records (limit `record_types` on `types`, answer limit on
+  `type`), a workflow comment, a signer reminder. Left out: approving (a judgment in a user's
+  name), creating records and launching workflows (nested bodies the http block does not send),
+  document downloads (files, not JSON). Paging is `page`/`pageSize` with only a total `count`,
+  so no `paging` block. Unverified live: Ironclad documents a JSON token request; the service
+  sends the RFC 6749 form. Sources: developer.ironcladapp.com reference client-credentials-grant,
+  register-oauth-client, authenticate-a-request, list-all-workflows, retrieve-a-workflow,
+  list-all-workflow-approvals, get-sign-status, remind-signer, create-a-comment-on-a-workflow,
+  list-all-records, retrieve-a-record, oauth-token-1, filter-query-param.
+- OneStream (`onestream`, JSON only): hosted only, a personal access token as bearer at
+  `https://{host}/OneStreamApi/api`. The 5.2.0 endpoints take the token alone (7.2.0 needs a
+  SessionInfo from Logon/OpenApplication passed between calls, which the http block cannot
+  carry); every body needs `BaseWebServerUrl`, a `field` param from the connect form. Verify is
+  7.2.0 `Authentication/Logon` (body `{web_server_url}`, shows `Message`). Adapter and cube view
+  data, and ExecuteSequence (destructive, limit `sequences`); limits `applications`, `adapters`,
+  `cube_views`. Left out: SQL and method commands (Administrator role), ExecuteStep (would
+  bypass the sequence limit), self-hosted OAuth (an external IdP's token with a per-customer
+  scope). ExecuteSequence is synchronous and the service waits 30 seconds. Sources:
+  documentation.onestream.com REST API (Authentication2, OneStream WebAPI Endpoints, REST API
+  Summary, Data Provider API) and IDM (Personal Access Tokens, Requirements for Using, Manage,
+  Access the Manage page, About Using Personal Access Tokens in APIs).
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under

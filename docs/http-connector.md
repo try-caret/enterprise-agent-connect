@@ -79,7 +79,7 @@ A connector with an `http` block is like any other connector (name, setup steps,
     `"prefix": "Token token="` (PagerDuty)
   - `{"type": "bearer", "token": "<field>"}`
   - `{"type": "basic", "username": "<plain field>", "password": "<secret field>"}`
-  - `{"type": "oauth2", "tokenUrl": "https://…", "clientId": "<plain field>", "clientSecret": "<secret field>"}` (client credentials; add `"scope"` for a token service that needs one, such as Microsoft Entra's, `"audience"` for one that asks for an audience, and `"clientAuth": "basic"` for one that wants the client id and secret as HTTP Basic rather than in the form, which is the default `"body"`)
+  - `{"type": "oauth2", "tokenUrl": "https://…", "clientId": "<plain field>", "clientSecret": "<secret field>"}` (client credentials; add `"scope"` for a token service that needs one, such as Microsoft Entra's, `"audience"` for one that asks for an audience, and `"clientAuth": "basic"` for one that wants the client id and secret as HTTP Basic rather than in the form, which is the default `"body"`). `tokenUrl` takes `{field}` placeholders like `baseUrl`, e.g. `"https://{host}/oauth/token"` for an app whose token service is on each company's own host; a filled-in one is held to `allowedHosts` too
   - `{"type": "query", "param": "api_key", "value": "<secret field>"}`: the key goes in every
     call's query string. No tool param may use the same name.
 - **headers**: sent with every call, e.g. `{"X-GitHub-Api-Version": "2022-11-28", "Accept":
@@ -99,6 +99,10 @@ A connector with an `http` block is like any other connector (name, setup steps,
   - `"type": "array", "items": "string"`: a list of values. In the query it is sent as one
     `name=` per value, or as one value joined with `"join": ","`.
   - `"name": "pageToken"`: the name the app uses, when it is not a lower-case param name.
+  - `"field": "<plain field id>"`: filled from that connect form field, never by the agent (it
+    is not offered to the agent at all), for a value the app wants in every request, such as
+    the company's own server address. A `string` in the query or body, with no `default`,
+    `enum` or `limit`.
 - **result**: what the agent gets of a successful answer, so it reads the few fields it needs
   instead of the whole payload. `"items"` is the dot path of the list in the answer and
   `"fields"` the dot paths kept of each item (or of the answer itself without `items`):
@@ -135,7 +139,9 @@ A connector with an `http` block is like any other connector (name, setup steps,
 - A limited `array` param must have at least one value, and every value must be one of the
   agent's.
 - **verify**: a request the service makes when the app is connected, to prove the credentials,
-  e.g. `{"method": "GET", "path": "/health", "label": "Orders answers", "show": "name"}`.
+  e.g. `{"method": "GET", "path": "/health", "label": "Orders answers", "show": "name"}`. A
+  `{field}` in its path, or a body value that is exactly `"{field}"`, is that connect form
+  field's value.
 - **discover** (optional): a request listing the values a limit chooses from, shown to the admin,
   e.g. `{"method": "GET", "path": "/customers", "label": "Customers", "show": "items[].id",
   "name": "items[].name"}`. `name` gives each value a label read from the same list item, so the

@@ -286,7 +286,9 @@ const httpAuthSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("oauth2"),
-      tokenUrl: z.url({ protocol: /^https?$/ }),
+      // May hold {field} placeholders like baseUrl (not in an odata block), e.g. a token
+      // service on the connection's own host.
+      tokenUrl: addressSchema,
       clientId: slug,
       clientSecret: slug,
       // Sent with the token request, e.g. https://<org>.crm.dynamics.com/.default.
@@ -359,6 +361,9 @@ const httpParamSchema = z
     join: z.string().min(1).max(3).optional(),
     // The value must be one of the agent's values of this list limit, while it has any.
     limit: slug.optional(),
+    // Filled from this plain connect form field, not by the agent, e.g. the company's own
+    // address an app wants in every request.
+    field: slug.optional(),
   })
   .strict()
   .refine((p) => (p.type === "array") === Boolean(p.items), {
@@ -367,6 +372,12 @@ const httpParamSchema = z
   .refine((p) => !p.join || (p.type === "array" && p.in === "query"), {
     message: "join is for array params in the query",
   })
+  .refine(
+    (p) =>
+      !p.field ||
+      (p.type === "string" && p.in !== "path" && p.default === undefined && !p.enum && !p.limit),
+    { message: "A field param is a string in the query or body, with no default, enum or limit" },
+  )
   .refine(
     (p) => {
       const itemType = p.items ?? p.type;
@@ -787,6 +798,10 @@ const odataSchema = z
     allowInsecureHttp: z.boolean().default(false),
   })
   .strict()
+  .refine(
+    (o) => o.auth.type !== "oauth2" || !addressFields(o.auth.tokenUrl).length,
+    { message: "An odata tokenUrl has no {field}" },
+  )
   .refine(
     (o) =>
       secure(
@@ -1214,7 +1229,16 @@ function described(c: {
     sets.flatMap((s) => Object.values(s).flatMap((p) => (p.limit ? [p.limit] : [])));
   if (c.http)
     return {
-      fields: [...authFields(c.http.auth), ...plain(c.http.baseUrl)],
+      fields: [
+        ...authFields(c.http.auth),
+        ...plain(c.http.baseUrl),
+        ...(c.http.auth.type === "oauth2" ? plain(c.http.auth.tokenUrl) : []),
+        ...c.http.tools.flatMap((t) =>
+          Object.values(t.params).flatMap((p): [string, boolean][] =>
+            p.field ? [[p.field, false]] : [],
+          ),
+        ),
+      ],
       limits: c.http.tools.flatMap((t) => [
         ...limitsOf(t.params),
         ...t.answerLimits.map((a) => a.limit),

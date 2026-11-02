@@ -48,4 +48,6 @@ export const builtinConnectors: BuiltinModule[] = [
   netsuite,
   dynamics365,
   gong,
+  describedApp("ironclad"),
+  describedApp("onestream"),
 ];
