@@ -1,3 +1,5 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { z } from "zod";
 import {
   audited,
@@ -37,6 +39,21 @@ export const MAX_BODY_BYTES = 256 * 1024;
 export const MAX_TARGET_BYTES = 8 * 1024;
 const TIMEOUT_MS = 30_000;
 
+// Cloud metadata services (169.254.169.254, fd00:ec2::254) hand out the server's own credentials,
+// and no app is served from a link-local address, so an address that resolves there is refused.
+// Checked at lookup: a DNS answer that changes before the connect is not caught.
+// IPv4-mapped IPv6 comes back from URL as hex: ::ffff:a9fe:a9fe is 169.254.169.254.
+const LINK_LOCAL = /^(169\.254\.|::ffff:(169\.254\.|a9fe:)|fe[89ab][0-9a-f]:|fd00:ec2::254$)/i;
+async function refuseLinkLocal(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, "");
+  // A name that does not resolve is left to the call itself to fail on.
+  const addresses = isIP(host)
+    ? [host]
+    : await lookup(host, { all: true }).then((all) => all.map((a) => a.address), () => []);
+  if (addresses.some((a) => LINK_LOCAL.test(a)))
+    throw new ConnectError(`${hostname} is a link-local address, which no app is reached at`);
+}
+
 // fetch that reaches only `allowed` origins, follows no redirect, gives up after TIMEOUT_MS and
 // reads at most MAX_RESPONSE_BYTES of JSON or text (or what `types` matches). Its refusals are
 // ConnectError.
@@ -51,6 +68,7 @@ export function guardedFetch(
     const url = new URL(input instanceof Request ? input.url : input);
     if (!allowed.includes(url.origin))
       throw new ConnectError(`${url.origin} is not this app's address`);
+    await refuseLinkLocal(url.hostname);
     const res = await fetchImpl(url, {
       ...init,
       redirect: "manual",
