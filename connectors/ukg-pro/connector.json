@@ -280,7 +280,7 @@
       },
       {
         "name": "ukg_list_time_off_plans",
-        "description": "List employees' time off plans with hours earned, taken and pending, for every employee. Answers one page; ask for the next page while a page comes back full.",
+        "description": "List employees' time off plans with hours earned, taken and pending, for every employee. Every row must be in the agent's companies, so an agent limited to companies reads one employee's plans with ukg_get_employee_time_off_plans. Answers one page; ask for the next page while a page comes back full.",
         "method": "GET",
         "path": "/personnel/v1/pto-plans",
         "params": {

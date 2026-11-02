@@ -315,11 +315,22 @@ test("HR and procurement apps: one tool each, against a fake app", async () => {
   assert.equal(fake.seen[0].headers.authorization, `Basic ${btoa("u:p")}`);
   assert.deepEqual(JSON.parse(out.text), [{ id: "7" }]);
   fake = fakeApp({ id: 5 });
-  await run(app("icims"), icims, "icims_find_person_by_email", { email: "a@example.com", fields: "firstname,folder" }, fake);
+  await run(app("icims"), icims, "icims_find_person_by_email", { email: "a@example.com", fields: ["firstname", "folder"] }, fake);
   assert.equal(
     fake.seen[0].url,
     "https://api-eu.icims.com/customers/1234/people/by-email?email=a%40example.com&fields=firstname%2Cfolder",
   );
+  fake = fakeApp({ id: 5 });
+  await run(app("icims"), icims, "icims_get_person", { person_id: "5" }, fake);
+  assert.equal(fake.seen[0].url, "https://api-eu.icims.com/customers/1234/people/5?fields=firstname%2Clastname%2Cemail%2Cfolder");
+  fake = fakeApp({});
+  await assert.rejects(run(app("icims"), icims, "icims_get_person", { person_id: "5", fields: ["ssn"] }, fake), /Invalid option/);
+  assert.equal(fake.seen.length, 0);
+  fake = fakeApp({ id: "v1", name: "Acme", tax_id_number: "123-45-6789", vat_number: "GB1" });
+  out = await run(app("zip"), zip, "zip_get_vendor", { vendor_id: "v1" }, fake);
+  assert.equal(JSON.parse(out.text).tax_id_number, undefined);
+  assert.equal(JSON.parse(out.text).vat_number, undefined);
+  assert.equal(JSON.parse(out.text).name, "Acme");
   fake = fakeApp({});
   out = await run(app("icims"), { ...icims, config: { ...icims.config, host: "api.attacker.example" } }, "icims_get_job", { job_id: "7" }, fake);
   assert.equal(out.isError, true);

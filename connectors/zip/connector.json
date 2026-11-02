@@ -74,7 +74,7 @@
     {
       "id": "departments",
       "label": "Departments",
-      "help": "Optional: only purchase requests of these departments, shown under Departments after connecting. Covers searching and reading requests only. Leave empty for every department.",
+      "help": "Optional: only purchase requests of these departments, shown under Departments after connecting (the first 100; type any other department's id). Covers searching and reading requests only. Leave empty for every department.",
       "kind": "list",
       "required": false,
       "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -293,7 +293,7 @@
         },
         "result": {
           "items": "list",
-          "fields": ["id", "commenter.email", "text", "created_at", "comment_responses.commenter.email", "comment_responses.text"]
+          "fields": ["id", "commenter.email", "text", "created_at", "comment_responses.commenter.email", "comment_responses.text", "deleted", "private_comment_users.email", "private_comment_queues.name", "comment_responses.deleted", "comment_responses.private_comment_users.email", "comment_responses.private_comment_queues.name"]
         }
       },
       {
@@ -459,6 +459,9 @@
         "path": "/vendors/{vendor_id}",
         "params": {
           "vendor_id": { "type": "string", "description": "The vendor's id", "in": "path" }
+        },
+        "result": {
+          "fields": ["id", "name", "legal_name", "status", "risk", "tier", "currency", "website_link", "po_email", "contacts", "sites", "categories", "owners", "updated_at", "last_reviewed_at"]
         }
       },
       {

@@ -58,7 +58,7 @@
       "id": "candidates",
       "label": "Read candidates and applications",
       "description": "Search people and applications, read a candidate's profile (by id or email) and an application's status, job and source.",
-      "note": "Candidate profiles are personal data. Agents read every field the API user may see; hide what they should not read from its group in iCIMS. Read-only.",
+      "note": "Candidate profiles are personal data. Agents read names, email, folder, login, source, education and work history of a person, never phones, addresses, birth dates, EEO answers or government ids, and of an application its job, person, status and source. Read-only.",
       "scopes": [],
       "permissions": [],
       "tools": ["icims_search_people", "icims_get_person", "icims_find_person_by_email", "icims_search_applications", "icims_get_application"]
@@ -135,27 +135,22 @@
       },
       {
         "name": "icims_get_person",
-        "description": "Read one person. Without fields, iCIMS answers first and last name, email, folder, phones and addresses. A field the answer leaves out has no value or is hidden from the API user.",
+        "description": "Read one person. A field the answer leaves out has no value or is hidden from the API user.",
         "method": "GET",
         "path": "/people/{person_id}",
         "params": {
           "person_id": { "type": "string", "description": "The person's system id", "in": "path" },
-          "fields": {
-            "type": "string",
-            "description": "Comma-separated field names, such as firstname,lastname,email,folder. icims_get_profile_schema lists them",
-            "in": "query",
-            "required": false
-          }
+          "fields": { "type": "array", "items": "string", "enum": ["firstname", "middlename", "lastname", "email", "folder", "login", "source", "sourcename", "education", "workexperience"], "join": ",", "default": ["firstname", "lastname", "email", "folder"], "description": "The fields to read", "in": "query" }
         }
       },
       {
         "name": "icims_find_person_by_email",
-        "description": "Read the person with this email address. Without fields, iCIMS answers the same fields as icims_get_person.",
+        "description": "Read the person with this email address. A field the answer leaves out has no value or is hidden from the API user.",
         "method": "GET",
         "path": "/people/by-email",
         "params": {
           "email": { "type": "string", "description": "The person's email address", "in": "query" },
-          "fields": { "type": "string", "description": "Comma-separated field names", "in": "query", "required": false }
+          "fields": { "type": "array", "items": "string", "enum": ["firstname", "middlename", "lastname", "email", "folder", "login", "source", "sourcename", "education", "workexperience"], "join": ",", "default": ["firstname", "lastname", "email", "folder"], "description": "The fields to read", "in": "query" }
         }
       },
       {
@@ -171,12 +166,12 @@
       },
       {
         "name": "icims_get_application",
-        "description": "Read one application. Without fields, iCIMS answers the job (baseprofile), the person (associatedprofile), its status, source and source name.",
+        "description": "Read one application: the job (baseprofile), the person (associatedprofile), its status, source and source name.",
         "method": "GET",
         "path": "/applicantworkflows/{workflow_id}",
         "params": {
           "workflow_id": { "type": "string", "description": "The application's system id", "in": "path" },
-          "fields": { "type": "string", "description": "Comma-separated field names", "in": "query", "required": false }
+          "fields": { "type": "array", "items": "string", "enum": ["baseprofile", "associatedprofile", "status", "source", "sourcename"], "join": ",", "default": ["baseprofile", "associatedprofile", "status", "source", "sourcename"], "description": "The fields to read", "in": "query" }
         }
       }
     ]
