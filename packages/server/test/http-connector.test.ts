@@ -16,6 +16,7 @@ import {
 import type { ToolContext } from "../../connector-kit/src/common.ts";
 import { assertToolsImplemented } from "../src/service.ts";
 import {
+  guardedFetch,
   httpTools,
   httpVendor,
   MAX_RESPONSE_BYTES,
@@ -841,4 +842,17 @@ test("the example app pages through its orders with the example connector", asyn
   } finally {
     app.kill();
   }
+});
+
+test("an address that is link-local, where cloud metadata services sit, is never called", async () => {
+  let called = false;
+  const fake = (async () => {
+    called = true;
+    return new Response("{}");
+  }) as typeof fetch;
+  for (const origin of ["http://169.254.169.254", "http://[fe80::1]", "http://[::ffff:169.254.169.254]"]) {
+    const get = guardedFetch([new URL(origin).origin], fake);
+    await assert.rejects(get(`${origin}/latest/meta-data/`), /link-local/);
+  }
+  assert.equal(called, false);
 });

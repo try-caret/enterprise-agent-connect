@@ -135,6 +135,7 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
   confluence: {
     conn: { config: { cloud: GUID, client_id: "i" }, secret: { client_secret: "s" } },
     request: { method: "GET", path: "/api/v2/spaces" },
+  },
   automox: {
     conn: { config: {}, secret: { api_key: "k" } },
     request: { method: "GET", path: "/orgs" },
@@ -164,6 +165,7 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
       secret: { client_secret: "s" },
     },
     request: { method: "GET", path: "/groups/A1%40AdobeOrg/0" },
+  },
   adestra: { conn: { config: {}, secret: { api_token: "t" } }, request: { method: "GET", path: "/projects" } },
   cvent: {
     conn: { config: { client_id: "i" }, secret: { client_secret: "s" } },
@@ -185,6 +187,11 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
   wordpress: {
     conn: { config: { host: "blog.example.com", username: "u" }, secret: { app_password: "p" } },
     request: { method: "GET", path: "/users/me" },
+  },
+  churnzero: {
+    conn: { config: { instance: "acme", username: "u" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/Account" },
+  },
   lusha: {
     conn: { config: { host: "api.lusha.com" }, secret: { api_key: "k" } },
     request: { method: "GET", path: "/v3/account/usage" },
