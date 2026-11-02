@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad and OneStream) once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, Zip, UKG Pro, iCIMS, ZoomInfo, DocuSign and Axonius) once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -365,7 +365,14 @@ connectors/http/      # the generic module for a connector.json `http` block; ex
                       # (an address's and an http tokenUrl's {field}s filled per connection,
                       # connector-kit fillAddress, held to allowedHosts, one guarded fetch per
                       # origin pair) for its siblings. A tool param with `field` is filled from
-                      # that connect form field and never offered to the agent;
+                      # that connect form field and never offered to the agent. With a tool's
+                      # `nestedBody`, a body param's name is a dot path (numeric segment = list
+                      # index, 0-99) into a body that starts from the tool's fixed `body`, else
+                      # one key as before; clashes, a place both list and object, and prototype
+                      # keys are refused at parse, and setPath follows only own keys;
+                      # `contentType` (block or tool) is application/json or +json; `readOnly`
+                      # marks a POST search read-only to clients. Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # connector-kit oauth.ts jwtAssertion, http blocks only);
                       # openapi.ts: draftConnector (the OpenAPI drafter the script and the
                       # admin API's internal app drafts share)
 connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
@@ -468,6 +475,7 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
 connectors/http/described-apps.test.ts # every built-in described only in JSON loads and is
                       # offered; one representative tool per app against a fake app (method,
                       # address, auth headers, paging, limits). New described apps add a case here
+                      # (Zip, UKG Pro and iCIMS also connect through the service: verify only)
 connectors/http/apps.test.ts # every built-in app with only an `http` block (describedApp) loads,
                       # and one tool of each runs against a local fake (method, path, query, auth)
 connectors/http/legal-finance-apps.test.ts # Ironclad and OneStream load and are offered; one tool
@@ -1341,6 +1349,92 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   documentation.onestream.com REST API (Authentication2, OneStream WebAPI Endpoints, REST API
   Summary, Data Provider API) and IDM (Personal Access Tokens, Requirements for Using, Manage,
   Access the Manage page, About Using Personal Access Tokens in APIs).
+- Zip (`zip`, JSON only, `describedApp`; read November 2, 2026, tested only against fakes):
+  `https://api.ziphq.com`, a restricted read-only API key in `Zip-Api-Key` (no prefix). Search and
+  read requests (limit `departments` on `department_id`, answer limit `department.id` on one
+  request; discover `/departments`), approvals, a request's comments and questionnaire answers,
+  purchase orders, invoices, vendors and agreements, each group its own capability since only
+  requests can be held to departments. Paging `page_token`/`next_page_token`; times are Unix
+  seconds. Verify `GET /requests?page_size=1` (`total`). Read-only: IDC's agents draft but never
+  submit, so request edits, status changes, comments and every other write are left out. Left
+  out too: one agreement by id (the agreement schema has no id field), `/event_logs` (Premier
+  only); `po_number` on the PO search works only where Zip enabled extra PO filters. Sources:
+  Zip Public APIs OpenAPI 1.0.11 (dash.readme.com api-registry e3k9920mvu3gre3), Fivetran and
+  Trelica setup guides for the restricted key.
+- UKG Pro (`ukg-pro`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): `https://{host}` held to `*.ultipro.com`, `*.ultipro.ca` and `*.ukg.net` (the last from
+  Serval's guide only), Basic with a web service account plus `US-CUSTOMER-API-KEY` from a secret
+  field via fieldHeaders. Employment details, person details (answers trimmed to names, work
+  email, state and country: no national id, home address, health or I-9 fields), supervisors,
+  companies (no federal tax id), jobs, org levels (no budget salaries); time off plans; pay
+  (compensation and job history) in its own capability. Limit `companies` on `companyId` (query or
+  path), answer limit `companyId` on the all-employee time off list; discover and verify
+  `/configuration/v1/company-details`. Pages are `page`/`per_Page` with no next marker, so no
+  `paging` block. Left out: employee changes (stateful "since the last call" windows), demographics
+  (protected characteristics), pay statements, audit details (internal table names), every write.
+  Sources: developer.ukg.com/hcm reference pages (`.md` forms with their OpenAPI) for each
+  endpoint, docs web-service-account, welcome, api-rate-limiting; Serval and Lansweeper guides for
+  hosts.
+- iCIMS (`icims`, JSON only, `describedApp`; read November 2, 2026, tested only against fakes):
+  `https://{host}/customers/{customer}` held to `api.icims.com` and `api-eu.icims.com`, Basic with
+  iCIMS-issued API credentials (each IP-allowlisted by iCIMS). Search API for jobs, people and
+  applications (the search JSON a string param, ids back, at most 1000; next pages by an id
+  filter), profiles by id with `fields`, a person by email, profile schemas and lists. Two
+  capabilities: jobs (required) and candidates. No limits: searches are free-form JSON and
+  profiles carry no field to hold them to. Verify `GET /v2/lists` (the customer root has no
+  path of its own under baseUrl). Left out: OAuth (audience unconfirmed), the Offer API (OAuth
+  only), workflow status changes and every write (IDC's agents propose, recruiters decide).
+  Sources: developer.icims.com via the Wayback Machine (Connecting and Authenticating, Profiles,
+  Search API, Workflows, Customers, List API, Schema API, Error Handling, Recruiting Workflow).
+- ZoomInfo (`zoominfo`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): the GTM Data API at `https://api.zoominfo.com/gtm`, client credentials at
+  `/gtm/oauth/v1/token` with `clientAuth: basic` (ZoomInfo's recommended form) and no `scope`
+  (the token gets the app's configured scopes, `api:data:company`, `api:data:contact`).
+  JSON:API bodies: `contentType` and `Accept` `application/vnd.api+json`, each tool's fixed
+  `data.type` (CompanySearch, CompanyEnrich, ContactSearch, ContactEnrich) and params under
+  `data.attributes`; enrich matches one record at `matchCompanyInput.0` / `matchPersonInput.0`
+  with `outputFields` (enum from the spec, a default set). Search companies and contacts (no
+  credits) in a required capability; enrich (one credit per match) in its own. Paging is
+  `page[number]`/`page[size]` with a total in `meta`, so no `paging` block. Left out: lookup,
+  intent, news, scoops and webhooks (no IDC use), bulk enrich past one record, and anything
+  that writes. Verify is a one-result company search for "ZoomInfo" (uses no credits).
+  Sources: docs.gtm.ai client-credentials-flow, reference searchinterface_searchcompany,
+  searchinterface_searchcontact, enrichinterface_enrichcompany, enrichinterface_enrichcontact
+  (their OpenAPI blocks).
+- DocuSign (`docusign`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): eSignature REST v2.1 at `https://{host}/restapi/v2.1/accounts/{account}`, the host
+  (the account's base URI) and token host held to `*.docusign.net`, `account.docusign.com` and
+  `account-d.docusign.com`. Auth `oauth2_jwt` (JWT Grant) at `https://{auth_host}/oauth/token`,
+  `iss` the integration key, `sub` the user agents act as, `aud` `{auth_host}` (a bare host, as
+  the official Node SDK's `generateAndSignJWTAssertion` sends it), scope `signature
+  impersonation`; consent is granted once in the browser (setup step). Envelopes by date and
+  status (`from_date` required, `start_position`/`count`, no `paging` block), one envelope,
+  recipients, documents' details, audit events; resending is `PUT /envelopes/{id}` with
+  `resend_envelope=true` and a fixed empty body, in its own capability. Left out: sending,
+  voiding, correcting or purging envelopes (the same PUT with a body; IDC's rules forbid sending
+  without a human), document downloads (files, not JSON), templates. Verify lists folders.
+  Sources: docusign-esign-node-client ApiClient.js (JWT claims, token request) and
+  EnvelopesApi.js, FoldersApi.js and models (paths, query names, fields); developers.docusign.com
+  JWT Grant (client-rendered, read through the SDK).
+- Axonius (`axonius`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): each customer's own host (`https://{host}`, no `allowedHosts`: no public host
+  pattern), `api-key` as the header auth and `api-secret` through fieldHeaders, as the SDK and
+  XSOAR send them. Device and user search is the v2 POST `/api/v2/assets/{devices|users}` with
+  body `{query, fields, page: {limit, cursor}}` (nested `page.*` params), paged by
+  `meta.next_page`; default fields are the SDK's `fields_default`. One asset by
+  `internal_axon_id` (v1 `GET /api/{asset_type}/{id}`), fields (`GET /api/{asset_type}/fields`)
+  and saved queries (`GET /api/v2/queries`). Read-only: enforcements (list or run), labels,
+  custom data, saved query writes and destroy endpoints are left out. Verify is
+  `GET /api/v2/assets/asset_types`. The v2 reference needs a customer login, so every path is
+  from axonius-api-client 5.0.22 (api_endpoints.py, assets/devices.py, users.py, asset_mixin.py,
+  auth/api_key.py) and the XSOAR Axonius integration (Axonius.py, its tests and README).
+- SAP Concur: not built. Company-level sign-in is only the password grant with
+  `credtype=authtoken` and a one-time company request token; it answers a refresh token that
+  rotates on every use (six months) and a geolocation that becomes the API host, both of which
+  must be stored back after each refresh. A Vendor's `call` cannot write the connection's
+  secret, so the store cannot keep the rotating token; adding that is a store change, not an
+  http block one. Source: developer.concur.com api-reference/authentication/apidoc (read
+  November 2, 2026).
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under

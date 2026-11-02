@@ -281,38 +281,62 @@ const keyAuths = [
   z.object({ type: z.literal("bearer"), token: slug }).strict(),
   z.object({ type: z.literal("basic"), username: slug, password: slug }).strict(),
 ] as const;
-const httpAuthSchema = z.discriminatedUnion("type", [
+const scopeSchema = z
+  .string()
+  .regex(/^[\x21-\x7e]+( [\x21-\x7e]+)*$/)
+  .optional();
+const oauth2Auth = z
+  .object({
+    type: z.literal("oauth2"),
+    // May hold {field} placeholders like baseUrl (not in an odata block), e.g. a token
+    // service on the connection's own host.
+    tokenUrl: addressSchema,
+    clientId: slug,
+    clientSecret: slug,
+    // Sent with the token request, e.g. https://<org>.crm.dynamics.com/.default.
+    scope: scopeSchema,
+    // How the client id and secret reach the token service: form fields (the default), or
+    // HTTP Basic.
+    clientAuth: z.enum(["body", "basic"]).optional(),
+    audience: headerValue.min(1).optional(),
+  })
+  .strict();
+// Added to every call's query string, e.g. ?api_key=…
+const queryAuth = z
+  .object({
+    type: z.literal("query"),
+    param: z.string().regex(/^[A-Za-z0-9_.-]+$/),
+    value: slug,
+  })
+  .strict();
+const httpAuthSchema = z.discriminatedUnion("type", [...keyAuths, oauth2Auth, queryAuth]);
+
+// A whole connect form field as a value, e.g. "{auth_host}".
+export const fieldRef = (v: string) => /^\{([a-z][a-z0-9_]*)\}$/.exec(v)?.[1];
+
+// RFC 7523 JWT bearer grant, http blocks only: the token request carries an RS256 assertion
+// signed with the RSA private key in `privateKey` (a secret field). `issuer` (iss, the app's
+// client id) and `subject` (sub, the user it acts as) are plain fields; `audience` (aud) is
+// fixed or a whole "{field}".
+const jwtAuth = z
+  .object({
+    type: z.literal("oauth2_jwt"),
+    tokenUrl: addressSchema,
+    issuer: slug,
+    subject: slug,
+    privateKey: slug,
+    audience: headerValue.min(1),
+    scope: scopeSchema,
+  })
+  .strict();
+const httpAppAuthSchema = z.discriminatedUnion("type", [
   ...keyAuths,
-  z
-    .object({
-      type: z.literal("oauth2"),
-      // May hold {field} placeholders like baseUrl (not in an odata block), e.g. a token
-      // service on the connection's own host.
-      tokenUrl: addressSchema,
-      clientId: slug,
-      clientSecret: slug,
-      // Sent with the token request, e.g. https://<org>.crm.dynamics.com/.default.
-      scope: z
-        .string()
-        .regex(/^[\x21-\x7e]+( [\x21-\x7e]+)*$/)
-        .optional(),
-      // How the client id and secret reach the token service: form fields (the default), or
-      // HTTP Basic.
-      clientAuth: z.enum(["body", "basic"]).optional(),
-      audience: headerValue.min(1).optional(),
-    })
-    .strict(),
-  // Added to every call's query string, e.g. ?api_key=…
-  z
-    .object({
-      type: z.literal("query"),
-      param: z.string().regex(/^[A-Za-z0-9_.-]+$/),
-      value: slug,
-    })
-    .strict(),
+  oauth2Auth,
+  queryAuth,
+  jwtAuth,
 ]);
 
-export type HttpAuth = z.infer<typeof httpAuthSchema>;
+export type HttpAuth = z.infer<typeof httpAppAuthSchema>;
 
 // The connect form fields an auth names, each with whether it must be a secret field.
 const authFields = (a: HttpAuth): [string, boolean][] =>
@@ -325,10 +349,17 @@ const authFields = (a: HttpAuth): [string, boolean][] =>
             [a.username, false],
             [a.password, true],
           ]
-        : [
-            [a.clientId, false],
-            [a.clientSecret, true],
-          ];
+        : a.type === "oauth2"
+          ? [
+              [a.clientId, false],
+              [a.clientSecret, true],
+            ]
+          : [
+              [a.issuer, false],
+              [a.subject, false],
+              [a.privateKey, true],
+              ...(fieldRef(a.audience) ? [[fieldRef(a.audience)!, false] as [string, boolean]] : []),
+            ];
 
 const scalarType = z.enum(["string", "number", "integer", "boolean"]);
 const scalar = z.union([z.string(), z.number(), z.boolean()]);
@@ -413,6 +444,53 @@ const httpPagingSchema = z.union([
   z.object({ param: slug, link: z.literal(true) }).strict(),
 ]);
 
+// A JSON body's content type: application/json or a +json type such as application/vnd.api+json.
+const jsonContentType = z.string().regex(/^application\/(json|[A-Za-z0-9.-]+\+json)$/);
+
+// With nestedBody, a body param's wire name is a dot path into the body (a.b.c builds
+// {"a":{"b":{"c":…}}}, a numeric segment indexes a list); without it the name is one key, as
+// before. Fixed body values are the leaves of `body`.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+function bodyLeaves(value: unknown, at: string[] = []): string[][] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [at];
+  const entries = Object.entries(value);
+  if (!entries.length) return at.length ? [at] : [];
+  return entries.flatMap(([k, v]) => bodyLeaves(v, [...at, k]));
+}
+function bodyPlacesFit(t: {
+  params: Record<string, { in: string; name?: string }>;
+  body?: Record<string, unknown>;
+  nestedBody: boolean;
+}): boolean {
+  const params = Object.entries(t.params)
+    .filter(([, p]) => p.in === "body")
+    .map(([k, p]) => (t.nestedBody ? (p.name ?? k).split(".") : [p.name ?? k]));
+  const fixed = t.body ? bodyLeaves(t.body) : [];
+  // A param's numeric segment indexes a list, so it stays small: 0 to 99.
+  const index = (seg: string) => !/^\d+$/.test(seg) || /^(0|[1-9]\d?)$/.test(seg);
+  if (params.some((path) => !path.every(index))) return false;
+  const all = [...params, ...fixed];
+  if (all.some((path) => path.some((seg) => !seg || UNSAFE_KEYS.has(seg)))) return false;
+  // One path the same as or inside another (a param's own duplicates are refused elsewhere).
+  const within = (a: string[], b: string[]) =>
+    a.length <= b.length && a.every((seg, i) => seg === b[i]);
+  // A place is a list (a numeric segment follows it) or an object, never both: else one value is
+  // dropped or the body changes shape with the params' order. Fixed values are objects down to
+  // their leaves.
+  const kinds = new Map<string, boolean>();
+  for (const [path, isParam] of [...params.map((p) => [p, true] as const), ...fixed.map((f) => [f, false] as const)])
+    for (let i = 1; i < path.length; i++) {
+      const at = path.slice(0, i).join("."), isList = isParam && /^\d+$/.test(path[i]);
+      if ((kinds.get(at) ?? isList) !== isList) return false;
+      kinds.set(at, isList);
+    }
+  return params.every(
+    (p, i) =>
+      params.every((q, j) => i === j || p.length === q.length || !within(p, q)) &&
+      fixed.every((f) => !within(p, f) && !within(f, p)),
+  );
+}
+
 const httpToolSchema = z
   .object({
     name: slug,
@@ -429,6 +507,21 @@ const httpToolSchema = z
     answerLimits: z.array(z.object({ field: dotPath, limit: slug }).strict()).default([]),
     result: httpResultSchema.optional(),
     paging: httpPagingSchema.optional(),
+    // Fixed JSON merged into the body, never seen by the agent, e.g. a JSON:API
+    // {"data": {"type": "PersonSearch"}}.
+    // zod drops a "__proto__" key quietly, so it is refused before the parse.
+    body: z
+      .preprocess((v, ctx) => {
+        if (v && typeof v === "object" && Object.keys(v).some((k) => UNSAFE_KEYS.has(k)))
+          ctx.issues.push({ code: "custom", message: "A body has no __proto__, constructor or prototype", input: v });
+        return v;
+      }, z.record(z.string(), z.unknown()))
+      .optional(),
+    contentType: jsonContentType.optional(),
+    // Body param names are dot paths into nested objects (see bodyPlacesFit).
+    nestedBody: z.boolean().default(false),
+    // A read sent as POST (a search with a body): told to clients as read-only.
+    readOnly: z.boolean().default(false),
   })
   .strict()
   .refine(
@@ -450,8 +543,16 @@ const httpToolSchema = z
         "Each {param} in a tool's path is a required path param with one value and no default, and only those",
     },
   )
-  .refine((t) => !Object.values(t.params).some((p) => p.in === "body") || t.method !== "GET", {
-    message: "A GET tool has no body params",
+  .refine(
+    (t) => !(t.body || Object.values(t.params).some((p) => p.in === "body")) || t.method !== "GET",
+    { message: "A GET tool has no body params or body" },
+  )
+  .refine((t) => !(t.readOnly && (t.destructive || t.method === "DELETE")), {
+    message: "A readOnly tool cannot be destructive",
+  })
+  .refine((t) => bodyPlacesFit(t), {
+    message:
+      "Each body param and fixed body value has its own place in the body: no path inside another's, no empty segment, a list index of at most 99, and no __proto__, constructor or prototype",
   })
   // Checked after the call, so only for reads: a write would already have happened.
   .refine((t) => !t.answerLimits.length || t.method === "GET", {
@@ -491,7 +592,9 @@ const httpSchema = z
     // Every call goes to this origin, under this path, and nowhere else: redirects are refused.
     baseUrl: addressSchema.refine((u) => !/[?#]/.test(u), "No query or fragment"),
     allowedHosts: allowedHostsSchema,
-    auth: httpAuthSchema,
+    auth: httpAppAuthSchema,
+    // The content type of every tool's JSON body, unless the tool names its own.
+    contentType: jsonContentType.optional(),
     // Sent with every call, e.g. an API version or Accept. Not secret: never credentials.
     headers: z.record(headerName, headerValue).default({}),
     // Sent with every call too, each filled from a connect form field (secret or not), e.g. a
@@ -505,7 +608,7 @@ const httpSchema = z
   .refine(
     (h) =>
       h.allowInsecureHttp ||
-      [h.baseUrl, ...(h.auth.type === "oauth2" ? [h.auth.tokenUrl] : [])].every((u) =>
+      [h.baseUrl, ...("tokenUrl" in h.auth ? [h.auth.tokenUrl] : [])].every((u) =>
         u.startsWith("https://"),
       ),
     { message: "baseUrl and tokenUrl must be https unless allowInsecureHttp is true" },
@@ -1233,7 +1336,7 @@ function described(c: {
       fields: [
         ...authFields(c.http.auth),
         ...plain(c.http.baseUrl),
-        ...(c.http.auth.type === "oauth2" ? plain(c.http.auth.tokenUrl) : []),
+        ...("tokenUrl" in c.http.auth ? plain(c.http.auth.tokenUrl) : []),
         ...c.http.tools.flatMap((t) =>
           Object.values(t.params).flatMap((p): [string, boolean][] =>
             p.field ? [[p.field, false]] : [],

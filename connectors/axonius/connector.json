@@ -1,0 +1,259 @@
+{
+  "id": "axonius",
+  "name": "Axonius",
+  "description": "Let agents search Axonius's devices and users, correlated across every tool Axonius collects from, read one device or user, and list saved queries and fields. Read-only. For reconciling device lists and finding unmanaged or out-of-date devices.",
+  "logo": "/brand/registry/axonius.svg",
+  "identity": "The API key and secret of an Axonius service account made for agents. Agents see what that account's role may see.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a service account for agents",
+      "body": "Axonius asks for a service account dedicated to API access. Give it a role with permission to use the API and to view devices and users, and nothing that can run or change enforcements; agents never run enforcements, and no tool here does. Then copy the service account's API key and API secret.",
+      "link": {
+        "label": "Axonius: REST API",
+        "href": "https://docs.axonius.com/docs/axonius-rest-api"
+      }
+    },
+    {
+      "title": "Enter your Axonius address",
+      "body": "The host name you open Axonius at, such as acme.on.axonius.com, without https:// or a path."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "Axonius address",
+      "help": "The host name you open Axonius at, without https:// or a path.",
+      "placeholder": "acme.on.axonius.com",
+      "secret": false
+    },
+    {
+      "id": "api_key",
+      "label": "API key",
+      "secret": true
+    },
+    {
+      "id": "api_secret",
+      "label": "API secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read devices and users",
+      "description": "Search devices and users with AQL, read one device or user, and list saved queries and fields.",
+      "required": true,
+      "note": "Read-only. Reaches every device and user the service account can see, with what each source reports about it.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "axonius_search_devices",
+        "axonius_search_users",
+        "axonius_get_asset",
+        "axonius_list_fields",
+        "axonius_list_saved_queries"
+      ]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/api/v2/assets/asset_types",
+    "label": "Kinds of assets",
+    "show": "asset_types[]"
+  },
+  "revoke": "In Axonius, open the service account and reset its API key and secret, or delete the account. Agents lose access to Axonius at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "auth": {
+      "type": "header",
+      "header": "api-key",
+      "value": "api_key"
+    },
+    "fieldHeaders": {
+      "api-secret": "api_secret"
+    },
+    "tools": [
+      {
+        "name": "axonius_search_devices",
+        "description": "Search Axonius devices with an AQL query, as Axonius's query wizard writes it, such as (\"specific_data.data.hostname\" == regex(\"IDC-\", \"i\")), and read the fields you name, correlated across every source Axonius collects from. Answers one page and the cursor for the next; pass it back as cursor while next is not null.",
+        "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
+        "path": "/api/v2/assets/devices",
+        "params": {
+          "query": {
+            "type": "string",
+            "description": "An AQL query; every one when left out",
+            "in": "body",
+            "required": false
+          },
+          "fields": {
+            "type": "array",
+            "items": "string",
+            "description": "The fields to read, by field name; axonius_list_fields lists them",
+            "in": "body",
+            "default": [
+              "adapters",
+              "specific_data.data.name",
+              "specific_data.data.hostname",
+              "specific_data.data.last_seen",
+              "specific_data.data.network_interfaces.ips",
+              "specific_data.data.network_interfaces.mac",
+              "specific_data.data.os.type",
+              "labels"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many per page, at most 100",
+            "in": "body",
+            "name": "page.limit",
+            "default": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next cursor from the page before",
+            "in": "body",
+            "name": "page.cursor",
+            "required": false
+          }
+        },
+        "paging": {
+          "param": "cursor",
+          "body": "meta.next_page"
+        },
+        "result": {
+          "items": "assets"
+        }
+      },
+      {
+        "name": "axonius_search_users",
+        "description": "Search Axonius users with an AQL query, as Axonius's query wizard writes it, such as (\"specific_data.data.username\" == regex(\"ann\", \"i\")), and read the fields you name, correlated across every source Axonius collects from. Answers one page and the cursor for the next; pass it back as cursor while next is not null.",
+        "method": "POST",
+        "nestedBody": true,
+        "readOnly": true,
+        "path": "/api/v2/assets/users",
+        "params": {
+          "query": {
+            "type": "string",
+            "description": "An AQL query; every one when left out",
+            "in": "body",
+            "required": false
+          },
+          "fields": {
+            "type": "array",
+            "items": "string",
+            "description": "The fields to read, by field name; axonius_list_fields lists them",
+            "in": "body",
+            "default": [
+              "adapters",
+              "specific_data.data.username",
+              "specific_data.data.domain",
+              "specific_data.data.mail",
+              "specific_data.data.is_admin",
+              "specific_data.data.last_seen",
+              "labels"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many per page, at most 100",
+            "in": "body",
+            "name": "page.limit",
+            "default": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next cursor from the page before",
+            "in": "body",
+            "name": "page.cursor",
+            "required": false
+          }
+        },
+        "paging": {
+          "param": "cursor",
+          "body": "meta.next_page"
+        },
+        "result": {
+          "items": "assets"
+        }
+      },
+      {
+        "name": "axonius_get_asset",
+        "description": "Read everything Axonius holds on one device or user, by its internal_axon_id from a search, with each source's own data.",
+        "method": "GET",
+        "path": "/api/{asset_type}/{internal_axon_id}",
+        "params": {
+          "asset_type": {
+            "type": "string",
+            "enum": [
+              "devices",
+              "users"
+            ],
+            "description": "devices or users",
+            "in": "path"
+          },
+          "internal_axon_id": {
+            "type": "string",
+            "description": "The asset's internal_axon_id",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "axonius_list_fields",
+        "description": "List the fields devices or users have in this Axonius, from every source, for naming fields in a search and writing AQL.",
+        "method": "GET",
+        "path": "/api/{asset_type}/fields",
+        "params": {
+          "asset_type": {
+            "type": "string",
+            "enum": [
+              "devices",
+              "users"
+            ],
+            "description": "devices or users",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "axonius_list_saved_queries",
+        "description": "List the saved queries in Axonius, such as the ones behind dashboards and reports, with their AQL to reuse in a search.",
+        "method": "GET",
+        "path": "/api/v2/queries",
+        "params": {
+          "asset_type": {
+            "type": "string",
+            "enum": [
+              "devices",
+              "users"
+            ],
+            "description": "Only saved queries of devices or users",
+            "in": "query",
+            "required": false
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many per page",
+            "in": "query",
+            "default": 50
+          },
+          "offset": {
+            "type": "integer",
+            "description": "How many to skip, starting at 0",
+            "in": "query",
+            "default": 0
+          }
+        },
+        "result": {
+          "items": "queries"
+        }
+      }
+    ]
+  }
+}

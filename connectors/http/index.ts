@@ -12,6 +12,7 @@ import {
 import {
   addressFields,
   checkHost,
+  fieldRef,
   fillAddress,
   type Connector,
   type ConnectorModule,
@@ -174,12 +175,12 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
     connector,
     http.baseUrl,
     http.allowedHosts,
-    auth.type === "oauth2" ? auth.tokenUrl : null,
+    "tokenUrl" in auth ? auth.tokenUrl : null,
     fetchImpl,
   );
   const clients = new Map<string, ReturnType<typeof clientCredentials>>();
   const oauthFor = (key: string, safe: Fetch) => {
-    if (auth.type !== "oauth2") return null;
+    if (!("tokenUrl" in auth)) return null;
     if (!clients.has(key)) clients.set(key, clientCredentials(connector.name, safe));
     return clients.get(key)!;
   };
@@ -187,17 +188,31 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
   const fixed = Object.fromEntries(
     Object.entries(http.headers).map(([k, v]) => [k.toLowerCase(), v]),
   );
-  const oauthCreds = (c: VendorConnection, tokenUrl: string | null) =>
-    auth.type === "oauth2"
-      ? {
-          tokenUrl: tokenUrl!,
-          clientId: c.config[auth.clientId],
-          clientSecret: c.secret[auth.clientSecret],
-          scope: auth.scope,
-          clientAuth: auth.clientAuth,
-          audience: auth.audience,
-        }
-      : null!;
+  const oauthCreds = (c: VendorConnection, tokenUrl: string | null) => {
+    if (auth.type === "oauth2")
+      return {
+        tokenUrl: tokenUrl!,
+        clientId: c.config[auth.clientId],
+        clientSecret: c.secret[auth.clientSecret],
+        scope: auth.scope,
+        clientAuth: auth.clientAuth,
+        audience: auth.audience,
+      };
+    if (auth.type === "oauth2_jwt") {
+      const audienceField = fieldRef(auth.audience);
+      return {
+        tokenUrl: tokenUrl!,
+        issuer: c.config[auth.issuer],
+        subject: c.config[auth.subject],
+        audience: audienceField ? c.config[audienceField] : auth.audience,
+        scope: auth.scope,
+        privateKey: c.secret[auth.privateKey],
+      };
+    }
+    return null!;
+  };
+  const contentType = (request: VendorRequest) =>
+    request.headers?.["content-type"] ?? http.contentType ?? "application/json";
 
   const fieldHeaders = (c: VendorConnection) =>
     Object.fromEntries(
@@ -223,6 +238,7 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
       method: request.method,
       path: `${url.pathname}${url.search}`,
       body: request.body,
+      ...(request.body === undefined ? {} : { headers: { "content-type": contentType(request) } }),
     };
     const headers = { ...fixed, ...fieldHeaders(c) };
     if (oauth) return oauth.call(oauthCreds(c, tokenUrl), base.origin, req, headers);
@@ -232,7 +248,7 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
         accept: "application/json",
         ...headers,
         ...authHeaders(auth, c),
-        ...(req.body === undefined ? {} : { "content-type": "application/json" }),
+        ...req.headers,
       },
       body: req.body === undefined ? undefined : JSON.stringify(req.body),
     });
@@ -333,6 +349,18 @@ export function paramLimits(
   }
 }
 
+// Places a body value at its dot path, building objects on the way (a list for a numeric
+// segment). The connector's parse keeps paths from clashing; only own keys are followed, so a
+// path never reaches an inherited property such as a prototype's function.
+function setPath(body: Record<string, unknown>, keys: string[], value: unknown) {
+  let node = body as Record<string, unknown>;
+  keys.slice(0, -1).forEach((key, i) => {
+    if (!Object.hasOwn(node, key)) node[key] = /^\d+$/.test(keys[i + 1]) ? [] : {};
+    node = node[key] as Record<string, unknown>;
+  });
+  Object.defineProperty(node, keys.at(-1)!, { value, enumerable: true, writable: true, configurable: true });
+}
+
 export const zodType = {
   string: z.string(),
   number: z.number(),
@@ -365,7 +393,7 @@ export function httpTools(http: HttpApp): Toolset {
             description: tool.description,
             inputSchema: z.object(shape).strict(),
             annotations: {
-              readOnlyHint: tool.method === "GET",
+              readOnlyHint: tool.method === "GET" || tool.readOnly,
               destructiveHint: destructive,
               openWorldHint: true,
             },
@@ -381,12 +409,12 @@ export function httpTools(http: HttpApp): Toolset {
                 return encodeURIComponent(value);
               });
               const query = new URLSearchParams();
-              const body: Record<string, unknown> = {};
+              const body = structuredClone(tool.body ?? {});
               for (const [name, p] of Object.entries(tool.params)) {
                 const value = p.field ? ctx.config[p.field] : args[name];
                 const wire = p.name ?? name;
                 if (value === undefined) continue;
-                if (p.in === "body") body[wire] = value;
+                if (p.in === "body") setPath(body, tool.nestedBody ? wire.split(".") : [wire], value);
                 else if (p.in !== "query") continue;
                 else if (!Array.isArray(value)) query.set(wire, String(value));
                 else if (p.join) query.set(wire, value.join(p.join));
@@ -395,7 +423,8 @@ export function httpTools(http: HttpApp): Toolset {
               const target = query.size ? `${path}?${query}` : path;
               if (Buffer.byteLength(target) > MAX_TARGET_BYTES)
                 throw new Denied(`The address is longer than ${MAX_TARGET_BYTES / 1024} KB`);
-              const hasBody = Object.values(tool.params).some((p) => p.in === "body");
+              const hasBody =
+                tool.body !== undefined || Object.values(tool.params).some((p) => p.in === "body");
               if (hasBody && Buffer.byteLength(JSON.stringify(body)) > MAX_BODY_BYTES)
                 throw new Denied(`The request is larger than ${MAX_BODY_BYTES / 1024} KB`);
               let res;
@@ -404,6 +433,9 @@ export function httpTools(http: HttpApp): Toolset {
                   method: tool.method,
                   path: target,
                   ...(hasBody ? { body } : {}),
+                  ...(hasBody && tool.contentType
+                    ? { headers: { "content-type": tool.contentType } }
+                    : {}),
                 });
               } catch (error) {
                 if (error instanceof ConnectError) throw new VendorFailed(502, error.message);

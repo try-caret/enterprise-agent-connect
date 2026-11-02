@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { generateKeyPairSync, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -924,4 +925,244 @@ test("an address that is link-local, where cloud metadata services sit, is never
     await assert.rejects(get(`${origin}/latest/meta-data/`), /link-local/);
   }
   assert.equal(called, false);
+});
+
+const people = (extra: Record<string, unknown> = {}) =>
+  search({
+    name: "orders_people",
+    method: "POST",
+    path: "/people/search",
+    params: {
+      first_name: {
+        type: "string",
+        description: "First name",
+        in: "body",
+        name: "data.attributes.firstName",
+        required: false,
+      },
+      company_id: {
+        type: "integer",
+        description: "Company",
+        in: "body",
+        name: "data.attributes.match.0.companyId",
+        required: false,
+      },
+      fields: {
+        type: "array",
+        items: "string",
+        description: "Fields",
+        in: "body",
+        name: "data.attributes.outputFields",
+        default: ["id"],
+      },
+    },
+    nestedBody: true,
+    body: { data: { type: "PersonSearch" } },
+    ...extra,
+  });
+
+test("a body param's dot path nests, fixed body values are merged, and a +json type is sent", async () => {
+  respond = ok({ data: [] });
+  seen.length = 0;
+  const connector = withTools([people({ contentType: "application/vnd.api+json" })]);
+  await run(connector, "orders_people", { first_name: "Ann", company_id: 7 });
+  assert.equal(seen[0].headers["content-type"], "application/vnd.api+json");
+  assert.deepEqual(JSON.parse(seen[0].body), {
+    data: {
+      type: "PersonSearch",
+      attributes: { firstName: "Ann", match: [{ companyId: 7 }], outputFields: ["id"] },
+    },
+  });
+  // The fixed values are copied per call, never changed by one.
+  await run(connector, "orders_people", {});
+  assert.deepEqual(JSON.parse(seen[1].body), {
+    data: { type: "PersonSearch", attributes: { outputFields: ["id"] } },
+  });
+  // A block-wide content type covers every tool; flat body params are sent as before.
+  await run(withTools([], { contentType: "application/merge-patch+json" }), "orders_add_note", {
+    id: "1",
+    text: "hi",
+  });
+  assert.equal(seen[2].headers["content-type"], "application/merge-patch+json");
+  assert.deepEqual(JSON.parse(seen[2].body), { text: "hi" });
+  await run(orders(), "orders_add_note", { id: "1", text: "hi" });
+  assert.equal(seen[3].headers["content-type"], "application/json");
+  // The agent never sees a fixed value.
+  await assert.rejects(run(connector, "orders_people", { data: { type: "Other" } }));
+});
+
+test("a body path follows only the body's own keys, never an inherited property", async () => {
+  respond = ok({});
+  seen.length = 0;
+  const reach = (name: string) => ({ type: "string", description: "x", in: "body", name, required: false });
+  const connector = withTools([people({ params: { a: reach("q.hasOwnProperty.call"), b: reach("l.length") } })]);
+  await run(connector, "orders_people", { a: "pwned", b: "4294967295" });
+  assert.equal(typeof Object.prototype.hasOwnProperty.call, "function");
+  assert.deepEqual(JSON.parse(seen[0].body), {
+    data: { type: "PersonSearch" },
+    q: { hasOwnProperty: { call: "pwned" } },
+    l: { length: "4294967295" },
+  });
+});
+
+test("without nestedBody a dotted body name is one key, as before", async () => {
+  respond = ok({});
+  seen.length = 0;
+  const flat = people({
+    nestedBody: false,
+    body: undefined,
+    params: { user: { type: "string", description: "x", in: "body", name: "urn:ietf:params:scim:schemas:core:2.0:User" } },
+  });
+  await run(withTools([flat]), "orders_people", { user: "ann" });
+  assert.deepEqual(JSON.parse(seen[0].body), { "urn:ietf:params:scim:schemas:core:2.0:User": "ann" });
+});
+
+test("a POST marked readOnly is told to clients as read-only", () => {
+  const hints = new Map<string, { readOnlyHint?: boolean }>();
+  const recorder = {
+    registerTool: (name: string, c: { annotations: { readOnlyHint?: boolean } }) => hints.set(name, c.annotations),
+  } as unknown as McpServer;
+  for (const readOnly of [true, false]) {
+    const toolset = httpTools(withTools([people({ readOnly })]).http!);
+    toolset.register(recorder, {} as ToolContext, new Set(toolset.names));
+    assert.equal(hints.get("orders_people")!.readOnlyHint, readOnly);
+  }
+});
+
+test("body paths and fixed values are checked when the connector is read", () => {
+  const body = (name: string) => ({
+    type: "string",
+    description: "x",
+    in: "body",
+    name,
+    required: false,
+  });
+  const refused = [
+    // A param inside a fixed value, or a fixed value inside a param.
+    people({ params: { t: body("data.type.x") } }),
+    people({ params: { t: body("data") } }),
+    people({ params: { t: body("data.type") } }),
+    // One param inside another.
+    people({ params: { a: body("data.attributes"), b: body("data.attributes.firstName") } }),
+    // Prototype keys, in a param or a fixed value, and empty segments.
+    people({ params: { a: body("data.__proto__.x") } }),
+    people({ params: { a: body("constructor") } }),
+    people({ body: { data: { prototype: 1 } } }),
+    people({ body: JSON.parse('{"__proto__": {"polluted": true}}') }),
+    people({ params: { a: body("data..x") } }),
+    // A list index past 99.
+    people({ params: { a: body("data.list.100") } }),
+    // One place both a list and an object, among params or beside a fixed value.
+    people({ params: { a: body("data.attributes.match.0.x"), b: body("data.attributes.match.y") } }),
+    people({ params: { a: body("data.0") } }),
+    // Read-only and destructive at once.
+    people({ readOnly: true, destructive: true }),
+    // A GET with a body, and a content type that is not JSON.
+    search({ body: { a: 1 } }),
+    people({ contentType: "text/plain" }),
+    people({ contentType: "application/jsonp" }),
+  ];
+  for (const tool of refused) assert.throws(() => withTools([tool]), JSON.stringify(tool));
+  assert.throws(() => withTools([], { contentType: "application/xml" }));
+  // Siblings under one object, and a fixed value beside a param, are fine.
+  withTools([people({ params: { a: body("data.attributes.x"), b: body("data.attributes.y") } })]);
+  withTools([people({ body: { data: { type: "T" }, meta: {} } })]);
+});
+
+test("the JWT bearer grant signs an RS256 assertion with the connection's private key", async () => {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
+  const fields = [
+    { id: "auth_host", label: "Sign-in host", secret: false },
+    { id: "integration_key", label: "Integration key", secret: false },
+    { id: "user_id", label: "User ID", secret: false },
+    { id: "private_key", label: "Private key", secret: true },
+  ];
+  const auth = {
+    type: "oauth2_jwt",
+    tokenUrl: "https://{auth_host}/oauth/token",
+    issuer: "integration_key",
+    subject: "user_id",
+    privateKey: "private_key",
+    audience: "{auth_host}",
+    scope: "signature impersonation",
+  };
+  const connector = orders(
+    { baseUrl: "https://{auth_host}/api", allowedHosts: ["*.example.com"], auth },
+    { fields },
+  );
+  const calls: { url: string; init?: RequestInit }[] = [];
+  const vendor = httpVendor(connector, (async (input: string | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return /token$/.test(String(input))
+      ? Response.json({ access_token: "minted", expires_in: 3600 })
+      : Response.json({ id: "1" });
+  }) as typeof fetch);
+  const before = Math.floor(Date.now() / 1000);
+  // A key pasted without its line breaks still reads.
+  const flat = pem.replace(/\n/g, " ");
+  const conn = await vendor.connect({
+    auth_host: "account-d.example.com",
+    integration_key: "ik",
+    user_id: "uid",
+    private_key: flat,
+  });
+  assert.equal(calls[0].url, "https://account-d.example.com/oauth/token");
+  const form = new URLSearchParams(String(calls[0].init!.body));
+  assert.equal(form.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
+  assert.equal(form.get("client_secret"), null);
+  const [header, payload, signature] = form.get("assertion")!.split(".");
+  const read = (part: string) => JSON.parse(Buffer.from(part, "base64url").toString());
+  assert.deepEqual(read(header), { alg: "RS256", typ: "JWT" });
+  const claims = read(payload);
+  assert.deepEqual(
+    { ...claims, iat: 0, exp: 0 },
+    { iss: "ik", sub: "uid", aud: "account-d.example.com", scope: "signature impersonation", iat: 0, exp: 0 },
+  );
+  assert.ok(claims.iat >= before && claims.exp - claims.iat === 3600);
+  assert.ok(
+    verify("sha256", Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, "base64url")),
+  );
+  await vendor.call(conn, { method: "GET", path: "/orders/1" });
+  assert.equal(new Headers(calls[1].init!.headers).get("authorization"), "Bearer minted");
+
+  // A key that is not RSA, or not a key, is refused before any request.
+  calls.length = 0;
+  const ec = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({
+    type: "pkcs8",
+    format: "pem",
+  }) as string;
+  for (const [key, why] of [
+    [ec, /RSA key of at least 2048 bits/],
+    ["not a key", /Paste the whole private key/],
+  ] as const)
+    await assert.rejects(
+      vendor.connect({ auth_host: "account-d.example.com", integration_key: "ik", user_id: "u", private_key: key }),
+      why,
+    );
+  // The token host is held to allowedHosts.
+  await assert.rejects(
+    vendor.connect({ auth_host: "evil.test", integration_key: "ik", user_id: "u", private_key: pem }),
+    /not an address this app may use/,
+  );
+  assert.equal(calls.length, 0);
+
+  // The private key must be a secret field, the ids and the audience's field plain ones.
+  const swap = (id: string, secret: boolean) =>
+    fields.map((f) => (f.id === id ? { ...f, secret } : f));
+  for (const bad of [swap("private_key", false), swap("user_id", true), swap("auth_host", true)])
+    assert.throws(
+      () => orders({ baseUrl: "https://x.example.com/api", auth }, { fields: bad }),
+      /auth names its fields/,
+    );
+  assert.throws(() =>
+    orders(
+      {
+        baseUrl: "https://x.example.com/api",
+        allowInsecureHttp: false,
+        auth: { ...auth, tokenUrl: "http://a.example.com/t" },
+      },
+      { fields },
+    ),
+  );
 });

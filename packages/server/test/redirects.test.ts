@@ -207,6 +207,36 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     conn: { config: { host: "acme.onestreamcloud.com" }, secret: { token: "t" } },
     request: { method: "POST", path: "/DataProvider/GetAdoDataSetForAdapter", body: {} },
   },
+  zip: { conn: { config: {}, secret: { api_key: "k" } }, request: { method: "GET", path: "/requests" } },
+  "ukg-pro": {
+    conn: { config: { host: "service5.ultipro.com", username: "u" }, secret: { password: "p", customer_api_key: "k" } },
+    request: { method: "GET", path: "/configuration/v1/company-details" },
+  },
+  icims: {
+    conn: { config: { host: "api.icims.com", customer: "1234", username: "u" }, secret: { password: "p" } },
+    request: { method: "GET", path: "/v2/lists" },
+  },
+  zoominfo: {
+    conn: { config: { client_id: "i" }, secret: { client_secret: "s" } },
+    request: { method: "POST", path: "/data/v1/companies/search", body: {} },
+  },
+  docusign: {
+    conn: {
+      config: {
+        auth_host: "account-d.docusign.com",
+        host: "demo.docusign.net",
+        account: GUID,
+        integration_key: "ik",
+        user_id: GUID,
+      },
+      secret: { private_key: okta },
+    },
+    request: { method: "GET", path: "/folders" },
+  },
+  axonius: {
+    conn: { config: { host: "acme.on.axonius.com" }, secret: { api_key: "k", api_secret: "s" } },
+    request: { method: "GET", path: "/api/v2/assets/asset_types" },
+  },
 };
 for (const id of [
   "outlook-mail",

@@ -82,6 +82,16 @@ A connector with an `http` block is like any other connector (name, setup steps,
   - `{"type": "oauth2", "tokenUrl": "https://…", "clientId": "<plain field>", "clientSecret": "<secret field>"}` (client credentials; add `"scope"` for a token service that needs one, such as Microsoft Entra's, `"audience"` for one that asks for an audience, and `"clientAuth": "basic"` for one that wants the client id and secret as HTTP Basic rather than in the form, which is the default `"body"`). `tokenUrl` takes `{field}` placeholders like `baseUrl`, e.g. `"https://{host}/oauth/token"` for an app whose token service is on each company's own host; a filled-in one is held to `allowedHosts` too
   - `{"type": "query", "param": "api_key", "value": "<secret field>"}`: the key goes in every
     call's query string. No tool param may use the same name.
+  - `{"type": "oauth2_jwt", "tokenUrl": "https://…", "issuer": "<plain field>", "subject": "<plain field>", "privateKey": "<secret field>", "audience": "…", "scope": "…"}`:
+    the OAuth JWT bearer grant (RFC 7523), for an app that signs in server to server with a
+    private key instead of a client secret, such as DocuSign's JWT Grant. The token request
+    sends `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` and an `assertion` signed
+    RS256 with the RSA private key (2048 bits or more, PEM; line breaks lost in pasting are
+    put back) whose claims are `iss` (the issuer field, the app's client id), `sub` (the
+    subject field, the user it acts as), `aud`, `scope` when given, `iat` and an `exp` one
+    hour later. `audience` is written as it is or names a whole plain field, `"{auth_host}"`,
+    for an app whose sign-in host is a choice. `tokenUrl` takes `{field}`s and is held to
+    `allowedHosts` as for `oauth2`.
 - **headers**: sent with every call, e.g. `{"X-GitHub-Api-Version": "2022-11-28", "Accept":
   "application/vnd.github+json"}`. They are not secret, so they cannot carry credentials: names
   like `Authorization`, `Cookie` or anything with `key`, `token`, `secret` or `auth` in it are
@@ -92,7 +102,7 @@ A connector with an `http` block is like any other connector (name, setup steps,
   the service sets.
 - **tools**: one per action. `path` takes `{param}` placeholders. Each param has a `type`
   (`string`, `number`, `integer`, `boolean` or `array`), a `description` the agent reads, and
-  `in`: `path`, `query` or `body` (sent as one JSON object). Params are required unless
+  `in`: `path`, `query` or `body` (sent as one JSON object; see nested bodies below). Params are required unless
   `"required": false` or they have a `default`. Also:
   - `"enum": ["open", "closed"]`: the only values the agent may send.
   - `"default": "open"`: sent when the agent leaves the param out.
@@ -104,6 +114,32 @@ A connector with an `http` block is like any other connector (name, setup steps,
     is not offered to the agent at all), for a value the app wants in every request, such as
     the company's own server address. A `string` in the query or body, with no `default`,
     `enum` or `limit`.
+- **Nested bodies**: with `"nestedBody": true` on a tool, a body param's `name` is a dot path
+  into the body, so `"name": "data.attributes.firstName"` sends
+  `{"data": {"attributes": {"firstName": …}}}` and a number indexes a list
+  (`"matchInput.0.companyId"`, 0 to 99). Without it a name is sent as one key, dots and all. A
+  tool's `body` holds fixed values merged into every request and never shown to the agent,
+  such as the type a JSON:API app wants:
+
+  ```json
+  "nestedBody": true,
+  "body": { "data": { "type": "PersonSearch" } },
+  "params": {
+    "first_name": { "type": "string", "description": "First name", "in": "body", "name": "data.attributes.firstName" }
+  }
+  ```
+
+  Each param and fixed value has its own place: a param cannot sit at or inside a fixed value
+  or another param (`data.type` beside `data.type.x`, or `a` beside `a.b`), and no segment may
+  be empty, `__proto__`, `constructor` or `prototype`. A place is either a list (a number
+  follows it) or an object, never both. A GET tool has no body.
+- **readOnly**: `true` on a tool that only reads but is not a GET, such as a search sent as
+  POST with its filters in the body, so agents' clients see it as read-only. It cannot be
+  destructive or a DELETE.
+- **contentType** (on the `http` block or a tool, the tool's winning): the JSON body's content
+  type when the app wants one other than `application/json`, such as
+  `"application/vnd.api+json"`. Only `application/json` or a `+json` type. The app's `Accept`
+  goes in `headers`.
 - **result**: what the agent gets of a successful answer, so it reads the few fields it needs
   instead of the whole payload. `"items"` is the dot path of the list in the answer and
   `"fields"` the dot paths kept of each item (or of the answer itself without `items`):

@@ -1361,7 +1361,17 @@ export interface components {
                     type: "query";
                     param: string;
                     value: string;
+                } | {
+                    /** @constant */
+                    type: "oauth2_jwt";
+                    tokenUrl: string;
+                    issuer: string;
+                    subject: string;
+                    privateKey: string;
+                    audience: string;
+                    scope?: string;
                 };
+                contentType?: string;
                 /** @default {} */
                 headers: {
                     [key: string]: string;
@@ -1418,6 +1428,14 @@ export interface components {
                         /** @constant */
                         link: true;
                     };
+                    body?: {
+                        [key: string]: unknown;
+                    };
+                    contentType?: string;
+                    /** @default false */
+                    nestedBody: boolean;
+                    /** @default false */
+                    readOnly: boolean;
                 }[];
                 /** @default false */
                 allowInsecureHttp: boolean;

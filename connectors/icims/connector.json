@@ -1,0 +1,179 @@
+{
+  "id": "icims",
+  "name": "iCIMS",
+  "description": "Let agents read jobs, candidates and their applications in iCIMS. For screening summaries, pipeline and hiring reports, joiner checks and interview prep. Agents never move, reject or contact a candidate.",
+  "logo": "/brand/registry/icims.svg",
+  "identity": "An iCIMS API user name and password, issued by iCIMS for your company and usable only from the addresses you give iCIMS. Agents see the fields and profiles that user may see.",
+  "accountKey": "customer",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Ask iCIMS for API credentials",
+      "body": "iCIMS issues API credentials for your company and accepts them only from the network addresses you list, so give iCIMS the outbound address this service connects from. The user must be in the Integration User group, which searching needs. Agents see only the fields and profiles that user may see: hide fields agents should not read, such as EEO answers, from its group. iCIMS gives you your customer ID with the credentials.",
+      "link": {
+        "label": "iCIMS developer documentation",
+        "href": "https://developer.icims.com/"
+      },
+      "click": [
+        "Ask your iCIMS account manager or iCIMS Support for read-only API credentials (Basic authentication) in the Integration User group.",
+        "Give iCIMS the outbound IP address of this service for the credentials' IP allowlist."
+      ]
+    },
+    {
+      "title": "Find your API address",
+      "body": "Use api.icims.com, or api-eu.icims.com if your iCIMS is hosted in the EU. You can test the credentials with the command below: it shows your iCIMS site and changes nothing.",
+      "copy": [
+        "ICIMS_HOST=api.icims.com",
+        "curl -s -u \"$ICIMS_USER:$ICIMS_PASSWORD\" \"https://$ICIMS_HOST/customers/$ICIMS_CUSTOMER\""
+      ],
+      "shell": "bash",
+      "clickUnavailable": true
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "API address",
+      "help": "api.icims.com, or api-eu.icims.com for iCIMS hosted in the EU.",
+      "placeholder": "api.icims.com",
+      "secret": false
+    },
+    { "id": "customer", "label": "Customer ID", "help": "Your iCIMS customer ID, a number.", "placeholder": "1234", "secret": false },
+    { "id": "username", "label": "API user name", "secret": false },
+    { "id": "password", "label": "API password", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "jobs",
+      "label": "Read jobs",
+      "description": "Search jobs (requisitions) by status, title, location or date, read a job's fields such as title, hiring manager, recruiter and openings, and read your iCIMS field and list definitions.",
+      "required": true,
+      "note": "Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["icims_search_jobs", "icims_get_job", "icims_get_profile_schema", "icims_get_list"]
+    },
+    {
+      "id": "candidates",
+      "label": "Read candidates and applications",
+      "description": "Search people and applications, read a candidate's profile (by id or email) and an application's status, job and source.",
+      "note": "Candidate profiles are personal data. Agents read names, email, folder, login, source, education and work history of a person, never phones, addresses, birth dates, EEO answers or government ids, and of an application its job, person, status and source. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["icims_search_people", "icims_get_person", "icims_find_person_by_email", "icims_search_applications", "icims_get_application"]
+    }
+  ],
+  "limits": [],
+  "verify": { "method": "GET", "path": "/v2/lists", "label": "iCIMS lists", "show": "lists[]" },
+  "revoke": "Ask iCIMS Support to disable the API credentials, or remove the service's address from their IP allowlist. Agents lose access to iCIMS at once.",
+  "http": {
+    "baseUrl": "https://{host}/customers/{customer}",
+    "allowedHosts": ["api.icims.com", "api-eu.icims.com"],
+    "auth": { "type": "basic", "username": "username", "password": "password" },
+    "tools": [
+      {
+        "name": "icims_search_jobs",
+        "description": "Search jobs and get their system ids, at most 1000, lowest id first. The search is iCIMS search JSON with at least one filter, such as {\"filters\":[{\"name\":\"job.folder\",\"value\":[\"Approved\"]}]} or {\"filters\":[{\"name\":\"job.updateddate\",\"value\":[\"2026-10-01\"],\"secondaryValue\":[\"2026-10-31\"]}]}. Filters include job.id, job.jobtitle, job.jobnumber, job.folder, job.createddate, job.updateddate and job.joblocation.addresscountry; operators are =, !=, <, <=, > and >=, and \"operator\": \"|\" on the group ORs its filters. For more, add a job.id filter with > the last id. Read each job with icims_get_job.",
+        "method": "GET",
+        "path": "/search/jobs",
+        "params": {
+          "search": { "type": "string", "description": "The search JSON", "in": "query", "name": "searchJson" },
+          "staleness": { "type": "integer", "description": "How many minutes old the results may be; iCIMS uses 15 when left out, 0 for live", "in": "query", "required": false }
+        },
+        "result": { "items": "searchResults", "fields": ["id"] }
+      },
+      {
+        "name": "icims_get_job",
+        "description": "Read one job. Without fields, iCIMS answers its job id, folder (status), title, hiring manager, location and recruiter. A field the answer leaves out has no value or is hidden from the API user.",
+        "method": "GET",
+        "path": "/jobs/{job_id}",
+        "params": {
+          "job_id": { "type": "string", "description": "The job's system id", "in": "path" },
+          "fields": {
+            "type": "string",
+            "description": "Comma-separated field names, such as jobtitle,folder,hiringmanager,numberofpositions,field1234. icims_get_profile_schema lists them",
+            "in": "query",
+            "required": false
+          }
+        }
+      },
+      {
+        "name": "icims_get_profile_schema",
+        "description": "Read the field names and types of a kind of profile in your iCIMS, including your custom fields, to know what to ask for in fields.",
+        "method": "GET",
+        "path": "/profiledefinitions/v1/{profile_type}/schema",
+        "params": {
+          "profile_type": {
+            "type": "string",
+            "enum": ["job", "person", "submittal", "company", "onboardworkflow"],
+            "description": "The kind of profile: submittal is an application",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "icims_get_list",
+        "description": "Read the values of one of your iCIMS lists, such as lists.job.folders (job statuses) or lists.person.folders, to turn their ids into names. Each answer is one level of the list.",
+        "method": "GET",
+        "path": "/v2/lists/{list_id}",
+        "params": {
+          "list_id": { "type": "string", "description": "The list, such as lists.job.folders", "in": "path" },
+          "size": { "type": "integer", "description": "How many values, at most 1000", "in": "query", "required": false }
+        }
+      },
+      {
+        "name": "icims_search_people",
+        "description": "Search people (candidates, employees and hiring managers) and get their system ids, at most 1000, lowest id first. The search is iCIMS search JSON with at least one filter, such as {\"filters\":[{\"name\":\"person.lastname\",\"value\":[\"Smith\"]}]}. Filters include person.id, person.firstname, person.lastname, person.emailaddress, person.folder and person.updateddate. For more, add a person.id filter with > the last id. Read each person with icims_get_person.",
+        "method": "GET",
+        "path": "/search/people",
+        "params": {
+          "search": { "type": "string", "description": "The search JSON", "in": "query", "name": "searchJson" },
+          "staleness": { "type": "integer", "description": "How many minutes old the results may be; iCIMS uses 15 when left out, 0 for live", "in": "query", "required": false }
+        },
+        "result": { "items": "searchResults", "fields": ["id"] }
+      },
+      {
+        "name": "icims_get_person",
+        "description": "Read one person. A field the answer leaves out has no value or is hidden from the API user.",
+        "method": "GET",
+        "path": "/people/{person_id}",
+        "params": {
+          "person_id": { "type": "string", "description": "The person's system id", "in": "path" },
+          "fields": { "type": "array", "items": "string", "enum": ["firstname", "middlename", "lastname", "email", "folder", "login", "source", "sourcename", "education", "workexperience"], "join": ",", "default": ["firstname", "lastname", "email", "folder"], "description": "The fields to read", "in": "query" }
+        }
+      },
+      {
+        "name": "icims_find_person_by_email",
+        "description": "Read the person with this email address. A field the answer leaves out has no value or is hidden from the API user.",
+        "method": "GET",
+        "path": "/people/by-email",
+        "params": {
+          "email": { "type": "string", "description": "The person's email address", "in": "query" },
+          "fields": { "type": "array", "items": "string", "enum": ["firstname", "middlename", "lastname", "email", "folder", "login", "source", "sourcename", "education", "workexperience"], "join": ",", "default": ["firstname", "lastname", "email", "folder"], "description": "The fields to read", "in": "query" }
+        }
+      },
+      {
+        "name": "icims_search_applications",
+        "description": "Search applications (a person's workflow on a job) and get their system ids, at most 1000, lowest id first. The search is iCIMS search JSON with at least one filter, such as {\"filters\":[{\"name\":\"applicantworkflow.job.id\",\"value\":[\"1324\"]}]}. Filters include applicantworkflow.job.id, applicantworkflow.person.id, applicantworkflow.status and applicantworkflow.updateddate. With more than 1000, narrow the search, such as to one job. Read each with icims_get_application.",
+        "method": "GET",
+        "path": "/search/applicantworkflows",
+        "params": {
+          "search": { "type": "string", "description": "The search JSON", "in": "query", "name": "searchJson" },
+          "staleness": { "type": "integer", "description": "How many minutes old the results may be; iCIMS uses 15 when left out, 0 for live", "in": "query", "required": false }
+        },
+        "result": { "items": "searchResults", "fields": ["id"] }
+      },
+      {
+        "name": "icims_get_application",
+        "description": "Read one application: the job (baseprofile), the person (associatedprofile), its status, source and source name.",
+        "method": "GET",
+        "path": "/applicantworkflows/{workflow_id}",
+        "params": {
+          "workflow_id": { "type": "string", "description": "The application's system id", "in": "path" },
+          "fields": { "type": "array", "items": "string", "enum": ["baseprofile", "associatedprofile", "status", "source", "sourcename"], "join": ",", "default": ["baseprofile", "associatedprofile", "status", "source", "sourcename"], "description": "The fields to read", "in": "query" }
+        }
+      }
+    ]
+  }
+}

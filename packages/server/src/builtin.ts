@@ -78,4 +78,10 @@ export const builtinConnectors: BuiltinModule[] = [
   describedApp("churnzero", odataConnector),
   describedApp("ironclad"),
   describedApp("onestream"),
+  describedApp("zip"),
+  describedApp("ukg-pro"),
+  describedApp("icims"),
+  describedApp("zoominfo"),
+  describedApp("docusign"),
+  describedApp("axonius"),
 ];
