@@ -139,7 +139,8 @@ A connector with an `http` block is like any other connector (name, setup steps,
 - **discover** (optional): a request listing the values a limit chooses from, shown to the admin,
   e.g. `{"method": "GET", "path": "/customers", "label": "Customers", "show": "items[].id",
   "name": "items[].name"}`. `name` gives each value a label read from the same list item, so the
-  admin picks "Acme Corp" rather than an id.
+  admin picks "Acme Corp" rather than an id. For an answer that is itself a list, start the
+  path with `[]`: `"show": "[].id", "name": "[].name"`.
 - **Setup steps** may carry `"capabilities": ["<capability id>"]`: shown only while one of those
   capabilities is ticked, e.g. a script only one feature needs.
 

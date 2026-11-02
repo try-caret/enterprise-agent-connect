@@ -135,6 +135,35 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
   confluence: {
     conn: { config: { cloud: GUID, client_id: "i" }, secret: { client_secret: "s" } },
     request: { method: "GET", path: "/api/v2/spaces" },
+  automox: {
+    conn: { config: {}, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/orgs" },
+  },
+  qualys: {
+    conn: {
+      config: { api_host: "qualysapi.qualys.com", username: "u" },
+      secret: { password: "p" },
+    },
+    request: { method: "GET", path: "/api/2.0/fo/asset/host/" },
+  },
+  druva: {
+    conn: { config: { client_id: "i" }, secret: { secret_key: "s" } },
+    request: { method: "GET", path: "/usermanagement/v1/users" },
+  },
+  drata: {
+    conn: { config: { api_host: "public-api.drata.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/company" },
+  },
+  safebase: {
+    conn: { config: {}, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/organizations" },
+  },
+  "adobe-admin-console": {
+    conn: {
+      config: { client_id: "i", organization: "A1@AdobeOrg" },
+      secret: { client_secret: "s" },
+    },
+    request: { method: "GET", path: "/groups/A1%40AdobeOrg/0" },
   },
 };
 for (const id of [

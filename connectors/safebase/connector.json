@@ -1,0 +1,221 @@
+{
+  "id": "safebase",
+  "name": "SafeBase",
+  "description": "Let agents search your SafeBase knowledge base and Trust Center documents for approved answers, and, if you allow it, add new internal answers. For security questionnaires, RFPs and security reviews.",
+  "logo": "/brand/registry/safebase.svg",
+  "identity": "A SafeBase API key, scoped to what the actions you tick need.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API key",
+      "body": "You need a SafeBase admin. SafeBase checks each call against the key's scopes, so give it only the scopes below. SafeBase shows the key once, so copy it for the form below.",
+      "link": {
+        "label": "SafeBase: the SafeBase API",
+        "href": "https://help.safebase.io/en/articles/6119329-integration-safebase-api"
+      },
+      "click": [
+        "In SafeBase, open Settings (app.safebase.io/orgsettings).",
+        "Scroll down to the API Keys section and select Add API Key.",
+        "Type a name that identifies the agents in the Description box, such as AI agents.",
+        "Select only these scopes: {scopes}.",
+        "Copy the key and keep it somewhere safe."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "api_key",
+      "label": "API key",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Search answers and documents",
+      "description": "Search the knowledge base (answers from policies, past questionnaires, reports and the Trust Center), list and read Trust Center documents, and list products.",
+      "required": true,
+      "note": "Includes knowledge base entries marked private or internal, not only what the Trust Center shows publicly. Read-only.",
+      "scopes": ["knowledgebase:view", "documents:view", "products:view", "organization:view"],
+      "permissions": [],
+      "tools": [
+        "safebase_search_knowledge_base",
+        "safebase_list_documents",
+        "safebase_get_document",
+        "safebase_list_products"
+      ]
+    },
+    {
+      "id": "add_answers",
+      "label": "Add internal answers",
+      "description": "Add a question and answer to the knowledge base, visible only inside your company until someone in SafeBase changes it.",
+      "note": "New answers can be used in later questionnaire responses, so review what agents add.",
+      "scopes": ["knowledgebase:edit"],
+      "permissions": [],
+      "tools": ["safebase_add_answer"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "products",
+      "label": "Products",
+      "help": "Optional: only answers and documents for these SafeBase products, by product id (shown under SafeBase products after connecting). Leave empty for every product.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/organizations",
+    "label": "SafeBase organization",
+    "show": "result.name"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/products",
+    "label": "SafeBase products",
+    "show": "result.items[].id",
+    "name": "result.items[].name"
+  },
+  "revoke": "In SafeBase, go to Settings, then API Keys, and suspend the key. Agents lose access to SafeBase at once.",
+  "http": {
+    "baseUrl": "https://app.safebase.io/api/ext/v1/rest",
+    "auth": { "type": "header", "header": "x-sb-api-key", "value": "api_key" },
+    "tools": [
+      {
+        "name": "safebase_search_knowledge_base",
+        "description": "Search the knowledge base for answers to a security question. Each result says where it comes from (policy, questionnaire, report, Trust Center or a manual entry) and who may see it.",
+        "method": "GET",
+        "path": "/kb/search",
+        "params": {
+          "query": {
+            "type": "string",
+            "description": "What to search for, up to 512 characters",
+            "in": "query"
+          },
+          "products": {
+            "type": "array",
+            "items": "string",
+            "description": "Only these product ids; leave out to search every product",
+            "in": "query",
+            "join": ",",
+            "required": false,
+            "limit": "products"
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 1",
+            "in": "query",
+            "name": "pageNumber",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "How many results per page",
+            "in": "query",
+            "name": "pageSize",
+            "default": 20
+          }
+        },
+        "result": {
+          "items": "result.items",
+          "fields": ["id", "source", "accessLevel", "subtype.pretty", "content", "product.name", "products.name"]
+        }
+      },
+      {
+        "name": "safebase_list_documents",
+        "description": "List Trust Center documents, such as reports, certificates and policies, optionally matching a search. Pass page 2, 3 and so on for more.",
+        "method": "GET",
+        "path": "/documents",
+        "params": {
+          "query": {
+            "type": "string",
+            "description": "Only documents matching this text",
+            "in": "query",
+            "required": false
+          },
+          "products": {
+            "type": "array",
+            "items": "string",
+            "description": "Only documents for these product ids",
+            "in": "query",
+            "name": "productIds",
+            "join": ",",
+            "required": false,
+            "limit": "products"
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 1",
+            "in": "query",
+            "default": 1
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many documents per page",
+            "in": "query",
+            "default": 25
+          }
+        },
+        "result": { "items": "result.documents" }
+      },
+      {
+        "name": "safebase_get_document",
+        "description": "Read one document's details: name, type, file type, expiry date, tags and products.",
+        "method": "GET",
+        "path": "/document/{id}",
+        "params": {
+          "id": {
+            "type": "string",
+            "description": "The document id",
+            "in": "path"
+          }
+        },
+        "answerLimits": [{ "field": "result.products.id", "limit": "products" }]
+      },
+      {
+        "name": "safebase_list_products",
+        "description": "List your SafeBase products, with their ids.",
+        "method": "GET",
+        "path": "/products",
+        "result": { "items": "result.items", "fields": ["id", "name"] }
+      },
+      {
+        "name": "safebase_add_answer",
+        "description": "Add a question and its answer to the knowledge base, visible inside your company only.",
+        "method": "POST",
+        "path": "/kb/entries",
+        "params": {
+          "question": {
+            "type": "string",
+            "description": "The question",
+            "in": "body"
+          },
+          "answer": {
+            "type": "string",
+            "description": "The answer",
+            "in": "body"
+          },
+          "comment": {
+            "type": "string",
+            "description": "A note for reviewers, such as where the answer comes from",
+            "in": "body",
+            "required": false
+          },
+          "access_level": {
+            "type": "string",
+            "enum": ["internal"],
+            "description": "Who may see the answer: internal (your company only)",
+            "in": "body",
+            "name": "accessLevel",
+            "default": "internal"
+          }
+        },
+        "result": { "fields": ["result.id", "result.content"] }
+      }
+    ]
+  }
+}

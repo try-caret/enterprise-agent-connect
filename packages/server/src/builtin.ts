@@ -56,4 +56,10 @@ export const builtinConnectors: BuiltinModule[] = [
   describedApp("grafana"),
   describedApp("zephyr"),
   describedApp("confluence"),
+  describedApp("automox"),
+  describedApp("qualys"),
+  describedApp("druva"),
+  describedApp("drata"),
+  describedApp("safebase"),
+  describedApp("adobe-admin-console"),
 ];
