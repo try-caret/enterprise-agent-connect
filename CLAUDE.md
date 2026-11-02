@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr and Confluence once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad and OneStream) once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -31,7 +31,21 @@ host. Its own tables live in its own schema (`agent_connect`, see Database below
   {name?} makes it with that id if missing; a name given replaces the kept one). DEPRECATED:
   the unversioned `/agent-connect/admin/*` serves the same routes for one release (an admin of
   the previous release during an upgrade), and creates an organization it does not know on its
-  first `/orgs/<org>/` request; it goes in the release after. Routes: `GET connectors`,
+  first `/orgs/<org>/` request; it goes in the release after. Routes: `GET connectors` (the
+  deployment's apps), `GET orgs/:org/connectors` (those plus the organization's internal apps),
+  internal apps (docs/http-connector.md "Add internal apps through the admin API"): `GET
+  orgs/:org/internal-apps`, `GET/PUT/DELETE …/:app` (PUT {definition, by}: a connector.json
+  with an http, soap, odata or sql block, parsed by parseConnector and built and checked by the
+  same `build` as a loaded app; no `events` or `signsInAs`; the id may not be a connectors/
+  folder, a loaded app or `agents`, and its tool names must be new to the organization; a
+  loaded app added later with a saved internal app's id is offered to neither that
+  organization (its kept connection was entered for its own app) until the internal app goes; a
+  replace keeps the connection only when `signIn()` (form fields, accountKey, the block but its
+  tools) is unchanged, then cuts the ceiling and grants to the new capabilities and removes
+  grants whose limits no longer validate; otherwise removes the connection and grants; DELETE
+  removes the definition, connection and grants; each in one transaction with its audit row
+  `admin:create_internal_app` / `replace_internal_app` / `delete_internal_app`) and `POST
+  internal-apps/draft` {spec, id, operations|tags} (connectors/http/openapi.ts),
   `orgs/:org/connections` (GET; `PUT/PATCH/DELETE …/:app`; `POST …/:app/check`, which marks the
   connection connected or needs_reconnect unless `?record=false` (read only: limit choices, opening an app page, the Integrations tab; only the admin's Check again records, with body {by}, and a recorded check that changes the status is audited as `admin:check_app`);
   `PUT …/:app/sites` {sites} (apps with `siteAccess`: the whole list of added sites, normalized)
@@ -186,7 +200,7 @@ deliveryId, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: fa
 
 Schema `agent_connect` (`DATABASE_SCHEMA`), tables without a prefix (`agents`, `providers`,
 `connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`,
-`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`); index and
+`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`, `internal_apps`); index and
 constraint names keep the `agent_connect_<table>_...` spelling they had in public (`store.ts`
 matches `agent_connect_providers_one_org_per_tenant`). `packages/server/src/migrate.ts` applies
 `packages/server/migrations/NNNN_*.sql` on start, all pending in one transaction under an advisory lock, with
@@ -201,7 +215,8 @@ the org ids already in them, 0003 drops two never-used columns, 0004 gives trigg
 (`claude-managed-agents` for every earlier row), its settings and a sealed signing secret, 0005
 records each run's runner (a trigger moved to another runner stops the old runner's live
 sessions and never reuses them), 0006 makes `approvals` (Teams approval cards; the
-rollback drops it), 0007 the app event tables (rollback drops them). The adopting run then makes simple views
+rollback drops it), 0007 the app event tables (rollback drops them), 0008 `internal_apps` (organizations' own
+connector definitions; rollback drops it). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -325,7 +340,9 @@ packages/client/      # @arbium/enterprise-agent-connect-client: createClient (t
                       # shapes), src/steps.ts (pure step and status logic the admin pages share).
                       # `npm run client` regenerates schema.ts and builds lib/; CI fails when
                       # openapi.json or schema.ts is stale
-packages/server/src/service.ts # connect (verify before save), check, grants, agent sessions
+packages/server/src/service.ts # connect (verify before save), check, grants, agent sessions; the
+                      # one per-organization app lookup (`app(org, id)`, `orgApps(org)`): loaded
+                      # apps, then the organization's internal apps, built once per definition
 packages/server/src/store.ts # Postgres; every table named through tables() in the configured schema,
                       # never through search_path. Timestamps out as ISO 8601
 packages/server/src/migrate.ts # the schema runner (see Database)
@@ -345,8 +362,12 @@ packages/server/src/consent.ts # signed approval state (org, app, capability cei
                       # approved, nonce, 15 min expiry)
 connectors/http/      # the generic module for a connector.json `http` block; exports guardedFetch,
                       # authHeaders, formValues, paramLimits, answerWithin and connectionAddress
-                      # (an address's {field}s filled per connection, connector-kit fillAddress,
-                      # held to allowedHosts, one guarded fetch per origin) for its siblings
+                      # (an address's and an http tokenUrl's {field}s filled per connection,
+                      # connector-kit fillAddress, held to allowedHosts, one guarded fetch per
+                      # origin pair) for its siblings. A tool param with `field` is filled from
+                      # that connect form field and never offered to the agent;
+                      # openapi.ts: draftConnector (the OpenAPI drafter the script and the
+                      # admin API's internal app drafts share)
 connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
                       # templates with XML-escaped values, faults, result path), xml.ts (the XML
                       # reader: no DTD, five entities, depth 100; also used by the scripts)
@@ -367,7 +388,8 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
                       # gong: an API access key as Basic auth on the company's *.api.gong.io,
-                      # short 429 waits retried;
+                      # short 429 waits retried; lusha: an API key in the api_key header, v3
+                      # search-and-enrich (v2 ends November 30, 2026), one person or company a call;
                       # sap-s4hana: OData v2 with basic auth or Cloud OAuth, sap-client, CSRF;
                       # servicenow: OAuth client credentials or basic, on the instance;
                       # fedex, dell-techdirect, jamf on the kit's oauth.ts (client credentials, a
@@ -378,6 +400,9 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # workday: an API client for integrations' refresh token;
                       # dynamics-365: the Microsoft connection signing in to one Dataverse
                       # environment)
+connectors/churnzero/ # JSON only, on the odata block (v4, host from the connect form's instance
+                      # field); not a built-in until address placeholders land. Its test loads it
+                      # and calls a tool against a local fake
 connectors/sql/       # the generic module for connector.json files with an `sql` block:
                       # index.ts (vendor: a pool per credential, the `database` check; tools),
                       # engines.ts (:name parsing, one adapter per engine: postgres, sqlserver
@@ -428,6 +453,10 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # upgrade.test.ts: an install from fixtures/legacy-20261023200000.sql (a
                       # frozen copy of the earlier layout) adopted, against a fresh one, and
                       # by an owner that cannot bypass RLS
+                      # internal-apps.test.ts: internal apps through the admin API on Postgres
+                      # (save, refusals, id and tool clashes, org isolation, an agent calling
+                      # a local fake app, the replace and delete rules, OpenAPI drafts, a deployment app
+                       # later taking an internal app's id)
                       # events.test.ts: app events on a made-up app (signatures, replays,
                       # repeats, limits, conditions, own changes, caps, poll cursor, the signed
                       # webhook runner end to end, admin); deliver.test.ts its pure rules
@@ -439,6 +468,11 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
 connectors/http/described-apps.test.ts # every built-in described only in JSON loads and is
                       # offered; one representative tool per app against a fake app (method,
                       # address, auth headers, paging, limits). New described apps add a case here
+connectors/http/apps.test.ts # every built-in app with only an `http` block (describedApp) loads,
+                      # and one tool of each runs against a local fake (method, path, query, auth)
+connectors/http/legal-finance-apps.test.ts # Ironclad and OneStream load and are offered; one tool
+                      # each against a fake app, and connecting each through the service (token,
+                      # verify body)
 connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's test harness
                       # (packages/server/test/helpers.ts) with its fake vendor answers; run by
                       # npm test, typechecked by tsconfig.test.json, left out of the build
@@ -968,6 +1002,24 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   only after approval. `dell_warranty_lookup` returns model, ship date and each entitlement
   with an `active` flag; an answer that is not a list fails loudly. Asset components (parts)
   are left out: a separate API not confirmed under the same key. No limits.
+- JSON-only built-ins (`describedApp`, `http` block, no code; read October/November 2026 from
+  each vendor's own reference): Automox (`automox`, console.automox.com/api/docs console-api
+  OpenAPI; bearer API key, `o` the org id under the `organizations` limit, discover `GET /orgs`;
+  read plus a "Scan devices" capability whose only command is `GetOS`), Qualys (`qualys`, VM
+  API v2 `/api/2.0/fo/...` host list, host detection list and KnowledgeBase, basic auth of a
+  Reader user, fixed `X-Requested-With`, host per platform from qualys.com/platform-identification
+  held to `allowedHosts`; answers are XML passed as text, so no `result` or paging, the agent
+  passes `id_min`; `ag_ids` under the `asset_groups` limit), Druva (`druva`, developer.druva.com
+  inSync Endpoints v1/v2; token `https://apis.druva.com/token` with `clientAuth: basic` and
+  scope `read`; commercial cloud only), Drata (`drata`, public API v2 OpenAPI at
+  developers.drata.com; bearer key, host per region held to `allowedHosts`, cursor paging from
+  `pagination.cursor`, `workspaces` limit), SafeBase (`safebase`, docs.safebase.io reference;
+  `x-sb-api-key` with per-operation scopes, `products` limit and an answer limit on documents)
+  and Adobe Admin Console (`adobe-admin-console`, User Management API at usermanagement.adobe.io;
+  IMS token v2 with scope `openid,AdobeID,user_management_sdk`, `fieldHeaders` x-api-key = the
+  client id; the org id is a path segment mid-path, so agents send it under a required
+  `organizations` limit). All read-only except Automox's scan. Axonius was left out: its API v2
+  reference needs a customer login. Tested only against fakes (connectors/http/apps.test.ts).
 - Generic `soap` and `odata` modules (docs/soap-connector.md, docs/odata-connector.md), siblings
   of `http`, sharing its guarded fetch (origin, no redirects, 30 s, 1 MB; SOAP also takes XML
   types), auth headers, form values and limit checks. At most one of http, soap, odata, sql
@@ -1259,6 +1311,32 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
     the Link header. CQL search and writes are left out: CQL cannot be held to spaces, and page
     and comment bodies are nested objects the http block does not send. Sources: Atlassian
     create-oauth-2-0-credential-for-service-accounts, Confluence openapi-v2.v3.json.
+- Ironclad (`ironclad`, JSON only, `describedApp`; read November 1, 2026, tested only against
+  fakes): `https://{host}/public/api/v1` and token `https://{host}/oauth/token`, host held to
+  `ironcladapp.com` and `*.ironcladapp.com` (US, eu1, demo); client credentials with no `scope`
+  (only `grant_type` is required), so the token carries the app's registered scopes;
+  `x-as-user-email` from a plain field via fieldHeaders (Ironclad answers as that user).
+  Workflows, approvals, sign status, records (limit `record_types` on `types`, answer limit on
+  `type`), a workflow comment, a signer reminder. Left out: approving (a judgment in a user's
+  name), creating records and launching workflows (nested bodies the http block does not send),
+  document downloads (files, not JSON). Paging is `page`/`pageSize` with only a total `count`,
+  so no `paging` block. Unverified live: Ironclad documents a JSON token request; the service
+  sends the RFC 6749 form. Sources: developer.ironcladapp.com reference client-credentials-grant,
+  register-oauth-client, authenticate-a-request, list-all-workflows, retrieve-a-workflow,
+  list-all-workflow-approvals, get-sign-status, remind-signer, create-a-comment-on-a-workflow,
+  list-all-records, retrieve-a-record, oauth-token-1, filter-query-param.
+- OneStream (`onestream`, JSON only): hosted only, a personal access token as bearer at
+  `https://{host}/OneStreamApi/api`. The 5.2.0 endpoints take the token alone (7.2.0 needs a
+  SessionInfo from Logon/OpenApplication passed between calls, which the http block cannot
+  carry); every body needs `BaseWebServerUrl`, a `field` param from the connect form. Verify is
+  7.2.0 `Authentication/Logon` (body `{web_server_url}`, shows `Message`). Adapter and cube view
+  data, and ExecuteSequence (destructive, limit `sequences`); limits `applications`, `adapters`,
+  `cube_views`. Left out: SQL and method commands (Administrator role), ExecuteStep (would
+  bypass the sequence limit), self-hosted OAuth (an external IdP's token with a per-customer
+  scope). ExecuteSequence is synchronous and the service waits 30 seconds. Sources:
+  documentation.onestream.com REST API (Authentication2, OneStream WebAPI Endpoints, REST API
+  Summary, Data Provider API) and IDM (Personal Access Tokens, Requirements for Using, Manage,
+  Access the Manage page, About Using Personal Access Tokens in APIs).
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under
@@ -1357,6 +1435,25 @@ id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resource
   `onPremiseAadUser`) and `from_kind` (`user` / `application`). Sources:
   learn.microsoft.com/graph/api/resources/chatmessagefromidentityset and teamworkuseridentity
   (read October 25, 2026).
+- Marketing and customer apps described only in `connector.json` (http block, `describedApp` in
+  builtin.ts): adestra (`Authorization: TOKEN <key>`; search params go as `search:<field>` and
+  paging as `paging:page`, so a param's wire `name` may hold `:`; nothing launches a campaign,
+  approval requests never send auto_launch; tests are destructive, kept to `test_addresses`),
+  cvent (client credentials with `clientAuth: basic` on api-platform.cvent.com, North America
+  only since the token URL is fixed; read-only; the events limit also checks event lists), forsta-decipher (`x-apikey` on `{host}/api/v1`;
+  surveys only under `selfserve/<directory>/<project>`, since path values are encoded one segment
+  each; read-only), intercom (bearer on `{host}` kept to its US, EU and AU API hosts,
+  `Intercom-Version: 2.14`; replies are destructive, notes and assignment are not), sprout-social
+  (bearer, the customer id a path segment of baseUrl; drafts only, `is_draft` fixed true),
+  synthesia (raw key in `Authorization`; read-only, since creating a video needs nested objects)
+  and wordpress (application password as Basic on `{host}/wp-json/wp/v2`; creates drafts or
+  pending posts, editing a post is destructive; lists and reads use the view context, since
+  the edit context drops or refuses every post the user may not edit). Canva is left out: its API takes only a user's
+  OAuth consent. Sources: app.adestra.com/doc/page/current/index/api (REST pages),
+  developers.cvent.com public OpenAPI spec and tutorials, docs.developer.focusvision.com and
+  release.decipherinc.com/s/local/beacon.html, github.com/intercom/Intercom-OpenAPI 2.14,
+  api.sproutsocial.com/docs, docs.synthesia.io/reference, developer.wordpress.org/rest-api, read
+  November 1, 2026. Tested against a local fake only (`packages/server/test/apps-marketing-cx.test.ts`).
 
 ## Commands
 

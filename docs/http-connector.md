@@ -162,5 +162,57 @@ with a `soap` or `odata` block instead: see [soap-connector.md](soap-connector.m
 To ship an app described this way as a built-in, put its folder in `connectors/` and add
 `describedApp("<id>")` (or `describedApp("<id>", odataConnector)` for an `odata` block) to `builtinConnectors` (`packages/server/src/builtin.ts`).
 
+## Add internal apps through the admin API
+
+Each organization can also add its own apps while the service runs, as many as it wants: no
+folder, no restart, no chart values. An internal app is the same definition as a
+`connector.json` (with an `http`, `soap`, `odata` or `sql` block), saved for one organization
+and checked by the same parser. Only that organization sees it or can use it; every other part
+works as for any app: connecting and checking it, its capabilities and limits per agent, the
+tools an agent's key gets, and the audit.
+
+```sh
+curl -X PUT "$EAC/agent-connect/admin/v1/orgs/$ORG/internal-apps/orders" \
+  -H "Authorization: Bearer $AGENT_CONNECT_ADMIN_TOKEN" -H "content-type: application/json" \
+  -d "{\"definition\": $(cat orders/connector.json), \"by\": \"ann@example.com\"}"
+```
+
+With the client: `saveInternalApp(org, "orders", definition, by)`, `internalApps(org)`,
+`internalApp(org, id)`, `deleteInternalApp(org, id, by)`, and `orgConnectors(org)`, the apps an
+organization can connect (the deployment's and its own). Then connect it and give agents
+access as for any other app.
+
+- The id in the address must be the definition's `id`. It cannot be one of the deployment's apps
+  (built in or added with `CONNECTOR_DIRS`), and each tool name must be new to the organization:
+  agents see every app's tools side by side.
+- The definition holds no secret. Credentials are connect form fields, entered when the app is
+  connected and stored encrypted, as for every app.
+- `events` and `signsInAs` are not taken yet.
+- Saving a changed definition of a connected app keeps the connection when it signs in and
+  reaches the same place (same form fields, `accountKey`, and the `http`, `soap`, `odata` or
+  `sql` block apart from its tools). The app's and agents' capabilities are cut to those the new
+  definition still has, and an agent whose limits no longer fit it loses its access rather than
+  getting more. Anything else, such as a new `baseUrl`, removes the connection and every
+  agent's access to the app, since its credential was entered for the old address. The answer
+  says what happened (`disconnected`, `grantsRemoved`), and an audit row records it.
+- Deleting an internal app removes its connection and every agent's access with it, in one step,
+  with an audit row.
+- If the deployment later adds an app with the same id, or a tool with the same name, the
+  organization's app is not used and `internalApps` shows it with a `problem`. For the same id,
+  the deployment's app is not offered to that organization either, since the connection kept
+  under that id was entered for the organization's own app: save it under another id, then
+  delete the old one, which removes that connection.
+- An internal app reaches whatever address its definition names, from inside the service's
+  network, as an app loaded from a folder does. Saving one takes the admin token, so whoever
+  can save definitions decides where the service connects: if people who should not reach the
+  service's own network can save them (an organization's admins, through your own admin
+  pages), limit where the service may connect with your network rules, and in particular
+  block the cloud's instance metadata address (169.254.169.254).
+
+To start from an OpenAPI spec, `POST /agent-connect/admin/v1/internal-apps/draft` with
+`{"spec": <the spec as JSON>, "id": "tracker", "tags": ["issues"]}` (or `"operations"`) answers
+the same draft as `scripts/openapi-to-connector.ts`, with its `notes` and a `problem` when it
+would not save as it is.
+
 When an app needs logic JSON cannot express, write a connector in code instead
 (`connectors/<app>/index.ts`, see the built-in ones) and pass it to `createAgentConnect`.
