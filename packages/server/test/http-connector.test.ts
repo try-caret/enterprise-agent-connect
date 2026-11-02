@@ -334,6 +334,22 @@ test("a tokenUrl {field} is filled per connection and held to allowedHosts", asy
     /not an address this app may use/,
   );
   assert.throws(() => orders({ baseUrl: "https://{site}/api", auth }, { fields: fields.slice(1) }));
+  // A token host of its own field is held to allowedHosts too, not only through baseUrl's.
+  const split = httpVendor(
+    orders(
+      {
+        baseUrl: "https://{site}/api",
+        allowedHosts: ["*.example.com"],
+        auth: { ...auth, tokenUrl: "https://{login}/token" },
+      },
+      { fields: [...fields, { id: "login", label: "Login", secret: false }] },
+    ),
+    (async () => assert.fail("no request leaves")) as typeof fetch,
+  );
+  await assert.rejects(
+    split.connect({ site: "eu.example.com", login: "evil.test", client_id: "i", client_secret: "s" }),
+    /evil\.test is not an address this app may use/,
+  );
 });
 
 test("path params are encoded and cannot climb out of the path", async () => {
