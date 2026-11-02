@@ -7,10 +7,16 @@ import { fileURLToPath } from "node:url";
 import { after, before, test } from "node:test";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ZodType } from "zod";
-import { connectorSchema, type Connector } from "../../connector-kit/src/connector.ts";
+import {
+  addressFields,
+  connectorSchema,
+  fillAddress,
+  type Connector,
+} from "../../connector-kit/src/connector.ts";
 import type { ToolContext } from "../../connector-kit/src/common.ts";
 import { assertToolsImplemented } from "../src/service.ts";
 import {
+  guardedFetch,
   httpTools,
   httpVendor,
   MAX_RESPONSE_BYTES,
@@ -148,6 +154,134 @@ test("http definitions are validated", () => {
       }),
     /limit names a list limit/,
   );
+});
+
+test("an address's {field} is the whole host, one label or one path segment", () => {
+  assert.deepEqual(addressFields("https://{host}/api/{team}"), ["host", "team"]);
+  const fill = (address: string, value: string) => fillAddress(address, { f: value });
+  assert.equal(fill("https://{f}/api", "git.acme.com:8443"), "https://git.acme.com:8443/api");
+  assert.equal(
+    fill("https://{f}.us1.example.net/v1", "acme-1"),
+    "https://acme-1.us1.example.net/v1",
+  );
+  assert.equal(
+    fill("https://api.example.com/c/{f}/x", "a b%"),
+    "https://api.example.com/c/a%20b%25/x",
+  );
+  for (const bad of [
+    "https://git.acme.com",
+    "git.acme.com/x",
+    "a@b.com",
+    "evil.com#",
+    "",
+    "-a.com",
+  ])
+    assert.throws(() => fill("https://{f}/api", bad), /host name only/);
+  for (const bad of ["a.b", "a/b", "-a", "a:1", ""])
+    assert.throws(() => fill("https://{f}.example.net", bad), /one word/);
+  for (const bad of ["a/b", ".", "..", ""])
+    assert.throws(() => fill("https://api.example.com/c/{f}", bad), /slash/);
+  // A placeholder anywhere else is refused when the connector loads.
+  for (const baseUrl of [
+    "https://x{f}.example.com/api",
+    "https://api.example.com/c{f}",
+    "https://{f}:8443/api",
+    "https://api.example.com/{f}?x=1",
+  ])
+    assert.throws(() =>
+      orders({ baseUrl }, { fields: [...example.fields, { id: "f", label: "F", secret: false }] }),
+    );
+});
+
+test("a {field} in baseUrl is filled per connection, and must be a plain field", async () => {
+  const site = { id: "site", label: "Server address", secret: false };
+  const port = origin.split(":")[2];
+  const connector = orders(
+    { baseUrl: "http://{site}/{area}" },
+    { fields: [...example.fields, site, { id: "area", label: "Area", secret: false }] },
+  );
+  respond = ok({ id: "1" });
+  seen.length = 0;
+  await run(
+    connector,
+    "orders_get",
+    { id: "1" },
+    { config: { site: `127.0.0.1:${port}`, area: "api" } },
+  );
+  assert.equal(seen[0].url, "/api/orders/1");
+  const refused = await run(
+    connector,
+    "orders_get",
+    { id: "1" },
+    {
+      config: { site: `127.0.0.1:${port}/x`, area: "api" },
+    },
+  );
+  assert.equal(refused.result.isError, true);
+  assert.equal(seen.length, 1);
+  assert.match(
+    (await httpVendor(connector).connect({ api_key: "k", site: `127.0.0.1:${port}`, area: "api" }))
+      .accountLabel,
+    /^127\.0\.0\.1:/,
+  );
+  assert.throws(
+    () =>
+      orders(
+        { baseUrl: "http://{site}/api" },
+        { fields: [...example.fields, { ...site, secret: true }] },
+      ),
+    /auth names its fields/,
+  );
+  assert.throws(() => orders({ baseUrl: "http://{site}/api" }), /auth names its fields/);
+});
+
+test("allowedHosts keeps a filled-in host to the hosts listed", async () => {
+  const port = origin.split(":")[2];
+  const site = { id: "site", label: "Server address", secret: false };
+  const connector = (allowedHosts: string[]) =>
+    orders({ baseUrl: "http://{site}/api", allowedHosts }, { fields: [...example.fields, site] });
+  const config = { site: `127.0.0.1:${port}` };
+  respond = ok({ id: "1" });
+  seen.length = 0;
+  assert.equal(
+    (await run(connector(["127.0.0.1"]), "orders_get", { id: "1" }, { config })).result.isError,
+    undefined,
+  );
+  const refused = await run(
+    connector(["*.example.com", "example.com"]),
+    "orders_get",
+    { id: "1" },
+    { config },
+  );
+  assert.equal(refused.result.isError, true);
+  assert.equal(seen.length, 1);
+  await assert.rejects(
+    httpVendor(connector(["*.qualys.com"])).connect({ api_key: "k", site: "qualys.com" }),
+    /not an address this app may use/,
+  );
+  assert.ok(
+    await httpVendor(connector(["*.Qualys.com"])).connect({ api_key: "k", site: "API.qualys.com" }),
+  );
+  assert.throws(() => connector(["https://x.com"]));
+});
+
+test("fieldHeaders send a form field as a header, never over the auth header", async () => {
+  const fieldsWith = [...example.fields, { id: "client_id", label: "Client ID", secret: false }];
+  const connector = orders(
+    { fieldHeaders: { "x-client-id": "client_id" } },
+    { fields: fieldsWith },
+  );
+  respond = ok({ id: "1" });
+  seen.length = 0;
+  await run(connector, "orders_get", { id: "1" }, { config: { client_id: "c-1" } });
+  assert.equal(seen[0].headers["x-client-id"], "c-1");
+  assert.equal(seen[0].headers["x-api-key"], "k1");
+  for (const fieldHeaders of [
+    { "X-Api-Key": "client_id" },
+    { Host: "client_id" },
+    { "x-a": "nope" },
+  ])
+    assert.throws(() => orders({ fieldHeaders }, { fields: fieldsWith }));
 });
 
 test("path params are encoded and cannot climb out of the path", async () => {
@@ -302,6 +436,20 @@ test("each auth type signs the call", async () => {
   const token = seen.find((s) => s.url === "/token")!;
   assert.equal(new URLSearchParams(token.body).get("client_secret"), "s");
   assert.equal(seen.at(-1)!.headers.authorization, "Bearer minted");
+  // clientAuth basic: the client id and secret go as HTTP Basic, and an audience in the body.
+  oauth.http!.auth = { ...oauth.http!.auth, clientAuth: "basic", audience: "https://api.x" };
+  seen.length = 0;
+  await run(
+    oauth,
+    "orders_get",
+    { id: "1" },
+    { secret: { csecret: "s/2" }, config: { cid: "c 1" } },
+  );
+  const basic = seen.find((s) => s.url === "/token")!;
+  const form = new URLSearchParams(basic.body);
+  assert.equal(form.get("client_secret"), null);
+  assert.equal(form.get("audience"), "https://api.x");
+  assert.equal(basic.headers.authorization, `Basic ${Buffer.from("c+1:s%2F2").toString("base64")}`);
 });
 
 test("redirects, large answers and binary answers are refused", async () => {
@@ -694,4 +842,17 @@ test("the example app pages through its orders with the example connector", asyn
   } finally {
     app.kill();
   }
+});
+
+test("an address that is link-local, where cloud metadata services sit, is never called", async () => {
+  let called = false;
+  const fake = (async () => {
+    called = true;
+    return new Response("{}");
+  }) as typeof fetch;
+  for (const origin of ["http://169.254.169.254", "http://[fe80::1]", "http://[::ffff:169.254.169.254]"]) {
+    const get = guardedFetch([new URL(origin).origin], fake);
+    await assert.rejects(get(`${origin}/latest/meta-data/`), /link-local/);
+  }
+  assert.equal(called, false);
 });

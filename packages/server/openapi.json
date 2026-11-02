@@ -8199,8 +8199,15 @@
             "type": "object",
             "properties": {
               "baseUrl": {
-                "type": "string",
-                "format": "uri"
+                "type": "string"
+              },
+              "allowedHosts": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(\\*\\.)?[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$"
+                }
               },
               "auth": {
                 "oneOf": [
@@ -8294,6 +8301,18 @@
                       "scope": {
                         "type": "string",
                         "pattern": "^[\\x21-\\x7e]+( [\\x21-\\x7e]+)*$"
+                      },
+                      "clientAuth": {
+                        "type": "string",
+                        "enum": [
+                          "body",
+                          "basic"
+                        ]
+                      },
+                      "audience": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       }
                     },
                     "required": [
@@ -8339,6 +8358,18 @@
                 "additionalProperties": {
                   "type": "string",
                   "pattern": "^[\\x20-\\x7E]*$"
+                }
+              },
+              "fieldHeaders": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9-]+$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
                 }
               },
               "tools": {
@@ -8593,6 +8624,7 @@
               "baseUrl",
               "auth",
               "headers",
+              "fieldHeaders",
               "tools",
               "allowInsecureHttp"
             ],
@@ -8602,8 +8634,7 @@
             "type": "object",
             "properties": {
               "endpoint": {
-                "type": "string",
-                "format": "uri"
+                "type": "string"
               },
               "version": {
                 "default": "1.1",
@@ -8894,8 +8925,15 @@
             "type": "object",
             "properties": {
               "serviceRoot": {
-                "type": "string",
-                "format": "uri"
+                "type": "string"
+              },
+              "allowedHosts": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(\\*\\.)?[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$"
+                }
               },
               "version": {
                 "type": "string",
@@ -8996,6 +9034,18 @@
                       "scope": {
                         "type": "string",
                         "pattern": "^[\\x21-\\x7e]+( [\\x21-\\x7e]+)*$"
+                      },
+                      "clientAuth": {
+                        "type": "string",
+                        "enum": [
+                          "body",
+                          "basic"
+                        ]
+                      },
+                      "audience": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       }
                     },
                     "required": [

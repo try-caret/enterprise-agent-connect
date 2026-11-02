@@ -1259,8 +1259,8 @@ export interface components {
             };
             revoke: string;
             http?: {
-                /** Format: uri */
                 baseUrl: string;
+                allowedHosts?: string[];
                 auth: {
                     /** @constant */
                     type: "header";
@@ -1284,6 +1284,9 @@ export interface components {
                     clientId: string;
                     clientSecret: string;
                     scope?: string;
+                    /** @enum {string} */
+                    clientAuth?: "body" | "basic";
+                    audience?: string;
                 } | {
                     /** @constant */
                     type: "query";
@@ -1292,6 +1295,10 @@ export interface components {
                 };
                 /** @default {} */
                 headers: {
+                    [key: string]: string;
+                };
+                /** @default {} */
+                fieldHeaders: {
                     [key: string]: string;
                 };
                 tools: {
@@ -1346,7 +1353,6 @@ export interface components {
                 allowInsecureHttp: boolean;
             };
             soap?: {
-                /** Format: uri */
                 endpoint: string;
                 /**
                  * @default 1.1
@@ -1420,8 +1426,8 @@ export interface components {
                 allowInsecureHttp: boolean;
             };
             odata?: {
-                /** Format: uri */
                 serviceRoot: string;
+                allowedHosts?: string[];
                 /** @enum {string} */
                 version: "2" | "4";
                 auth: {
@@ -1447,6 +1453,9 @@ export interface components {
                     clientId: string;
                     clientSecret: string;
                     scope?: string;
+                    /** @enum {string} */
+                    clientAuth?: "body" | "basic";
+                    audience?: string;
                 } | {
                     /** @constant */
                     type: "query";

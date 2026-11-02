@@ -3,11 +3,13 @@ import dynamics365 from "../../../connectors/dynamics-365/index.js";
 import entra from "../../../connectors/entra/index.js";
 import fedex from "../../../connectors/fedex/index.js";
 import gong from "../../../connectors/gong/index.js";
+import httpConnector from "../../../connectors/http/index.js";
 import intune from "../../../connectors/intune/index.js";
 import jamf from "../../../connectors/jamf/index.js";
 import jira from "../../../connectors/jira/index.js";
 import lusha from "../../../connectors/lusha/index.js";
 import netsuite from "../../../connectors/netsuite/index.js";
+import odataConnector from "../../../connectors/odata/index.js";
 import okta from "../../../connectors/okta/index.js";
 import outlookCalendar from "../../../connectors/outlook-calendar/index.js";
 import outlookMail from "../../../connectors/outlook-mail/index.js";
@@ -22,6 +24,13 @@ import type { BuiltinModule } from "../../../connectors/microsoft/client.js";
 
 export type { BuiltinContext, BuiltinModule } from "../../../connectors/microsoft/client.js";
 export type { ConnectorContext, ConnectorModule } from "../../connector-kit/src/connector.js";
+
+/** A built-in app described only in its connector.json: the generic module for its block (`http`
+ *  by default, or `odata` or `soap`) under the folder's id. */
+export const describedApp = (id: string, kind: BuiltinModule = httpConnector): BuiltinModule => ({
+  ...kind,
+  id,
+});
 
 /** The code behind each connector folder in connectors/ (index.ts beside its connector.json). */
 export const builtinConnectors: BuiltinModule[] = [
