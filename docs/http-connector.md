@@ -154,7 +154,7 @@ with a `soap` or `odata` block instead: see [soap-connector.md](soap-connector.m
 [odata-connector.md](odata-connector.md).
 
 To ship an app described this way as a built-in, put its folder in `connectors/` and add
-`describedApp("<id>")` to `builtinConnectors` (`packages/server/src/builtin.ts`).
+`describedApp("<id>")` (or `describedApp("<id>", odataConnector)` for an `odata` block) to `builtinConnectors` (`packages/server/src/builtin.ts`).
 
 When an app needs logic JSON cannot express, write a connector in code instead
 (`connectors/<app>/index.ts`, see the built-in ones) and pass it to `createAgentConnect`.
