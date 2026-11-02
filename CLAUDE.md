@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr and Confluence once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -436,6 +436,9 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
                       # trigger off; each store guard and two clicks at once)
                       # Generic machinery only: no suite or case for one connector's behavior
+connectors/http/described-apps.test.ts # every built-in described only in JSON loads and is
+                      # offered; one representative tool per app against a fake app (method,
+                      # address, auth headers, paging, limits). New described apps add a case here
 connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's test harness
                       # (packages/server/test/helpers.ts) with its fake vendor answers; run by
                       # npm test, typechecked by tsconfig.test.json, left out of the build
@@ -1199,6 +1202,63 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   `aggregateitemlocation` and `transactionline.mainline`, read October 27, 2026. Tested only
   against a fake NetSuite, never a real account: table and column names, status letters and the
   sign of lines are unverified live.
+- Described built-ins, JSON only (`connectors/<id>/connector.json`, an `http` block, registered with
+  `describedApp`; read November 1, 2026, tested only against fakes in
+  `connectors/http/described-apps.test.ts`, never a live account):
+  - GitLab (`gitlab`): `https://{host}/api/v4`, `PRIVATE-TOKEN` from a project or group access
+    token (Reporter + `read_api`; Developer + `api` to comment). Merge requests, their `/diffs`
+    (`/changes` is deprecated since 15.7), notes, pipelines, jobs (`scope[]`), a job's `/trace`
+    (text, over 1 MB refused) and commits; paging from `X-Next-Page`. Limit `projects` by full
+    path, sent as one encoded segment (GitLab takes `group%2Fproject`). Retrying jobs is left
+    out: a retried deploy job deploys. Sources: docs.gitlab.com api/rest, merge_requests,
+    pipelines, jobs, notes, project_access_tokens.
+  - Argo CD (`argo-cd`): `https://{host}`, bearer token of a local `apiKey` account bound to
+    `role:readonly` (argocd-cm, argocd-rbac-cm; `argocd account generate-token`). Reads only:
+    applications, one application (answer limit `spec.project`), resource tree, events and revision
+    metadata. Those three take `project`, which the `projects` limit forces: the server answers
+    NotFound when the application is in another project (`getAppEnforceRBAC`, server/application
+    in argo-cd stable). Sync is left out. Sources: assets/swagger.json (stable), operator-manual
+    user-management and rbac.
+  - SonarQube (`sonarqube`): `https://{host}` (Server, or sonarcloud.io), bearer user token of a
+    user with Browse. Quality gate status (`projectKey`), issues (`componentKeys`: Cloud's name,
+    and Server's deprecated alias of `components` since 10.2), measures, analyzed pull requests.
+    Limit `projects` by key. `inNewCodePeriod` and hotspots are left out (Cloud has neither under
+    those names). Sources: docs.sonarsource.com web-api and managing-tokens, sonarcloud.io
+    `/api/webservices/list`, SonarQube's issue SearchAction.java.
+  - Datadog (`datadog`): `https://{host}` held to `*.datadoghq.com`, `*.datadoghq.eu`,
+    `*.ddog-gov.com`; `DD-API-KEY` as auth and `DD-APPLICATION-KEY` as a field header (an
+    application key of a Read Only service account, scoped `monitors_read`, `events_read`,
+    `logs_read_data`, `timeseries_query`). Monitor search, one monitor, events v2 and logs v2
+    (cursor `meta.page.after`), `/api/v1/query`. No limits. Verify counts monitors (both keys;
+    `/api/v1/validate` proves only the API key). Sources: docs.datadoghq.com api/latest monitors,
+    events, logs, metrics, service_accounts, api-app-keys.
+  - PagerDuty (`pagerduty`): `https://{host}` held to `api.pagerduty.com` and
+    `api.eu.pagerduty.com`, `Authorization: Token token=` from a read-only general access key,
+    Accept `application/vnd.pagerduty+json;version=2`. Incidents (`service_ids[]` limited to
+    `services`), one incident, its alerts and log entries (answer limits on `service.id`),
+    services, on-calls; offset paging. Notes are left out (no service in their answer; writing one
+    needs a user's `From`). Sources: PagerDuty/api-schema openapiv3.json, support.pagerduty.com
+    api-access-keys.
+  - Grafana (`grafana`): `https://{host}`, bearer Viewer service account token. Search (limit
+    `folders` on `folderUIDs`), dashboard by UID (answer limit `meta.folderUid`), provisioning
+    alert rules (answer limit `folderUID`; deprecated for `/apis/rules.alerting.grafana.app` but
+    served), annotations in their own capability since they cannot be held to folders. No
+    documented endpoint lists firing alert instances. Sources: grafana.com developers/http_api
+    folder_dashboard_search, dashboard, alerting_provisioning, annotations, org, service-accounts.
+  - Zephyr (`zephyr`): Zephyr Scale Cloud, `https://{host}/v2` held to
+    `api.zephyrscale.smartbear.com` and its regional `*.api.` hosts, bearer token of the Jira user
+    who made it. Lists of test cases, cycles, executions and statuses by `projectKey` (limit
+    `projects`), and creating a test execution. Reads by key are left out: their answers name the
+    project by id only, so a project limit cannot be checked. Zephyr Squad is not supported: its
+    API wants each request signed with a JWT. Sources: support.smartbear.com zephyr-scale-cloud
+    api-docs (api.cloud.stripped.yml).
+  - Confluence (`confluence`): `https://api.atlassian.com/ex/confluence/{cloud}/wiki`, an
+    Atlassian service account's OAuth 2.0 client credentials at `auth.atlassian.com/oauth/token`
+    (form-encoded), scopes `read:page:confluence`, `read:space:confluence`. v2 spaces, pages by
+    `space-id` (limit `spaces`, comma-joined) and one page (answer limit `spaceId`); paging from
+    the Link header. CQL search and writes are left out: CQL cannot be held to spaces, and page
+    and comment bodies are nested objects the http block does not send. Sources: Atlassian
+    create-oauth-2-0-credential-for-service-accounts, Confluence openapi-v2.v3.json.
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under

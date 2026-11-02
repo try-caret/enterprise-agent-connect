@@ -1,0 +1,188 @@
+{
+  "id": "datadog",
+  "name": "Datadog",
+  "description": "Let agents read your Datadog monitors and what triggered them, search events and logs, and query metrics. For first response to production alerts and incident summaries.",
+  "logo": "/brand/registry/datadog.svg",
+  "identity": "A Datadog API key and an application key of a service account made for agents. The application key carries the service account's role, narrowed to the scopes you choose.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a service account for agents",
+      "body": "Give the service account the Datadog Read Only Role, so nothing it holds can change your monitors or settings.",
+      "link": {
+        "label": "Datadog: service accounts",
+        "href": "https://docs.datadoghq.com/account_management/org_settings/service_accounts/"
+      },
+      "click": [
+        "In Datadog, open Organization Settings, then under Accounts select Service Accounts > New Service Account.",
+        "Name: AI agents. Assign Roles: Datadog Read Only Role. Select Create Service Account."
+      ]
+    },
+    {
+      "title": "Create its application key",
+      "body": "Create the key on the service account and limit it to the scopes of what agents may read: monitors_read and events_read always, logs_read_data for logs and timeseries_query for metrics. Datadog shows the key only once.",
+      "link": {
+        "label": "Datadog: API and application keys",
+        "href": "https://docs.datadoghq.com/account_management/api-app-keys/"
+      },
+      "click": [
+        "On the Service Accounts page, select AI agents, then New Key. Name: AI agents. Select Create Key and copy it.",
+        "Edit the key's scopes and keep only monitors_read, events_read, logs_read_data and timeseries_query (the last two only if you allow them below)."
+      ]
+    },
+    {
+      "title": "Create an API key and find your API address",
+      "body": "Datadog wants an API key beside the application key. The API address depends on your Datadog site: api.datadoghq.com for app.datadoghq.com, api.us3.datadoghq.com, api.us5.datadoghq.com, api.datadoghq.eu, api.ap1.datadoghq.com, and so on. You can test both keys with the command below: it counts your monitors and changes nothing.",
+      "click": [
+        "Organization Settings > API Keys > New Key. Name: AI agents. Select Create API key and copy it.",
+        "Your site is in your browser's address bar while you are in Datadog, such as app.datadoghq.eu: the API address is the same with api in place of app."
+      ],
+      "copy": [
+        "DD_API=api.datadoghq.com",
+        "curl -s -H \"DD-API-KEY: $DD_API_KEY\" -H \"DD-APPLICATION-KEY: $DD_APP_KEY\" \"https://$DD_API/api/v1/monitor/search?per_page=1\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "API address",
+      "help": "Your Datadog site's API address, such as api.datadoghq.com or api.datadoghq.eu.",
+      "placeholder": "api.datadoghq.com",
+      "secret": false
+    },
+    { "id": "api_key", "label": "API key", "secret": true },
+    { "id": "application_key", "label": "Application key", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read_monitors",
+      "label": "Read monitors and events",
+      "description": "Search monitors by status, tag or name, read one monitor with its query and the state of each group, and search events such as monitor alerts and deployments.",
+      "required": true,
+      "note": "Read-only. Reaches every monitor and event in your Datadog organization.",
+      "scopes": ["monitors_read", "events_read"],
+      "permissions": [],
+      "tools": ["datadog_search_monitors", "datadog_get_monitor", "datadog_search_events"]
+    },
+    {
+      "id": "read_logs",
+      "label": "Search logs",
+      "description": "Search logs by query and time, such as the errors of one service around an alert.",
+      "note": "Logs can hold customer data and secrets your applications wrote to them. Anything an agent reads may end up in what it writes.",
+      "scopes": ["logs_read_data"],
+      "permissions": [],
+      "tools": ["datadog_search_logs"]
+    },
+    {
+      "id": "read_metrics",
+      "label": "Query metrics",
+      "description": "Read a metric query's values over a time window, such as error rate or latency around an alert.",
+      "scopes": ["timeseries_query"],
+      "permissions": [],
+      "tools": ["datadog_query_metrics"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/api/v1/monitor/search?per_page=1",
+    "label": "Monitors in Datadog",
+    "show": "metadata.total_count"
+  },
+  "revoke": "In Datadog, open Organization Settings > Service Accounts, select AI agents and revoke its application key, then delete the API key under API Keys. Agents lose access to Datadog at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "allowedHosts": ["*.datadoghq.com", "*.datadoghq.eu", "*.ddog-gov.com"],
+    "auth": { "type": "header", "header": "DD-API-KEY", "value": "api_key" },
+    "fieldHeaders": { "DD-APPLICATION-KEY": "application_key" },
+    "tools": [
+      {
+        "name": "datadog_search_monitors",
+        "description": "Search monitors with Datadog's monitor search syntax, such as status:alert or tag:service:checkout. Pass page to read further pages, from 0.",
+        "method": "GET",
+        "path": "/api/v1/monitor/search",
+        "params": {
+          "query": { "type": "string", "description": "The search, such as status:alert tag:env:prod", "in": "query", "required": false },
+          "page": { "type": "integer", "description": "The page, from 0", "in": "query", "default": 0 },
+          "per_page": { "type": "integer", "description": "Monitors per page", "in": "query", "default": 30 }
+        },
+        "result": {
+          "fields": [
+            "metadata.total_count",
+            "monitors.id",
+            "monitors.name",
+            "monitors.status",
+            "monitors.type",
+            "monitors.tags",
+            "monitors.query",
+            "monitors.last_triggered_ts"
+          ]
+        }
+      },
+      {
+        "name": "datadog_get_monitor",
+        "description": "Read one monitor: its query, message, thresholds, tags and the state of each group, such as which hosts are alerting.",
+        "method": "GET",
+        "path": "/api/v1/monitor/{monitor_id}",
+        "params": {
+          "monitor_id": { "type": "integer", "description": "The monitor id", "in": "path" },
+          "group_states": { "type": "string", "description": "Which group states to include: all, or a comma-separated list of alert, warn and no data", "in": "query", "default": "all" }
+        }
+      },
+      {
+        "name": "datadog_search_events",
+        "description": "Search events, such as monitor alerts, deployments and configuration changes, with Datadog's event search syntax. Pass next from the answer as cursor for the next page.",
+        "method": "GET",
+        "path": "/api/v2/events",
+        "params": {
+          "query": { "type": "string", "description": "The search, such as source:deploy service:checkout", "in": "query", "name": "filter[query]", "required": false },
+          "from": { "type": "string", "description": "Start of the window, milliseconds since 1970", "in": "query", "name": "filter[from]", "required": false },
+          "to": { "type": "string", "description": "End of the window, milliseconds since 1970", "in": "query", "name": "filter[to]", "required": false },
+          "sort": { "type": "string", "enum": ["timestamp", "-timestamp"], "description": "Oldest or newest first", "in": "query", "default": "-timestamp" },
+          "limit": { "type": "integer", "description": "Events per page", "in": "query", "name": "page[limit]", "default": 25 },
+          "cursor": { "type": "string", "description": "The next value of the previous answer", "in": "query", "name": "page[cursor]", "required": false }
+        },
+        "paging": { "param": "cursor", "body": "meta.page.after" },
+        "result": {
+          "items": "data",
+          "fields": ["id", "attributes.timestamp", "attributes.message", "attributes.tags", "attributes.attributes.title", "attributes.attributes.status", "attributes.attributes.service"]
+        }
+      },
+      {
+        "name": "datadog_search_logs",
+        "description": "Search logs with Datadog's log search syntax, such as service:checkout status:error. Pass next from the answer as cursor for the next page.",
+        "method": "GET",
+        "path": "/api/v2/logs/events",
+        "params": {
+          "query": { "type": "string", "description": "The search, such as service:checkout status:error", "in": "query", "name": "filter[query]" },
+          "from": { "type": "string", "description": "Start of the window, a time such as 2026-10-01T08:00:00Z", "in": "query", "name": "filter[from]" },
+          "to": { "type": "string", "description": "End of the window, a time such as 2026-10-01T09:00:00Z", "in": "query", "name": "filter[to]" },
+          "sort": { "type": "string", "enum": ["timestamp", "-timestamp"], "description": "Oldest or newest first", "in": "query", "default": "-timestamp" },
+          "limit": { "type": "integer", "description": "Logs per page, at most 1000", "in": "query", "name": "page[limit]", "default": 50 },
+          "cursor": { "type": "string", "description": "The next value of the previous answer", "in": "query", "name": "page[cursor]", "required": false }
+        },
+        "paging": { "param": "cursor", "body": "meta.page.after" },
+        "result": {
+          "items": "data",
+          "fields": ["attributes.timestamp", "attributes.status", "attributes.service", "attributes.host", "attributes.message", "attributes.tags"]
+        }
+      },
+      {
+        "name": "datadog_query_metrics",
+        "description": "Read a metric query's points over a time window, such as avg:trace.http.request.errors{service:checkout}.as_count().",
+        "method": "GET",
+        "path": "/api/v1/query",
+        "params": {
+          "query": { "type": "string", "description": "The metric query", "in": "query" },
+          "from": { "type": "integer", "description": "Start of the window, seconds since 1970", "in": "query" },
+          "to": { "type": "integer", "description": "End of the window, seconds since 1970", "in": "query" }
+        },
+        "result": { "fields": ["status", "error", "series.metric", "series.scope", "series.pointlist", "series.unit"] }
+      }
+    ]
+  }
+}

@@ -6,7 +6,8 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
 
 - **Built-in apps:** Jira, Microsoft 365 (Outlook mail and calendar, SharePoint files and Excel,
   Teams, Entra ID, Intune, Dynamics 365), Jamf Pro, Okta, Slack, Salesforce, Gong, SAP S/4HANA,
-  Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect.
+  Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect, GitLab, Argo CD, SonarQube,
+  Datadog, PagerDuty, Grafana, Zephyr Scale, Confluence.
 - **Your own apps without code:** describe an internal REST API or a SaaS app's in one
   `connector.json`, or draft one from its OpenAPI spec
   ([docs/http-connector.md](docs/http-connector.md)); a SOAP service
@@ -244,7 +245,8 @@ authority signed, name a ConfigMap or Secret holding its bundle in `caBundle`
   migrations) and its tests
 - `packages/connector-kit`: what a connector builds on (schemas, tool helpers, vendor types)
 - `packages/client`: typed admin API client
-- `connectors/<app>`: one folder per app: `connector.json`, `index.ts`, `tools.ts`, `vendor.ts`
+- `connectors/<app>`: one folder per app: `connector.json`, and for apps with code `index.ts`,
+  `tools.ts`, `vendor.ts`
 - `connectors/http`, `connectors/soap`, `connectors/odata`, `connectors/sql`: run any app
   described only in its `connector.json` (docs/http-connector.md, docs/soap-connector.md,
   docs/odata-connector.md, docs/sql-connector.md)

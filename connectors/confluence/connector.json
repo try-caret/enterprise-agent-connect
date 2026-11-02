@@ -1,0 +1,168 @@
+{
+  "id": "confluence",
+  "name": "Confluence",
+  "description": "Let agents find and read Confluence pages in the spaces you choose, such as release checklists, runbooks and sign-off pages. For release readiness checks and go/no-go summaries.",
+  "logo": "/brand/registry/confluence.svg",
+  "identity": "An Atlassian service account named \"{brand.microsoft.appName}\" with OAuth 2.0 credentials. It uses no Confluence seat and reads only the spaces it is given.",
+  "accountKey": "cloud",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a service account with Confluence access",
+      "body": "In Atlassian Administration, create a service account named \"{brand.microsoft.appName}\". When it asks you to select an app role, set Confluence to User and leave every other app on None. If you already made one for Jira, you can use it and add the Confluence role.",
+      "link": {
+        "label": "Atlassian: create OAuth 2.0 credentials for service accounts",
+        "href": "https://support.atlassian.com/user-management/docs/create-oauth-2-0-credential-for-service-accounts/"
+      },
+      "click": [
+        "Atlassian Administration > Directory > Service accounts > Create service account",
+        "Name: {brand.microsoft.appName}",
+        "Select app role: Confluence > User (every other app: None) > Create"
+      ]
+    },
+    {
+      "title": "Let it view the spaces agents should read",
+      "body": "Give the service account the View permission in each space agents should read, and nothing more. You can narrow each agent to some of those spaces here later.",
+      "click": [
+        "In each space: Space settings > Users > Add people > {brand.microsoft.appName} > View only"
+      ]
+    },
+    {
+      "title": "Create OAuth 2.0 credentials",
+      "body": "On the service account, select Create credentials, then OAuth 2.0, and select exactly these scopes. Copy the client ID and secret: Atlassian shows the secret only once.",
+      "click": [
+        "Atlassian Administration > Directory > Service accounts > {brand.microsoft.appName} > Create credentials > OAuth 2.0 > Next",
+        "Scopes: read:page:confluence and read:space:confluence > Next > Create"
+      ],
+      "copy": ["{scopes}"]
+    },
+    {
+      "title": "Find your site's cloud ID",
+      "body": "Atlassian calls your site by an ID. Open the address below with your site's name in place of your-company: the cloudId it shows goes in the form.",
+      "click": ["Open https://your-company.atlassian.net/_edge/tenant_info in your browser and copy cloudId."],
+      "copy": ["curl -s https://your-company.atlassian.net/_edge/tenant_info"],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "cloud",
+      "label": "Cloud ID",
+      "help": "Shown at https://<your site>.atlassian.net/_edge/tenant_info.",
+      "placeholder": "1a2b3c4d-1234-5678-9abc-def012345678",
+      "secret": false
+    },
+    { "id": "client_id", "label": "Client ID", "secret": false },
+    { "id": "client_secret", "label": "Client secret", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read pages",
+      "description": "List spaces, list a space's pages by title, and read a page with its content.",
+      "required": true,
+      "note": "Read-only. Reaches the spaces the service account may view unless you keep a key to chosen spaces.",
+      "scopes": ["read:page:confluence", "read:space:confluence"],
+      "permissions": [],
+      "tools": ["confluence_list_spaces", "confluence_list_pages", "confluence_get_page"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "spaces",
+      "label": "Spaces",
+      "help": "Optional: only pages in these spaces, by space id (listed under Spaces after connecting). Leave empty for every space the service account may view.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,20}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/api/v2/spaces?limit=25",
+    "label": "Confluence spaces",
+    "show": "results[].name",
+    "ifEmpty": "The service account cannot view any space yet: give it View in the spaces agents should read."
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/api/v2/spaces?limit=250",
+    "label": "Spaces",
+    "show": "results[].id",
+    "name": "results[].name"
+  },
+  "revoke": "In Atlassian Administration, go to Directory > Service accounts, select {brand.microsoft.appName} and delete its OAuth 2.0 credentials, or remove its Confluence role. Agents lose access to Confluence within the hour, when their last token expires.",
+  "http": {
+    "baseUrl": "https://api.atlassian.com/ex/confluence/{cloud}/wiki",
+    "auth": {
+      "type": "oauth2",
+      "tokenUrl": "https://auth.atlassian.com/oauth/token",
+      "clientId": "client_id",
+      "clientSecret": "client_secret"
+    },
+    "tools": [
+      {
+        "name": "confluence_list_spaces",
+        "description": "List spaces with their id, key and name, or find some by key. Pass next from the answer as cursor for the next page.",
+        "method": "GET",
+        "path": "/api/v2/spaces",
+        "params": {
+          "keys": { "type": "array", "items": "string", "description": "Only these space keys", "in": "query", "join": ",", "required": false },
+          "limit": { "type": "integer", "description": "Spaces per page, at most 250", "in": "query", "default": 50 },
+          "cursor": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "cursor", "link": true },
+        "result": { "items": "results", "fields": ["id", "key", "name", "type", "status"] }
+      },
+      {
+        "name": "confluence_list_pages",
+        "description": "List pages in some spaces, optionally only those with a given title, newest first. Pass next from the answer as cursor for the next page.",
+        "method": "GET",
+        "path": "/api/v2/pages",
+        "params": {
+          "space_ids": {
+            "type": "array",
+            "items": "string",
+            "description": "The space ids",
+            "in": "query",
+            "name": "space-id",
+            "join": ",",
+            "limit": "spaces"
+          },
+          "title": { "type": "string", "description": "Only pages with exactly this title", "in": "query", "required": false },
+          "sort": {
+            "type": "string",
+            "enum": ["-modified-date", "modified-date", "title", "-title", "created-date", "-created-date"],
+            "description": "The order",
+            "in": "query",
+            "default": "-modified-date"
+          },
+          "limit": { "type": "integer", "description": "Pages per page, at most 250", "in": "query", "default": 50 },
+          "cursor": { "type": "string", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "cursor", "link": true },
+        "result": { "items": "results", "fields": ["id", "title", "spaceId", "parentId", "status", "version.number", "version.createdAt", "_links.webui"] }
+      },
+      {
+        "name": "confluence_get_page",
+        "description": "Read one page with its content, in Confluence's storage format (XHTML) by default.",
+        "method": "GET",
+        "path": "/api/v2/pages/{id}",
+        "params": {
+          "id": { "type": "string", "description": "The page id", "in": "path" },
+          "body_format": {
+            "type": "string",
+            "enum": ["storage", "atlas_doc_format", "view"],
+            "description": "The content's format",
+            "in": "query",
+            "name": "body-format",
+            "default": "storage"
+          }
+        },
+        "answerLimits": [{ "field": "spaceId", "limit": "spaces" }],
+        "result": { "fields": ["id", "title", "spaceId", "parentId", "status", "version.number", "version.createdAt", "body", "_links.webui"] }
+      }
+    ]
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "id": "sonarqube",
+  "name": "SonarQube",
+  "description": "Let agents read code quality results in SonarQube: whether a project, branch or pull request passes its quality gate, the issues that fail it and the main measures such as coverage. For review prep and failed pipeline triage.",
+  "logo": "/brand/registry/sonarqube.svg",
+  "identity": "A SonarQube user token of an account made for agents. It sees what that account may browse.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an account for agents",
+      "body": "In SonarQube Server, an administrator creates a local user for agents and gives it Browse on the projects agents should read, through a permission template or each project's permissions. In SonarQube Cloud, add a member to your organization the same way. A user token carries every permission of its user, so give this user nothing more.",
+      "link": {
+        "label": "SonarQube Server: managing tokens",
+        "href": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/managing-tokens/"
+      },
+      "click": [
+        "Administration > Security > Users > Create User. Name: AI agents.",
+        "Each project agents should read: Project Settings > Permissions > give AI agents Browse."
+      ]
+    },
+    {
+      "title": "Create a user token",
+      "body": "Sign in as the agents' user and create a token of type User. SonarQube shows it only once. You can test it with the command below: it answers whether the token is valid and changes nothing.",
+      "click": [
+        "Account menu > My account > Security.",
+        "Name: AI agents. Type: User. Choose an expiration date, then select Generate and copy the token."
+      ],
+      "copy": [
+        "SONAR_HOST=sonarqube.example.com",
+        "curl -s -H \"Authorization: Bearer $SONAR_TOKEN\" \"https://$SONAR_HOST/api/authentication/validate\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "SonarQube address",
+      "help": "The host name of your SonarQube Server, such as sonarqube.example.com, or sonarcloud.io for SonarQube Cloud.",
+      "placeholder": "sonarqube.example.com",
+      "secret": false
+    },
+    { "id": "token", "label": "User token", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read quality results",
+      "description": "Read a project's, branch's or pull request's quality gate status, search its issues, read measures such as coverage and duplication, and list a project's pull requests.",
+      "required": true,
+      "note": "Read-only. Reaches every project the agents' user may browse unless you keep a key to chosen projects.",
+      "scopes": [],
+      "permissions": ["Browse"],
+      "tools": [
+        "sonarqube_get_quality_gate_status",
+        "sonarqube_search_issues",
+        "sonarqube_get_measures",
+        "sonarqube_list_pull_requests"
+      ]
+    }
+  ],
+  "limits": [
+    {
+      "id": "projects",
+      "label": "Projects",
+      "help": "Optional: only these projects, by project key (shown on the project's Information page). Leave empty for every project the user may browse.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_.:-]{1,400}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/api/authentication/validate",
+    "label": "Token accepted",
+    "show": "valid"
+  },
+  "revoke": "Sign in as the agents' user, go to Account menu > My account > Security and revoke the token, or have an administrator deactivate the user. Agents lose access to SonarQube at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "auth": { "type": "bearer", "token": "token" },
+    "tools": [
+      {
+        "name": "sonarqube_get_quality_gate_status",
+        "description": "Read whether a project passes its quality gate, on its main branch or on one branch or pull request, with each condition's actual value and threshold.",
+        "method": "GET",
+        "path": "/api/qualitygates/project_status",
+        "params": {
+          "project": { "type": "string", "description": "The project key", "in": "query", "name": "projectKey", "limit": "projects" },
+          "branch": { "type": "string", "description": "A branch name, instead of the main branch", "in": "query", "required": false },
+          "pull_request": { "type": "string", "description": "A pull request or merge request id, instead of a branch", "in": "query", "name": "pullRequest", "required": false }
+        }
+      },
+      {
+        "name": "sonarqube_search_issues",
+        "description": "Search a project's issues, on its main branch or on one branch or pull request: rule, severity, file, line and message. Pass page to read further pages.",
+        "method": "GET",
+        "path": "/api/issues/search",
+        "params": {
+          "project": { "type": "string", "description": "The project key", "in": "query", "name": "componentKeys", "limit": "projects" },
+          "branch": { "type": "string", "description": "A branch name, instead of the main branch", "in": "query", "required": false },
+          "pull_request": { "type": "string", "description": "A pull request or merge request id, instead of a branch", "in": "query", "name": "pullRequest", "required": false },
+          "resolved": { "type": "boolean", "description": "true for resolved issues only, false for open ones only", "in": "query", "default": false },
+          "impact_severities": {
+            "type": "array",
+            "items": "string",
+            "enum": ["INFO", "LOW", "MEDIUM", "HIGH", "BLOCKER"],
+            "description": "Only issues with these severities",
+            "in": "query",
+            "name": "impactSeverities",
+            "join": ",",
+            "required": false
+          },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "name": "p", "default": 1 },
+          "page_size": { "type": "integer", "description": "Issues per page, at most 500", "in": "query", "name": "ps", "default": 50 }
+        },
+        "result": {
+          "fields": [
+            "total",
+            "p",
+            "issues.key",
+            "issues.rule",
+            "issues.severity",
+            "issues.impacts",
+            "issues.component",
+            "issues.line",
+            "issues.message",
+            "issues.status",
+            "issues.tags"
+          ]
+        }
+      },
+      {
+        "name": "sonarqube_get_measures",
+        "description": "Read measures of a project, branch or pull request, such as coverage, new_coverage, bugs, vulnerabilities, code_smells, duplicated_lines_density or ncloc.",
+        "method": "GET",
+        "path": "/api/measures/component",
+        "params": {
+          "project": { "type": "string", "description": "The project key", "in": "query", "name": "component", "limit": "projects" },
+          "metric_keys": {
+            "type": "array",
+            "items": "string",
+            "description": "Metric keys, such as coverage or bugs",
+            "in": "query",
+            "name": "metricKeys",
+            "join": ","
+          },
+          "branch": { "type": "string", "description": "A branch name, instead of the main branch", "in": "query", "required": false },
+          "pull_request": { "type": "string", "description": "A pull request or merge request id, instead of a branch", "in": "query", "name": "pullRequest", "required": false }
+        }
+      },
+      {
+        "name": "sonarqube_list_pull_requests",
+        "description": "List a project's analyzed pull requests with each one's branches, quality gate status and date of analysis.",
+        "method": "GET",
+        "path": "/api/project_pull_requests/list",
+        "params": {
+          "project": { "type": "string", "description": "The project key", "in": "query", "limit": "projects" }
+        }
+      }
+    ]
+  }
+}

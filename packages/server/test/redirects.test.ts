@@ -104,6 +104,38 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     },
     request: { method: "GET", path: "/api/data/v9.2/WhoAmI" },
   },
+  gitlab: {
+    conn: { config: { host: "gitlab.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/user" },
+  },
+  "argo-cd": {
+    conn: { config: { host: "argocd.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/api/v1/session/userinfo" },
+  },
+  sonarqube: {
+    conn: { config: { host: "sonarqube.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/api/authentication/validate" },
+  },
+  datadog: {
+    conn: { config: { host: "api.datadoghq.com" }, secret: { api_key: "k", application_key: "a" } },
+    request: { method: "GET", path: "/api/v1/monitor/search" },
+  },
+  pagerduty: {
+    conn: { config: { host: "api.pagerduty.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/abilities" },
+  },
+  grafana: {
+    conn: { config: { host: "grafana.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/api/org/" },
+  },
+  zephyr: {
+    conn: { config: { host: "api.zephyrscale.smartbear.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/projects" },
+  },
+  confluence: {
+    conn: { config: { cloud: GUID, client_id: "i" }, secret: { client_secret: "s" } },
+    request: { method: "GET", path: "/api/v2/spaces" },
+  },
 };
 for (const id of [
   "outlook-mail",

@@ -1,0 +1,210 @@
+{
+  "id": "argo-cd",
+  "name": "Argo CD",
+  "description": "Let agents read your Argo CD applications: whether each is synced and healthy, what was last deployed, the Kubernetes resources behind it and their recent events. For release checks and failed deployment triage.",
+  "logo": "/brand/registry/argo-cd.svg",
+  "identity": "An Argo CD local account that can only sign in with an API token, bound to a read-only role.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a read-only account for agents",
+      "body": "Argo CD accounts and roles live in its argocd-cm and argocd-rbac-cm ConfigMaps. The first command adds a local account that can only use API tokens. The second opens argocd-rbac-cm: under data, add the line g, ai-agents, role:readonly to policy.csv to give it the built-in read-only role. To keep it to some Argo CD projects instead, bind it to a role that may only get applications in those projects, such as p, role:agents, applications, get, payments/*, allow.",
+      "link": {
+        "label": "Argo CD: user management",
+        "href": "https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/"
+      },
+      "clickUnavailable": true,
+      "copy": [
+        "kubectl -n argocd patch configmap argocd-cm --type merge -p '{\"data\":{\"accounts.ai-agents\":\"apiKey\"}}'",
+        "kubectl -n argocd edit configmap argocd-rbac-cm"
+      ],
+      "shell": "bash"
+    },
+    {
+      "title": "Create an API token for the account",
+      "body": "Sign in to the argocd command line as an admin and create a token for the account. You can test the token with the curl line: it shows the account's name and changes nothing.",
+      "link": {
+        "label": "Argo CD: RBAC configuration",
+        "href": "https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/"
+      },
+      "clickUnavailable": true,
+      "copy": [
+        "argocd account generate-token --account ai-agents",
+        "curl -s -H \"Authorization: Bearer $ARGOCD_TOKEN\" \"https://argocd.example.com/api/v1/session/userinfo\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "Argo CD address",
+      "help": "The host name of your Argo CD, such as argocd.example.com, without https://.",
+      "placeholder": "argocd.example.com",
+      "secret": false
+    },
+    { "id": "token", "label": "API token", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read applications",
+      "description": "List applications with their sync and health status, read one application, its resource tree, its Kubernetes events and the commit behind a deployed revision. Lists projects.",
+      "required": true,
+      "note": "Read-only. Reaches every application the account's role allows unless you keep a key to chosen projects.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "argocd_list_applications",
+        "argocd_get_application",
+        "argocd_get_resource_tree",
+        "argocd_list_events",
+        "argocd_get_revision_metadata"
+      ]
+    }
+  ],
+  "limits": [
+    {
+      "id": "projects",
+      "label": "Argo CD projects",
+      "help": "Optional: only applications in these Argo CD projects. Leave empty for every project the account can read.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9._-]{1,253}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/api/v1/session/userinfo",
+    "label": "Argo CD account",
+    "show": "username"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/api/v1/projects",
+    "label": "Argo CD projects",
+    "show": "items[].metadata.name"
+  },
+  "revoke": "Delete the account's token with argocd account delete-token --account ai-agents <token id>, or remove the accounts.ai-agents line from argocd-cm. Agents lose access to Argo CD at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "auth": { "type": "bearer", "token": "token" },
+    "tools": [
+      {
+        "name": "argocd_list_applications",
+        "description": "List applications with their project, destination, sync status, health and last operation.",
+        "method": "GET",
+        "path": "/api/v1/applications",
+        "params": {
+          "projects": {
+            "type": "array",
+            "items": "string",
+            "description": "Only applications in these Argo CD projects",
+            "in": "query",
+            "required": false,
+            "limit": "projects"
+          },
+          "selector": { "type": "string", "description": "A Kubernetes label selector, such as team=payments", "in": "query", "required": false },
+          "repo": { "type": "string", "description": "Only applications deployed from this Git repository address", "in": "query", "required": false }
+        },
+        "result": {
+          "items": "items",
+          "fields": [
+            "metadata.name",
+            "spec.project",
+            "spec.destination.server",
+            "spec.destination.namespace",
+            "status.sync.status",
+            "status.sync.revision",
+            "status.health.status",
+            "status.operationState.phase",
+            "status.operationState.finishedAt",
+            "status.reconciledAt"
+          ]
+        }
+      },
+      {
+        "name": "argocd_get_application",
+        "description": "Read one application: where it deploys from and to, its sync and health status, conditions such as errors, the last sync operation and the deployment history.",
+        "method": "GET",
+        "path": "/api/v1/applications/{name}",
+        "params": { "name": { "type": "string", "description": "The application name", "in": "path" } },
+        "answerLimits": [{ "field": "spec.project", "limit": "projects" }],
+        "result": {
+          "fields": [
+            "metadata.name",
+            "spec",
+            "status.sync",
+            "status.health",
+            "status.conditions",
+            "status.operationState",
+            "status.history",
+            "status.summary",
+            "status.reconciledAt"
+          ]
+        }
+      },
+      {
+        "name": "argocd_get_resource_tree",
+        "description": "List the Kubernetes resources an application manages, with each one's health, to find what is failing.",
+        "method": "GET",
+        "path": "/api/v1/applications/{name}/resource-tree",
+        "params": {
+          "name": { "type": "string", "description": "The application name", "in": "path" },
+          "project": {
+            "type": "string",
+            "description": "The application's Argo CD project; Argo CD answers not found when the application is in another",
+            "in": "query",
+            "required": false,
+            "limit": "projects"
+          }
+        },
+        "result": {
+          "items": "nodes",
+          "fields": ["kind", "name", "namespace", "health.status", "health.message", "images", "createdAt"]
+        }
+      },
+      {
+        "name": "argocd_list_events",
+        "description": "List recent Kubernetes events for an application, or for one of its resources, such as failed pulls or crash loops.",
+        "method": "GET",
+        "path": "/api/v1/applications/{name}/events",
+        "params": {
+          "name": { "type": "string", "description": "The application name", "in": "path" },
+          "project": {
+            "type": "string",
+            "description": "The application's Argo CD project; Argo CD answers not found when the application is in another",
+            "in": "query",
+            "required": false,
+            "limit": "projects"
+          },
+          "resource_name": { "type": "string", "description": "Only events for this resource name", "in": "query", "name": "resourceName", "required": false },
+          "resource_namespace": { "type": "string", "description": "That resource's namespace", "in": "query", "name": "resourceNamespace", "required": false }
+        },
+        "result": {
+          "items": "items",
+          "fields": ["type", "reason", "message", "involvedObject.kind", "involvedObject.name", "count", "lastTimestamp"]
+        }
+      },
+      {
+        "name": "argocd_get_revision_metadata",
+        "description": "Read the commit behind a deployed revision: author, date, message and tags.",
+        "method": "GET",
+        "path": "/api/v1/applications/{name}/revisions/{revision}/metadata",
+        "params": {
+          "name": { "type": "string", "description": "The application name", "in": "path" },
+          "revision": { "type": "string", "description": "The revision, such as status.sync.revision of the application", "in": "path" },
+          "project": {
+            "type": "string",
+            "description": "The application's Argo CD project; Argo CD answers not found when the application is in another",
+            "in": "query",
+            "required": false,
+            "limit": "projects"
+          }
+        }
+      }
+    ]
+  }
+}

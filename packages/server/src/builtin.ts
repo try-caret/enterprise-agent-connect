@@ -48,4 +48,12 @@ export const builtinConnectors: BuiltinModule[] = [
   netsuite,
   dynamics365,
   gong,
+  describedApp("gitlab"),
+  describedApp("argo-cd"),
+  describedApp("sonarqube"),
+  describedApp("datadog"),
+  describedApp("pagerduty"),
+  describedApp("grafana"),
+  describedApp("zephyr"),
+  describedApp("confluence"),
 ];
