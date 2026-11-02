@@ -1,0 +1,376 @@
+{
+  "id": "automox",
+  "name": "Automox",
+  "description": "Let agents read your Automox devices, their missing patches and software, policies and compliance, and, if you allow it, ask a device to scan itself again. For helpdesk triage, compliance checks and troubleshooting.",
+  "logo": "/brand/registry/automox.svg",
+  "identity": "An Automox organization API key. It can do whatever its owner's role allows in that organization, so create it as a user whose role only reads devices, packages, policies and reports.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Use an account that can only read",
+      "body": "An Automox API key acts with its owner's role. Create the key as a user, or a service user, whose role has read permissions for the organization, devices, packages, policies and reports, and nothing else. Add device manage permission only if agents may ask devices to scan. The user also needs Personal API Key: Manage to create its own key.",
+      "link": {
+        "label": "Automox: using API keys and their permissions",
+        "href": "https://docs.automox.com/product/Developer/Using_Global_API_Keys.htm"
+      },
+      "click": [
+        "In the Automox console, sign in as the user agents should act as.",
+        "Check that its role grants Organization: Read, Devices: Read, Packages: Read, Policies: Read and Reports: Read."
+      ]
+    },
+    {
+      "title": "Create an API key",
+      "body": "Create the key while signed in as the user from the step before. A key can be given an expiration date; Automox stops it working then.",
+      "link": {
+        "label": "Automox: managing keys",
+        "href": "https://docs.automox.com/product/Product_Documentation/Settings/Managing_Keys.htm"
+      },
+      "click": [
+        "Go to Settings, then Secrets & Keys.",
+        "Under Organization API Keys, select Add.",
+        "Enter a name, optionally an expiration date, and select Create.",
+        "Select Copy next to the key."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "api_key",
+      "label": "API key",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read devices and compliance",
+      "description": "List devices and read one: operating system, last seen, missing patches and policy status. Read a device's software and patches, the devices that need attention, policies and how many devices each policy has made compliant.",
+      "required": true,
+      "note": "An organization API key reaches only the organization it was created in. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "automox_list_devices",
+        "automox_get_device",
+        "automox_list_device_software",
+        "automox_devices_needing_attention",
+        "automox_list_policies",
+        "automox_policy_compliance"
+      ]
+    },
+    {
+      "id": "scan",
+      "label": "Scan devices",
+      "description": "Ask a device to scan itself now, so its patches and software are up to date before an agent looks again.",
+      "note": "Needs Devices: Manage in the key owner's role. A scan installs nothing and does not restart the device.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["automox_scan_device"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "organizations",
+      "label": "Organizations",
+      "help": "Optional: only these Automox organizations, by their numeric id (shown under Automox organizations after connecting). Leave empty for every organization the key can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,20}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/orgs",
+    "label": "Automox organizations",
+    "show": "[].id",
+    "name": "[].name"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/orgs",
+    "label": "Automox organizations",
+    "show": "[].id",
+    "name": "[].name"
+  },
+  "revoke": "In Automox, go to Settings, then Secrets & Keys, and delete the key. Agents lose access to Automox at once.",
+  "http": {
+    "baseUrl": "https://console.automox.com/api",
+    "auth": { "type": "bearer", "token": "api_key" },
+    "tools": [
+      {
+        "name": "automox_list_devices",
+        "description": "List the devices in an Automox organization, 50 at a time by default. Filter by group, policy, pending patches or whether a policy manages them. Pass page 1, 2 and so on for more; a page shorter than limit is the last.",
+        "method": "GET",
+        "path": "/servers",
+        "params": {
+          "org_id": {
+            "type": "integer",
+            "description": "The Automox organization id",
+            "in": "query",
+            "name": "o",
+            "limit": "organizations"
+          },
+          "group_id": {
+            "type": "integer",
+            "description": "Only devices in this server group",
+            "in": "query",
+            "name": "groupId",
+            "required": false
+          },
+          "policy_id": {
+            "type": "integer",
+            "description": "Only devices linked to this policy",
+            "in": "query",
+            "name": "policyId",
+            "required": false
+          },
+          "pending": {
+            "type": "integer",
+            "enum": [0, 1],
+            "description": "1: only devices with patches waiting to install; 0: only devices without",
+            "in": "query",
+            "required": false
+          },
+          "managed": {
+            "type": "integer",
+            "enum": [0, 1],
+            "description": "1: only devices a policy manages; 0: only unmanaged devices",
+            "in": "query",
+            "required": false
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many devices per page, 1 to 500",
+            "in": "query",
+            "default": 50
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 0",
+            "in": "query",
+            "default": 0
+          }
+        },
+        "result": {
+          "fields": [
+            "id",
+            "uuid",
+            "name",
+            "display_name",
+            "organization_id",
+            "server_group_id",
+            "os_family",
+            "os_name",
+            "os_version",
+            "agent_version",
+            "connected",
+            "last_disconnect_time",
+            "last_refresh_time",
+            "needs_reboot",
+            "needs_attention",
+            "pending_patches",
+            "compliant",
+            "status",
+            "serial_number",
+            "last_logged_in_user",
+            "tags"
+          ]
+        }
+      },
+      {
+        "name": "automox_get_device",
+        "description": "Read one device: its operating system, network addresses, last scan, missing patches, linked policies and their status, and hardware details.",
+        "method": "GET",
+        "path": "/servers/{device_id}",
+        "params": {
+          "device_id": {
+            "type": "string",
+            "description": "The device's numeric id or its UUID",
+            "in": "path"
+          },
+          "org_id": {
+            "type": "integer",
+            "description": "The Automox organization id",
+            "in": "query",
+            "name": "o",
+            "limit": "organizations"
+          },
+          "include_details": {
+            "type": "integer",
+            "enum": [0, 1],
+            "description": "1 to include hardware and system details",
+            "in": "query",
+            "default": 1
+          }
+        }
+      },
+      {
+        "name": "automox_list_device_software",
+        "description": "List a device's software and patches: what is installed, what is waiting to install, severity and CVEs, 100 at a time by default. Pass page 1, 2 and so on for more.",
+        "method": "GET",
+        "path": "/servers/{device_id}/packages",
+        "params": {
+          "device_id": {
+            "type": "integer",
+            "description": "The device's numeric id",
+            "in": "path"
+          },
+          "org_id": {
+            "type": "integer",
+            "description": "The Automox organization id",
+            "in": "query",
+            "name": "o",
+            "limit": "organizations"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many per page, 1 to 500",
+            "in": "query",
+            "default": 100
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 0",
+            "in": "query",
+            "default": 0
+          }
+        },
+        "result": {
+          "fields": [
+            "display_name",
+            "name",
+            "version",
+            "installed",
+            "ignored",
+            "severity",
+            "cves",
+            "cve_score",
+            "requires_reboot",
+            "patch_scope",
+            "create_time"
+          ]
+        }
+      },
+      {
+        "name": "automox_devices_needing_attention",
+        "description": "The devices that need attention in an organization, with counts by vulnerability severity.",
+        "method": "GET",
+        "path": "/reports/needs-attention",
+        "params": {
+          "org_id": {
+            "type": "integer",
+            "description": "The Automox organization id",
+            "in": "query",
+            "name": "o",
+            "limit": "organizations"
+          },
+          "group_id": {
+            "type": "integer",
+            "description": "Only devices in this server group",
+            "in": "query",
+            "name": "groupId",
+            "required": false
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many devices to return",
+            "in": "query",
+            "default": 100
+          },
+          "offset": {
+            "type": "integer",
+            "description": "How many devices to skip, for the next page",
+            "in": "query",
+            "default": 0
+          }
+        }
+      },
+      {
+        "name": "automox_list_policies",
+        "description": "List an organization's policies: patch, required software and custom policies, with their schedules and settings. Pass page 1, 2 and so on for more.",
+        "method": "GET",
+        "path": "/policies",
+        "params": {
+          "org_id": {
+            "type": "integer",
+            "description": "The Automox organization id",
+            "in": "query",
+            "name": "o",
+            "limit": "organizations"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many per page, 1 to 500",
+            "in": "query",
+            "default": 100
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 0",
+            "in": "query",
+            "default": 0
+          }
+        },
+        "result": {
+          "fields": [
+            "id",
+            "name",
+            "policy_type_name",
+            "status",
+            "notes",
+            "server_groups",
+            "server_count",
+            "schedule_days",
+            "schedule_time",
+            "create_time"
+          ]
+        }
+      },
+      {
+        "name": "automox_policy_compliance",
+        "description": "For each policy in an organization, how many devices are compliant, not compliant and pending.",
+        "method": "GET",
+        "path": "/policystats",
+        "params": {
+          "org_id": {
+            "type": "integer",
+            "description": "The Automox organization id",
+            "in": "query",
+            "name": "o",
+            "limit": "organizations"
+          }
+        }
+      },
+      {
+        "name": "automox_scan_device",
+        "description": "Ask a device to scan itself now. It reports its software and missing patches again the next time it checks in. Installs nothing.",
+        "method": "POST",
+        "path": "/servers/{device_id}/queues",
+        "params": {
+          "device_id": {
+            "type": "integer",
+            "description": "The device's numeric id",
+            "in": "path"
+          },
+          "org_id": {
+            "type": "integer",
+            "description": "The Automox organization id",
+            "in": "query",
+            "name": "o",
+            "limit": "organizations"
+          },
+          "command": {
+            "type": "string",
+            "enum": ["GetOS"],
+            "description": "GetOS: scan the device",
+            "in": "body",
+            "name": "command_type_name",
+            "default": "GetOS"
+          }
+        }
+      }
+    ]
+  }
+}

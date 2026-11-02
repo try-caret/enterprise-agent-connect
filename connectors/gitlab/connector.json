@@ -1,0 +1,263 @@
+{
+  "id": "gitlab",
+  "name": "GitLab",
+  "description": "Let agents read merge requests, pipelines, job logs and commits in the GitLab projects you choose, and comment on merge requests. For review prep, failed pipeline triage, release checks and status reports.",
+  "logo": "/brand/registry/gitlab.svg",
+  "identity": "A GitLab project or group access token. It acts as a bot member of that project or group, with the role you give it, and reaches nothing outside it.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an access token",
+      "body": "Create the token on the group that holds the projects agents should see, or on one project. Give it the Reporter role and the read_api scope. If agents may comment on merge requests, keep the Reporter role and choose the api scope instead: Reporter can comment but cannot push code, merge or run pipelines. GitLab shows the token only once.",
+      "link": {
+        "label": "GitLab: project access tokens",
+        "href": "https://docs.gitlab.com/user/project/settings/project_access_tokens/"
+      },
+      "click": [
+        "In GitLab, open the group (or the project), then select Settings > Access tokens > Add new token.",
+        "Token name: AI agents. Set an expiration date.",
+        "Role: Reporter. Scopes: read_api (api if agents may comment).",
+        "Select Create group access token (or Create project access token) and copy the token."
+      ]
+    },
+    {
+      "title": "Find your GitLab address",
+      "body": "Enter the host name of your GitLab, such as gitlab.com or gitlab.example.com, without https://. You can test the token with the command below: it shows the token's bot user and changes nothing.",
+      "click": ["Copy the host name from your browser's address bar while you are in GitLab."],
+      "copy": [
+        "GITLAB_HOST=gitlab.example.com",
+        "curl -s --header \"PRIVATE-TOKEN: $GITLAB_TOKEN\" \"https://$GITLAB_HOST/api/v4/user\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "GitLab address",
+      "help": "The host name only, such as gitlab.com or gitlab.example.com.",
+      "placeholder": "gitlab.example.com",
+      "secret": false
+    },
+    { "id": "token", "label": "Access token", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read merge requests and pipelines",
+      "description": "List and read merge requests with their changes and comments, list and read pipelines and their jobs, read a job's log, and list commits.",
+      "required": true,
+      "note": "Reaches every project the token can see unless you keep a key to chosen projects. Read-only.",
+      "scopes": ["read_api"],
+      "permissions": [],
+      "tools": [
+        "gitlab_list_merge_requests",
+        "gitlab_get_merge_request",
+        "gitlab_list_merge_request_changes",
+        "gitlab_list_merge_request_comments",
+        "gitlab_list_pipelines",
+        "gitlab_get_pipeline",
+        "gitlab_list_pipeline_jobs",
+        "gitlab_get_job_log",
+        "gitlab_list_commits"
+      ]
+    },
+    {
+      "id": "comment",
+      "label": "Comment on merge requests",
+      "description": "Add a comment to a merge request, such as a review brief. It can be marked internal, so only project members see it.",
+      "note": "Needs a token with the api scope. Keep its role at Reporter.",
+      "scopes": ["api"],
+      "permissions": [],
+      "tools": ["gitlab_add_merge_request_comment"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "projects",
+      "label": "Projects",
+      "help": "Optional: only these projects, by their full path as in the project's address, such as platform/payments-api. Agents must then name projects by that path. Leave empty for every project the token can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$"
+    }
+  ],
+  "verify": { "method": "GET", "path": "/user", "label": "GitLab token user", "show": "username" },
+  "revoke": "In GitLab, open the group or project, go to Settings > Access tokens and revoke the token. Agents lose access to GitLab at once.",
+  "http": {
+    "baseUrl": "https://{host}/api/v4",
+    "auth": { "type": "header", "header": "PRIVATE-TOKEN", "value": "token" },
+    "tools": [
+      {
+        "name": "gitlab_list_merge_requests",
+        "description": "List a project's merge requests, newest first. Pass next from the answer as page for the next page.",
+        "method": "GET",
+        "path": "/projects/{project}/merge_requests",
+        "params": {
+          "project": {
+            "type": "string",
+            "description": "The project's full path, such as platform/payments-api, or its numeric id",
+            "in": "path",
+            "limit": "projects"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["opened", "closed", "locked", "merged", "all"],
+            "description": "Only merge requests in this state",
+            "in": "query",
+            "default": "opened"
+          },
+          "target_branch": { "type": "string", "description": "Only those merging into this branch", "in": "query", "required": false },
+          "source_branch": { "type": "string", "description": "Only those from this branch", "in": "query", "required": false },
+          "labels": { "type": "string", "description": "Comma-separated labels, all of which must be on the merge request", "in": "query", "required": false },
+          "author_username": { "type": "string", "description": "Only those opened by this username", "in": "query", "required": false },
+          "reviewer_username": { "type": "string", "description": "Only those with this reviewer", "in": "query", "required": false },
+          "search": { "type": "string", "description": "Words in the title or description", "in": "query", "required": false },
+          "updated_after": { "type": "string", "description": "Only those updated after this time, ISO 8601, such as 2026-10-01T00:00:00Z", "in": "query", "required": false },
+          "per_page": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 20 },
+          "page": { "type": "integer", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page", "header": "X-Next-Page" },
+        "result": {
+          "fields": ["iid", "title", "state", "draft", "author.username", "reviewers.username", "source_branch", "target_branch", "labels", "detailed_merge_status", "has_conflicts", "updated_at", "web_url"]
+        }
+      },
+      {
+        "name": "gitlab_get_merge_request",
+        "description": "Read one merge request: description, branches, approvals state, merge status and its latest pipeline.",
+        "method": "GET",
+        "path": "/projects/{project}/merge_requests/{iid}",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "iid": { "type": "integer", "description": "The merge request number within the project (its iid)", "in": "path" }
+        }
+      },
+      {
+        "name": "gitlab_list_merge_request_changes",
+        "description": "List the files a merge request changes, with each file's diff. Pass next from the answer as page for the next page.",
+        "method": "GET",
+        "path": "/projects/{project}/merge_requests/{iid}/diffs",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "iid": { "type": "integer", "description": "The merge request number within the project (its iid)", "in": "path" },
+          "per_page": { "type": "integer", "description": "How many files per page, at most 100", "in": "query", "default": 20 },
+          "page": { "type": "integer", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page", "header": "X-Next-Page" }
+      },
+      {
+        "name": "gitlab_list_merge_request_comments",
+        "description": "List the comments on a merge request, newest first, including system notes such as approvals. Pass next from the answer as page for the next page.",
+        "method": "GET",
+        "path": "/projects/{project}/merge_requests/{iid}/notes",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "iid": { "type": "integer", "description": "The merge request number within the project (its iid)", "in": "path" },
+          "per_page": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 20 },
+          "page": { "type": "integer", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page", "header": "X-Next-Page" },
+        "result": { "fields": ["id", "author.username", "body", "system", "internal", "created_at"] }
+      },
+      {
+        "name": "gitlab_list_pipelines",
+        "description": "List a project's pipelines, newest first. Pass next from the answer as page for the next page.",
+        "method": "GET",
+        "path": "/projects/{project}/pipelines",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "status": {
+            "type": "string",
+            "enum": ["created", "waiting_for_resource", "preparing", "pending", "running", "success", "failed", "canceled", "skipped", "manual", "scheduled"],
+            "description": "Only pipelines in this status",
+            "in": "query",
+            "required": false
+          },
+          "ref": { "type": "string", "description": "Only pipelines for this branch or tag", "in": "query", "required": false },
+          "sha": { "type": "string", "description": "Only pipelines for this commit", "in": "query", "required": false },
+          "updated_after": { "type": "string", "description": "Only those updated after this time, ISO 8601", "in": "query", "required": false },
+          "per_page": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 20 },
+          "page": { "type": "integer", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page", "header": "X-Next-Page" },
+        "result": { "fields": ["id", "status", "ref", "sha", "source", "created_at", "updated_at", "web_url"] }
+      },
+      {
+        "name": "gitlab_get_pipeline",
+        "description": "Read one pipeline: status, branch, commit, who started it, timing and the reason it failed, if GitLab gives one.",
+        "method": "GET",
+        "path": "/projects/{project}/pipelines/{pipeline_id}",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "pipeline_id": { "type": "integer", "description": "The pipeline id", "in": "path" }
+        }
+      },
+      {
+        "name": "gitlab_list_pipeline_jobs",
+        "description": "List a pipeline's jobs with their stage, status and failure reason. Pass next from the answer as page for the next page.",
+        "method": "GET",
+        "path": "/projects/{project}/pipelines/{pipeline_id}/jobs",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "pipeline_id": { "type": "integer", "description": "The pipeline id", "in": "path" },
+          "scope": {
+            "type": "array",
+            "items": "string",
+            "enum": ["created", "pending", "running", "failed", "success", "canceled", "skipped", "waiting_for_resource", "manual"],
+            "description": "Only jobs in these statuses",
+            "in": "query",
+            "name": "scope[]",
+            "required": false
+          },
+          "include_retried": { "type": "boolean", "description": "Include jobs that were retried", "in": "query", "required": false },
+          "per_page": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 50 },
+          "page": { "type": "integer", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page", "header": "X-Next-Page" },
+        "result": { "fields": ["id", "name", "stage", "status", "failure_reason", "allow_failure", "duration", "started_at", "finished_at", "web_url"] }
+      },
+      {
+        "name": "gitlab_get_job_log",
+        "description": "Read a job's log as text, to see why it failed. Logs larger than 1 MB cannot be read.",
+        "method": "GET",
+        "path": "/projects/{project}/jobs/{job_id}/trace",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "job_id": { "type": "integer", "description": "The job id", "in": "path" }
+        }
+      },
+      {
+        "name": "gitlab_list_commits",
+        "description": "List commits on a branch, newest first, optionally only within dates or by one author. Pass next from the answer as page for the next page.",
+        "method": "GET",
+        "path": "/projects/{project}/repository/commits",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "ref_name": { "type": "string", "description": "The branch or tag; the default branch when left out", "in": "query", "required": false },
+          "since": { "type": "string", "description": "Only commits after this time, ISO 8601", "in": "query", "required": false },
+          "until": { "type": "string", "description": "Only commits before this time, ISO 8601", "in": "query", "required": false },
+          "author": { "type": "string", "description": "Only commits by this author name or email", "in": "query", "required": false },
+          "per_page": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 20 },
+          "page": { "type": "integer", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page", "header": "X-Next-Page" },
+        "result": { "fields": ["short_id", "title", "author_name", "author_email", "committed_date", "web_url"] }
+      },
+      {
+        "name": "gitlab_add_merge_request_comment",
+        "description": "Add a comment to a merge request. Markdown is allowed.",
+        "method": "POST",
+        "path": "/projects/{project}/merge_requests/{iid}/notes",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "iid": { "type": "integer", "description": "The merge request number within the project (its iid)", "in": "path" },
+          "body": { "type": "string", "description": "The comment, in Markdown", "in": "body" },
+          "internal": { "type": "boolean", "description": "Only project members can see it", "in": "body", "required": false }
+        },
+        "result": { "fields": ["id", "body", "internal", "created_at"] }
+      }
+    ]
+  }
+}

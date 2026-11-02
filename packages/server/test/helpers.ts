@@ -603,6 +603,9 @@ export function fakeStore(key: CredentialKey) {
       });
       return { id: org, ...state.organizations.get(org)! };
     },
+    // No internal apps: those are tested on Postgres (internal-apps.test.ts).
+    listInternalApps: async () => [],
+    getInternalApp: async () => null,
     recentAudit: async (
       _org: string,
       limit: number,

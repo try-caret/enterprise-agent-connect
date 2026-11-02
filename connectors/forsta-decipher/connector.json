@@ -1,0 +1,164 @@
+{
+  "id": "forsta-decipher",
+  "name": "Forsta Surveys (Decipher)",
+  "description": "Let agents keep track of your Forsta (Decipher) surveys: find surveys and their field status, read completes and drop-outs, quotas, the questionnaire's datamap and field warnings, and your company's usage for a period. Read-only.",
+  "logo": "/brand/registry/forsta-decipher.svg",
+  "identity": "A Decipher API key of a Research Hub user. It reaches the surveys that user can, with any limits set on the key, so create it under a user made for agents.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API key",
+      "body": "Create the key as a user who has access only to the projects agents should see. You can also limit the key to certain calls, networks and an expiry date. Keys work over https only.",
+      "link": {
+        "label": "Decipher API: authentication and authorization",
+        "href": "https://docs.developer.focusvision.com/docs/decipher/api"
+      },
+      "click": [
+        "In the Research Hub, open the User Links menu and select API access.",
+        "Select Create API key, set any restrictions you want, and copy the key."
+      ]
+    },
+    {
+      "title": "Find your server address",
+      "body": "Use the host name you sign in to the Research Hub at, such as yourcompany.decipherinc.com. The command below checks the key and address and changes nothing.",
+      "click": ["Copy the host name from your browser's address bar while signed in to the Research Hub."],
+      "copy": ["curl -s -H \"x-apikey: $DECIPHER_KEY\" \"https://$DECIPHER_HOST/api/v1/hello?name=agents\""],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "Server address",
+      "help": "The host name of your Research Hub, without https:// or a path.",
+      "placeholder": "yourcompany.decipherinc.com",
+      "secret": false
+    },
+    {
+      "id": "api_key",
+      "label": "API key",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read_surveys",
+      "label": "Read surveys",
+      "description": "Find surveys with their state and completes, and read one survey's completes and drop-outs, quotas, datamap (its questions and answer codes) and field warnings.",
+      "required": true,
+      "note": "Reaches every survey the key's user can. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "decipher_list_surveys",
+        "decipher_get_survey",
+        "decipher_get_completions",
+        "decipher_get_quotas",
+        "decipher_get_datamap",
+        "decipher_get_warnings"
+      ]
+    },
+    {
+      "id": "read_usage",
+      "label": "Read usage",
+      "description": "Read your company's usage for a date range, the completes your bill is based on, by project and device type.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["decipher_get_usage"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/hello?name=agents",
+    "label": "Decipher answers",
+    "show": "hello"
+  },
+  "revoke": "In the Research Hub, open the User Links menu, select API access and delete the key. Agents lose access to Decipher at once.",
+  "http": {
+    "baseUrl": "https://{host}/api/v1",
+    "auth": { "type": "header", "header": "x-apikey", "value": "api_key" },
+    "tools": [
+      {
+        "name": "decipher_list_surveys",
+        "description": "Find surveys as in the Research Hub, by text, #tag or user:email. Each has its path (selfserve/<directory>/<project>), state, launch date and completes so far.",
+        "method": "GET",
+        "path": "/rh/companies/all/surveys",
+        "params": {
+          "query": { "type": "string", "description": "A Research Hub search, e.g. brand tracker, #wave3 or user:ann@example.com", "in": "query", "required": false }
+        },
+        "result": {
+          "fields": ["path", "title", "owner", "state", "tags", "directory", "dateLaunched", "startTime", "finishTime", "total", "qualified", "today", "clickthrough", "medianQtime", "questions"]
+        }
+      },
+      {
+        "name": "decipher_get_survey",
+        "description": "Read one survey's Research Hub record. Surveys are named by the two parts after selfserve/ in their path.",
+        "method": "GET",
+        "path": "/rh/surveys/selfserve/{directory}/{project}",
+        "params": {
+          "directory": { "type": "string", "description": "The part after selfserve/ in the survey's path, e.g. 53b", "in": "path" },
+          "project": { "type": "string", "description": "The last part of the survey's path, e.g. 180401", "in": "path" }
+        }
+      },
+      {
+        "name": "decipher_get_completions",
+        "description": "Read a survey's field summary: clickthroughs, partials, terminates, over-quotas and qualified completes, optionally split, e.g. by list.",
+        "method": "GET",
+        "path": "/surveys/selfserve/{directory}/{project}/summary/completions",
+        "params": {
+          "directory": { "type": "string", "description": "The part after selfserve/ in the survey's path", "in": "path" },
+          "project": { "type": "string", "description": "The last part of the survey's path", "in": "path" },
+          "split": { "type": "string", "description": "Split the counts by this, e.g. list", "in": "query", "required": false }
+        }
+      },
+      {
+        "name": "decipher_get_quotas",
+        "description": "Read a survey's quotas: each cell's limit, completes, pending and over-quota counts.",
+        "method": "GET",
+        "path": "/surveys/selfserve/{directory}/{project}/quota",
+        "params": {
+          "directory": { "type": "string", "description": "The part after selfserve/ in the survey's path", "in": "path" },
+          "project": { "type": "string", "description": "The last part of the survey's path", "in": "path" }
+        },
+        "result": { "fields": ["markers", "sheets", "defines", "stopped"] }
+      },
+      {
+        "name": "decipher_get_datamap",
+        "description": "Read a survey's datamap: its questions, variables and answer codes, for checking the questionnaire and the data.",
+        "method": "GET",
+        "path": "/surveys/selfserve/{directory}/{project}/datamap",
+        "params": {
+          "directory": { "type": "string", "description": "The part after selfserve/ in the survey's path", "in": "path" },
+          "project": { "type": "string", "description": "The last part of the survey's path", "in": "path" },
+          "format": { "type": "string", "description": "Always JSON", "in": "query", "enum": ["json"], "default": "json" }
+        }
+      },
+      {
+        "name": "decipher_get_warnings",
+        "description": "Read a survey's field warnings for a period: participants blocked, missing images or scripts, errors and quota misses.",
+        "method": "GET",
+        "path": "/surveys/selfserve/{directory}/{project}/warnings",
+        "params": {
+          "directory": { "type": "string", "description": "The part after selfserve/ in the survey's path", "in": "path" },
+          "project": { "type": "string", "description": "The last part of the survey's path", "in": "path" },
+          "start": { "type": "string", "description": "From this date, YYYY-MM-DD", "in": "query", "required": false },
+          "end": { "type": "string", "description": "Up to this date, YYYY-MM-DD", "in": "query", "required": false }
+        }
+      },
+      {
+        "name": "decipher_get_usage",
+        "description": "Read your company's usage between two dates: completes by project and by device type. Yesterday's data is ready a day or two later.",
+        "method": "GET",
+        "path": "/rh/usage",
+        "params": {
+          "start": { "type": "string", "description": "Start date, YYYY-MM-DD", "in": "query" },
+          "end": { "type": "string", "description": "End date, YYYY-MM-DD", "in": "query" },
+          "company": { "type": "integer", "description": "Only this company's usage", "in": "query", "required": false }
+        }
+      }
+    ]
+  }
+}

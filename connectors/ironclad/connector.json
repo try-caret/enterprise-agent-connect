@@ -1,0 +1,291 @@
+{
+  "id": "ironclad",
+  "name": "Ironclad",
+  "description": "Let agents read contract workflows, approvals, signature status and signed records in Ironclad, comment on workflows and remind signers. For contract intake triage, chasing signatures, agreement review and finding signed terms.",
+  "logo": "/brand/registry/ironclad.svg",
+  "identity": "An Ironclad API app using the client credentials grant. Every call acts as the Ironclad user you name, so agents see and do only what that user may.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API app",
+      "body": "Ironclad shows the API tab only when your company has the API add-on. Create the app in the Ironclad environment your company uses: ironcladapp.com, or eu1.ironcladapp.com for the EU. Ironclad shows the client secret only once.",
+      "link": {
+        "label": "Ironclad: register an OAuth client",
+        "href": "https://developer.ironcladapp.com/reference/register-oauth-client"
+      },
+      "click": [
+        "In Ironclad, open your profile menu at the top right > Company Settings > API > Create new app.",
+        "Name: {brand.microsoft.appName} > Create app. Copy the client ID and the client secret."
+      ]
+    },
+    {
+      "title": "Allow the client credentials grant and only the scopes agents need",
+      "body": "In the app's details, choose the Client Credentials grant and request only the scopes of the capabilities you will give agents. The read scopes are needed for everything.",
+      "click": [
+        "Grant Types: Client Credentials.",
+        "Requested Resource Scopes: the scopes below > Save Changes."
+      ],
+      "copy": ["{scopes}"]
+    },
+    {
+      "title": "Choose the user agents act as",
+      "body": "Ironclad needs every call to name a user of your company, and answers as that user: agents see only the workflows and records that user can see, and comments and reminders are made in that user's name. Pick a user whose access fits what agents should reach, and enter that user's email in the form.",
+      "link": {
+        "label": "Ironclad: authenticate a request",
+        "href": "https://developer.ironcladapp.com/reference/authenticate-a-request"
+      }
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "Ironclad address",
+      "help": "ironcladapp.com, eu1.ironcladapp.com for the EU, or demo.ironcladapp.com for the demo environment. The host name only.",
+      "placeholder": "ironcladapp.com",
+      "secret": false
+    },
+    { "id": "client_id", "label": "Client ID", "secret": false },
+    { "id": "client_secret", "label": "Client secret", "secret": true },
+    {
+      "id": "user_email",
+      "label": "Act as user (email)",
+      "help": "The email of the Ironclad user every call acts as. Agents get that user's access.",
+      "placeholder": "legal-ops@example.com",
+      "secret": false
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read workflows and records",
+      "description": "List and read contract workflows, see who still has to approve one, see signature status, and list and read signed records.",
+      "required": true,
+      "note": "Read-only. Reaches what the user agents act as can see, unless you keep a key to chosen record types.",
+      "scopes": [
+        "public.workflows.readWorkflows",
+        "public.workflows.readApprovals",
+        "public.workflows.readSignStatus",
+        "public.records.readRecords"
+      ],
+      "permissions": [],
+      "tools": [
+        "ironclad_list_workflows",
+        "ironclad_get_workflow",
+        "ironclad_list_workflow_approvals",
+        "ironclad_get_sign_status",
+        "ironclad_list_records",
+        "ironclad_get_record"
+      ]
+    },
+    {
+      "id": "comment",
+      "label": "Comment on workflows",
+      "description": "Add a comment to a workflow's activity feed, such as a review summary or a question for the requester. It is posted in the name of the user agents act as.",
+      "scopes": ["public.workflows.createComments"],
+      "permissions": [],
+      "tools": ["ironclad_add_workflow_comment"]
+    },
+    {
+      "id": "remind",
+      "label": "Remind signers",
+      "description": "Send a signer a reminder email for a workflow already out for signature. Ironclad allows one reminder per signer an hour.",
+      "scopes": ["public.workflows.remindSigners"],
+      "permissions": [],
+      "tools": ["ironclad_remind_signer"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "record_types",
+      "label": "Record types",
+      "help": "Optional: only records of these types, by record type id such as consultingAgreement. Covers listing and reading records, not workflows. Leave empty for every type the user agents act as can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_-]{1,100}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/workflows?pageSize=1",
+    "label": "Workflows the user can see",
+    "show": "count"
+  },
+  "revoke": "In Ironclad, open your profile menu > Company Settings > API, open the app and reset its client secret. Agents lose access to Ironclad at once.",
+  "http": {
+    "baseUrl": "https://{host}/public/api/v1",
+    "allowedHosts": ["ironcladapp.com", "*.ironcladapp.com"],
+    "auth": {
+      "type": "oauth2",
+      "tokenUrl": "https://{host}/oauth/token",
+      "clientId": "client_id",
+      "clientSecret": "client_secret"
+    },
+    "fieldHeaders": { "x-as-user-email": "user_email" },
+    "tools": [
+      {
+        "name": "ironclad_list_workflows",
+        "description": "List contract workflows, most useful with a status, a template or a search. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/workflows",
+        "params": {
+          "status": {
+            "type": "array",
+            "items": "string",
+            "enum": ["active", "paused", "completed", "cancelled"],
+            "description": "Only workflows in these statuses. Ironclad lists active ones (Create, Review, Sign and Archive steps) when left out",
+            "in": "query",
+            "join": ",",
+            "required": false
+          },
+          "template": { "type": "string", "description": "Only workflows of this template id", "in": "query", "required": false },
+          "search": { "type": "string", "description": "Words to search for across the workflow's fields, as in Ironclad's own search", "in": "query", "required": false },
+          "filter": {
+            "type": "string",
+            "description": "A filter formula on workflow attributes, such as Equals([counterpartyName], 'Acme Corp.') or GreaterThan([amount], '1000')",
+            "in": "query",
+            "required": false
+          },
+          "last_updated": {
+            "type": "string",
+            "description": "Only workflows updated since this UTC time, such as 2026-10-01T00:00:00Z",
+            "in": "query",
+            "name": "lastUpdated",
+            "required": false
+          },
+          "page": { "type": "integer", "description": "Page number, starting at 0", "in": "query", "default": 0 },
+          "page_size": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "name": "pageSize", "default": 20 }
+        },
+        "result": {
+          "items": "list",
+          "fields": ["id", "ironcladId", "title", "template", "step", "status", "creator.displayName", "created", "lastUpdated", "recordType", "recordIds"]
+        }
+      },
+      {
+        "name": "ironclad_get_workflow",
+        "description": "Read one workflow: its step, status, roles and their assignees, and the values of its fields such as counterparty and amount.",
+        "method": "GET",
+        "path": "/workflows/{id}",
+        "params": {
+          "id": { "type": "string", "description": "The workflow id or its Ironclad ID, such as IC-1", "in": "path" }
+        },
+        "result": {
+          "fields": ["id", "ironcladId", "title", "template", "step", "status", "creator", "created", "lastUpdated", "roles", "attributes", "recordType", "recordIds"]
+        }
+      },
+      {
+        "name": "ironclad_list_workflow_approvals",
+        "description": "List a workflow's approval groups and roles, with who has approved and who is still pending.",
+        "method": "GET",
+        "path": "/workflows/{id}/approvals",
+        "params": {
+          "id": { "type": "string", "description": "The workflow id or its Ironclad ID", "in": "path" }
+        }
+      },
+      {
+        "name": "ironclad_get_sign_status",
+        "description": "Read a workflow's signature status: whether the request was sent, and each signer's name, email, role name and status. Only for workflows at the Sign step.",
+        "method": "GET",
+        "path": "/workflows/{id}/sign-status",
+        "params": {
+          "id": { "type": "string", "description": "The workflow id or its Ironclad ID", "in": "path" }
+        }
+      },
+      {
+        "name": "ironclad_list_records",
+        "description": "List signed contract records, newest agreement first. Answers one page; ask for the next page while a page comes back full.",
+        "method": "GET",
+        "path": "/records",
+        "params": {
+          "types": {
+            "type": "array",
+            "items": "string",
+            "description": "Only records of these record type ids, such as consultingAgreement",
+            "in": "query",
+            "join": ",",
+            "limit": "record_types",
+            "required": false
+          },
+          "search": { "type": "string", "description": "Words to search for across the record's properties, as in Ironclad's own search", "in": "query", "required": false },
+          "filter": {
+            "type": "string",
+            "description": "A filter formula on record properties, such as Equals([counterpartyName], 'Acme Corp.')",
+            "in": "query",
+            "required": false
+          },
+          "last_updated": {
+            "type": "string",
+            "description": "Only records updated since this UTC time, such as 2026-10-01T00:00:00Z",
+            "in": "query",
+            "name": "lastUpdated",
+            "required": false
+          },
+          "sort_field": {
+            "type": "string",
+            "enum": ["agreementDate", "name", "lastUpdated"],
+            "description": "What to sort by",
+            "in": "query",
+            "name": "sortField",
+            "default": "agreementDate"
+          },
+          "sort_direction": {
+            "type": "string",
+            "enum": ["ASC", "DESC"],
+            "description": "Sort direction",
+            "in": "query",
+            "name": "sortDirection",
+            "default": "DESC"
+          },
+          "page": { "type": "integer", "description": "Page number, starting at 0", "in": "query", "default": 0 },
+          "page_size": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "name": "pageSize", "default": 20 }
+        },
+        "result": {
+          "items": "list",
+          "fields": ["id", "ironcladId", "type", "typeDisplayName", "name", "lastUpdated", "contractStatus", "parentId"]
+        }
+      },
+      {
+        "name": "ironclad_get_record",
+        "description": "Read one signed record: its type, properties such as counterparty, dates and amounts, contract status, and linked records.",
+        "method": "GET",
+        "path": "/records/{id}",
+        "params": {
+          "id": { "type": "string", "description": "The record id or its Ironclad ID, such as IC-1", "in": "path" }
+        },
+        "answerLimits": [{ "field": "type", "limit": "record_types" }],
+        "result": {
+          "fields": ["id", "ironcladId", "type", "typeDisplayName", "name", "lastUpdated", "properties", "contractStatus", "links", "parentId", "childIds", "amendments", "source"]
+        }
+      },
+      {
+        "name": "ironclad_add_workflow_comment",
+        "description": "Add a comment to a workflow's activity feed. Mention a user as <@jane.doe@example.com>.",
+        "method": "POST",
+        "path": "/workflows/{id}/comments",
+        "params": {
+          "id": { "type": "string", "description": "The workflow id or its Ironclad ID", "in": "path" },
+          "comment": { "type": "string", "description": "The comment text", "in": "body" },
+          "reply_to": {
+            "type": "string",
+            "description": "The id of a comment to reply to",
+            "in": "body",
+            "name": "repliedToActivityFeedMessageId",
+            "required": false
+          }
+        },
+        "result": { "fields": ["id", "commentMessage", "timestamp"] }
+      },
+      {
+        "name": "ironclad_remind_signer",
+        "description": "Email a signer a reminder to sign a workflow that is out for signature. Name the signer by role name, as ironclad_get_sign_status shows it. One reminder per signer an hour.",
+        "method": "POST",
+        "path": "/workflows/{id}/sign-status/signers/{signer_role_name}/remind",
+        "params": {
+          "id": { "type": "string", "description": "The workflow id or its Ironclad ID", "in": "path" },
+          "signer_role_name": { "type": "string", "description": "The signer's role name, such as Counterparty Signer", "in": "path" }
+        }
+      }
+    ]
+  }
+}

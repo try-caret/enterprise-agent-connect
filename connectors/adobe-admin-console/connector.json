@@ -1,0 +1,212 @@
+{
+  "id": "adobe-admin-console",
+  "name": "Adobe Admin Console",
+  "description": "Let agents read who has which Adobe licences: your Adobe users, the product profiles and user groups they are in, and who is in a profile or group. For joiner, mover and leaver access requests.",
+  "logo": "/brand/registry/adobe-admin-console.svg",
+  "identity": "An Adobe Developer Console project with the User Management API and OAuth Server-to-Server credentials. Adobe gives these credentials full user management, so agents here only read.",
+  "accountKey": "organization",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a project with the User Management API",
+      "body": "You need an Adobe system administrator. Adobe gives the project's credentials full user management for your organization; this app only ever reads with them.",
+      "link": {
+        "label": "Adobe: User Management API authentication",
+        "href": "https://adobe-apiplatform.github.io/umapi-documentation/en/UM_Authentication.html"
+      },
+      "click": [
+        "In Adobe Developer Console (developer.adobe.com/console), create a new project.",
+        "Select Add API, choose User Management API under Adobe Services, and select Next.",
+        "Choose OAuth Server-to-Server, then Save configured API."
+      ]
+    },
+    {
+      "title": "Copy the credentials",
+      "body": "Copy the three values for the form below. Give each agent the same Organization ID under API keys too: agents name it in every call, and only that organization is allowed.",
+      "click": [
+        "In the project, open the OAuth Server-to-Server credential.",
+        "Copy the Client ID and, after Retrieve client secret, the Client Secret.",
+        "Copy the Organization ID, which ends in @AdobeOrg."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "organization",
+      "label": "Organization ID",
+      "help": "From the OAuth Server-to-Server credential, ending in @AdobeOrg.",
+      "placeholder": "12345ABC67890@AdobeOrg",
+      "secret": false
+    },
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false
+    },
+    {
+      "id": "client_secret",
+      "label": "Client Secret",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read users and licences",
+      "description": "Read a user by email with the product profiles and groups they are in, list users, list product profiles and user groups with their product and licence quota, and list who is in a profile or group.",
+      "required": true,
+      "note": "Reaches every user in the organization. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "adobe_get_user",
+        "adobe_list_users",
+        "adobe_list_groups",
+        "adobe_list_group_members"
+      ]
+    }
+  ],
+  "limits": [
+    {
+      "id": "organizations",
+      "label": "Organization ID",
+      "help": "The Adobe Organization ID from the connect form, ending in @AdobeOrg. Agents can reach only this organization.",
+      "kind": "list",
+      "required": true,
+      "pattern": "^[A-Za-z0-9]+@AdobeOrg$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/groups/{organization}/0",
+    "label": "Adobe product profiles and groups",
+    "show": "groups[].groupName"
+  },
+  "revoke": "In Adobe Developer Console, open the project and delete the OAuth Server-to-Server credential, or the project. Agents lose access to Adobe at once.",
+  "http": {
+    "baseUrl": "https://usermanagement.adobe.io/v2/usermanagement",
+    "auth": {
+      "type": "oauth2",
+      "tokenUrl": "https://ims-na1.adobelogin.com/ims/token/v3",
+      "clientId": "client_id",
+      "clientSecret": "client_secret",
+      "scope": "openid,AdobeID,user_management_sdk"
+    },
+    "fieldHeaders": {
+      "x-api-key": "client_id"
+    },
+    "tools": [
+      {
+        "name": "adobe_get_user",
+        "description": "Read one Adobe user by email: name, status, account type and the product profiles, user groups and admin groups they are in.",
+        "method": "GET",
+        "path": "/organizations/{org_id}/users/{email}",
+        "params": {
+          "org_id": {
+            "type": "string",
+            "description": "The Adobe Organization ID, ending in @AdobeOrg",
+            "in": "path",
+            "limit": "organizations"
+          },
+          "email": {
+            "type": "string",
+            "description": "The user's full email address",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "adobe_list_users",
+        "description": "List the organization's users a page at a time: email, name, status, account type and groups. Pages start at 0; lastPage true marks the last.",
+        "method": "GET",
+        "path": "/users/{org_id}/{page}",
+        "params": {
+          "org_id": {
+            "type": "string",
+            "description": "The Adobe Organization ID, ending in @AdobeOrg",
+            "in": "path",
+            "limit": "organizations"
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 0",
+            "in": "path"
+          }
+        },
+        "result": {
+          "fields": [
+            "lastPage",
+            "users.email",
+            "users.firstname",
+            "users.lastname",
+            "users.status",
+            "users.type",
+            "users.groups"
+          ]
+        }
+      },
+      {
+        "name": "adobe_list_groups",
+        "description": "List product profiles, user groups and admin groups a page at a time: name, type, member count, and for a product profile its product and licence quota. Pages start at 0; lastPage true marks the last.",
+        "method": "GET",
+        "path": "/groups/{org_id}/{page}",
+        "params": {
+          "org_id": {
+            "type": "string",
+            "description": "The Adobe Organization ID, ending in @AdobeOrg",
+            "in": "path",
+            "limit": "organizations"
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 0",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "adobe_list_group_members",
+        "description": "List who is in one product profile, user group or admin group, a page at a time. Pages start at 0; lastPage true marks the last.",
+        "method": "GET",
+        "path": "/users/{org_id}/{page}/{group}",
+        "params": {
+          "org_id": {
+            "type": "string",
+            "description": "The Adobe Organization ID, ending in @AdobeOrg",
+            "in": "path",
+            "limit": "organizations"
+          },
+          "page": {
+            "type": "integer",
+            "description": "The page, starting at 0",
+            "in": "path"
+          },
+          "group": {
+            "type": "string",
+            "description": "The product profile, user group or admin group name",
+            "in": "path"
+          },
+          "exclude_groups": {
+            "type": "boolean",
+            "description": "true to leave out each member's own list of groups",
+            "in": "query",
+            "name": "excludeGroups",
+            "default": true
+          }
+        },
+        "result": {
+          "fields": [
+            "lastPage",
+            "groupName",
+            "users.email",
+            "users.firstname",
+            "users.lastname",
+            "users.status",
+            "users.type"
+          ]
+        }
+      }
+    ]
+  }
+}

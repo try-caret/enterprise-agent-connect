@@ -54,6 +54,9 @@ export type EventTriggerInput = Body<"setEventTrigger">;
 export type EventRun = S["EventRun"];
 export type ClaudeKey = S["ClaudeKey"];
 export type ClaudeAgent = S["ClaudeAgent"];
+export type InternalApp = S["InternalApp"];
+export type InternalAppSaved = S["InternalAppSaved"];
+export type InternalAppDraft = S["InternalAppDraft"];
 
 // Parts of a connector and a provider.
 export type Step = Connector["setup"][number];

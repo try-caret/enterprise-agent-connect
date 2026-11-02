@@ -1,3 +1,5 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { z } from "zod";
 import {
   audited,
@@ -7,11 +9,14 @@ import {
   VendorFailed,
   type Toolset,
 } from "../../packages/connector-kit/src/common.js";
-import type {
-  Connector,
-  ConnectorModule,
-  HttpApp,
-  HttpAuth,
+import {
+  addressFields,
+  checkHost,
+  fillAddress,
+  type Connector,
+  type ConnectorModule,
+  type HttpApp,
+  type HttpAuth,
 } from "../../packages/connector-kit/src/connector.js";
 
 type HttpTool = HttpApp["tools"][number];
@@ -35,6 +40,21 @@ export const MAX_BODY_BYTES = 256 * 1024;
 export const MAX_TARGET_BYTES = 8 * 1024;
 const TIMEOUT_MS = 30_000;
 
+// Cloud metadata services (169.254.169.254, fd00:ec2::254) hand out the server's own credentials,
+// and no app is served from a link-local address, so an address that resolves there is refused.
+// ponytail: checked at lookup, so a DNS answer that changes before the connect is not caught.
+// IPv4-mapped IPv6 comes back from URL as hex: ::ffff:a9fe:a9fe is 169.254.169.254.
+const LINK_LOCAL = /^(169\.254\.|::ffff:(169\.254\.|a9fe:)|fe[89ab][0-9a-f]:|fd00:ec2::254$)/i;
+async function refuseLinkLocal(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, "");
+  // A name that does not resolve is left to the call itself to fail on.
+  const addresses = isIP(host)
+    ? [host]
+    : await lookup(host, { all: true }).then((all) => all.map((a) => a.address), () => []);
+  if (addresses.some((a) => LINK_LOCAL.test(a)))
+    throw new ConnectError(`${hostname} is a link-local address, which no app is reached at`);
+}
+
 // fetch that reaches only `allowed` origins, follows no redirect, gives up after TIMEOUT_MS and
 // reads at most MAX_RESPONSE_BYTES of JSON or text (or what `types` matches). Its refusals are
 // ConnectError.
@@ -49,6 +69,7 @@ export function guardedFetch(
     const url = new URL(input instanceof Request ? input.url : input);
     if (!allowed.includes(url.origin))
       throw new ConnectError(`${url.origin} is not this app's address`);
+    await refuseLinkLocal(url.hostname);
     const res = await fetchImpl(url, {
       ...init,
       redirect: "manual",
@@ -117,31 +138,82 @@ export function formValues(connector: Connector, fields: Record<string, string>)
   return { config, secret };
 }
 
+// An app's address and token service filled in for one connection (their {field}s), and the
+// guarded fetch reaching only those origins, kept per origin so a token cache survives calls.
+export function connectionAddress(
+  connector: Connector,
+  address: string,
+  allowedHosts: string[] | undefined,
+  tokenUrl: string | null,
+  fetchImpl: Fetch,
+  types?: RegExp,
+  passed?: string,
+) {
+  const label = (id: string) => connector.fields.find((f) => f.id === id)?.label ?? id;
+  const fetches = new Map<string, Fetch>();
+  return (c: Pick<VendorConnection, "config">) => {
+    const url = new URL(fillAddress(address, c.config, label));
+    checkHost(url, allowedHosts);
+    const token = tokenUrl ? new URL(fillAddress(tokenUrl, c.config, label)) : null;
+    if (token && addressFields(tokenUrl!).length) checkHost(token, allowedHosts);
+    const key = `${url.origin} ${token?.origin ?? ""}`;
+    let safe = fetches.get(key);
+    if (!safe) {
+      const origins = [url.origin, ...(token ? [token.origin] : [])];
+      safe = guardedFetch(origins, fetchImpl, types, passed);
+      fetches.set(key, safe);
+    }
+    return { url, safe, key, tokenUrl: token?.href ?? null };
+  };
+}
+
 export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vendor {
   const http = connector.http!;
-  const base = new URL(http.baseUrl);
-  const prefix = base.pathname.replace(/\/+$/, "");
   const auth = http.auth;
-  const safe = guardedFetch(
-    [base.origin, ...(auth.type === "oauth2" ? [new URL(auth.tokenUrl).origin] : [])],
+  const addressOf = connectionAddress(
+    connector,
+    http.baseUrl,
+    http.allowedHosts,
+    auth.type === "oauth2" ? auth.tokenUrl : null,
     fetchImpl,
   );
-  const oauth = auth.type === "oauth2" ? clientCredentials(connector.name, safe) : null;
+  const clients = new Map<string, ReturnType<typeof clientCredentials>>();
+  const oauthFor = (key: string, safe: Fetch) => {
+    if (auth.type !== "oauth2") return null;
+    if (!clients.has(key)) clients.set(key, clientCredentials(connector.name, safe));
+    return clients.get(key)!;
+  };
   // Lower-case, so a configured Accept replaces the default rather than joining it.
   const fixed = Object.fromEntries(
     Object.entries(http.headers).map(([k, v]) => [k.toLowerCase(), v]),
   );
-  const oauthCreds = (c: VendorConnection) =>
+  const oauthCreds = (c: VendorConnection, tokenUrl: string | null) =>
     auth.type === "oauth2"
       ? {
-          tokenUrl: auth.tokenUrl,
+          tokenUrl: tokenUrl!,
           clientId: c.config[auth.clientId],
           clientSecret: c.secret[auth.clientSecret],
           scope: auth.scope,
+          clientAuth: auth.clientAuth,
+          audience: auth.audience,
         }
       : null!;
 
+  const fieldHeaders = (c: VendorConnection) =>
+    Object.fromEntries(
+      Object.entries(http.fieldHeaders).flatMap(([name, id]) => {
+        const value = c.secret[id] ?? c.config[id];
+        if (!value) return [];
+        if (!/^[\x20-\x7E]*$/.test(value))
+          throw new ConnectError(`${name} can only hold plain letters, digits and symbols`);
+        return [[name.toLowerCase(), value]];
+      }),
+    );
+
   const call: Vendor["call"] = async (c, request) => {
+    const { url: base, safe, key, tokenUrl } = addressOf(c);
+    const prefix = base.pathname.replace(/\/+$/, "");
+    const oauth = oauthFor(key, safe);
     // The path is the tool's, already encoded; it must stay under baseUrl's path.
     const url = new URL(`${base.origin}${prefix}${request.path}`);
     if (url.origin !== base.origin || !`${url.pathname}/`.startsWith(`${prefix}/`))
@@ -152,12 +224,13 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
       path: `${url.pathname}${url.search}`,
       body: request.body,
     };
-    if (oauth) return oauth.call(oauthCreds(c), base.origin, req, fixed);
+    const headers = { ...fixed, ...fieldHeaders(c) };
+    if (oauth) return oauth.call(oauthCreds(c, tokenUrl), base.origin, req, headers);
     const res = await safe(`${base.origin}${req.path}`, {
       method: req.method,
       headers: {
         accept: "application/json",
-        ...fixed,
+        ...headers,
         ...authHeaders(auth, c),
         ...(req.body === undefined ? {} : { "content-type": "application/json" }),
       },
@@ -174,8 +247,9 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
   return {
     async connect(fields) {
       const { config, secret } = formValues(connector, fields);
+      const { url: base, safe, key, tokenUrl } = addressOf({ config });
       const conn: VendorConnection = { config: { host: base.host, ...config }, secret };
-      if (oauth) await oauth.signIn(oauthCreds(conn));
+      await oauthFor(key, safe)?.signIn(oauthCreds(conn, tokenUrl));
       return { ...conn, accountLabel: conn.config[connector.accountKey] ?? base.host };
     },
     call,
@@ -282,7 +356,7 @@ export function httpTools(http: HttpApp): Toolset {
       for (const tool of http.tools) {
         if (!allowed.has(tool.name)) continue;
         const shape = Object.fromEntries(
-          Object.entries(tool.params).map(([name, p]) => [name, paramType(p)]),
+          Object.entries(tool.params).flatMap(([name, p]) => (p.field ? [] : [[name, paramType(p)]])),
         );
         const destructive = tool.destructive || tool.method === "DELETE";
         server.registerTool(
@@ -309,7 +383,7 @@ export function httpTools(http: HttpApp): Toolset {
               const query = new URLSearchParams();
               const body: Record<string, unknown> = {};
               for (const [name, p] of Object.entries(tool.params)) {
-                const value = args[name];
+                const value = p.field ? ctx.config[p.field] : args[name];
                 const wire = p.name ?? name;
                 if (value === undefined) continue;
                 if (p.in === "body") body[wire] = value;

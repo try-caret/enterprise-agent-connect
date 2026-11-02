@@ -12,6 +12,8 @@ drop view if exists public.agent_connect_agents, public.agent_connect_providers,
   public.agent_connect_teams_conversations, public.agent_connect_teams_events,
   public.agent_connect_teams_triggers, public.agent_connect_teams_runs,
   public.agent_connect_teams_spend;
+-- 0008: organizations' own apps, which 0.7.5 does not have.
+drop table agent_connect.internal_apps;
 -- 0007: app events and their triggers, which 0.7.5 does not have.
 drop table agent_connect.event_runs, agent_connect.event_triggers, agent_connect.app_events,
   agent_connect.event_subscriptions;

@@ -26,6 +26,11 @@ const consentFinish = z.object({
 });
 
 const iso = z.string().describe("ISO 8601, UTC");
+const definition = z
+  .record(z.string(), z.unknown())
+  .describe(
+    "A connector.json with an http, soap, odata or sql block, as written (docs/http-connector.md)",
+  );
 const config = z.record(z.string(), z.string());
 
 // Shared shapes, each a named schema in openapi.json (`id`).
@@ -294,6 +299,22 @@ export const schemas = (() => {
   const ClaudeAgent = named("ClaudeAgent", z.strictObject({ id: z.string(), name: z.string() }));
   const ClaudeKeySaved = named("ClaudeKeySaved", keySet.extend({ agents: z.array(ClaudeAgent) }));
   const SignIn = named("SignIn", z.strictObject({ url: z.string(), nonce: z.string() }));
+  const Connector = named("Connector", connectorSchema);
+  const InternalApp = named(
+    "InternalApp",
+    z.strictObject({
+      id: z.string(),
+      organizationId: z.string(),
+      definition,
+      // Why the saved definition is not in use (e.g. the deployment now has an app with its
+      // id), or null.
+      problem: z.string().nullable(),
+      createdBy: z.string(),
+      createdAt: iso,
+      updatedBy: z.string(),
+      updatedAt: iso,
+    }),
+  );
   const ConnectResult = named(
     "ConnectResult",
     z.strictObject({ connection: Connection, checks: z.array(Check) }),
@@ -301,7 +322,32 @@ export const schemas = (() => {
   return {
     Error: named("Error", z.strictObject({ error: z.string() })),
     Organization,
-    Connector: named("Connector", connectorSchema),
+    Connector,
+    InternalApp,
+    InternalAppSaved: named(
+      "InternalAppSaved",
+      z.strictObject({
+        app: InternalApp,
+        // The definition as the service reads it (defaults and branding filled in).
+        connector: Connector,
+        created: z.boolean(),
+        // The app was connected and the new definition signs in or reaches elsewhere, so its
+        // connection and every agent's access were removed.
+        disconnected: z.boolean(),
+        // Agents whose access no longer fit the new definition and was removed.
+        grantsRemoved: z.array(z.string()),
+      }),
+    ),
+    InternalAppDraft: named(
+      "InternalAppDraft",
+      z.strictObject({
+        definition,
+        // What a person must still check or write before saving it.
+        notes: z.array(z.string()),
+        // Why the draft would not save as it is, or null.
+        problem: z.string().nullable(),
+      }),
+    ),
     Branding: named("Branding", brandingSchema),
     Provider: named("Provider", providerSchema.extend({ approval: z.boolean() })),
     ProviderConnection,
@@ -453,6 +499,54 @@ export const routes = {
     path: "/connectors",
     summary: "The apps agents can use",
     responses: { 200: z.array(s.Connector) },
+  },
+  orgConnectors: {
+    method: "GET",
+    path: `${ORG}/connectors`,
+    summary: "The apps the organization can use: the deployment's and its own internal apps",
+    responses: { 200: z.array(s.Connector) },
+  },
+  internalApps: {
+    method: "GET",
+    path: `${ORG}/internal-apps`,
+    summary: "The organization's own apps, as saved",
+    responses: { 200: z.array(s.InternalApp) },
+  },
+  internalApp: {
+    method: "GET",
+    path: `${ORG}/internal-apps/{app}`,
+    summary: "One of the organization's own apps, as saved",
+    responses: { 200: s.InternalApp, ...notFound },
+  },
+  saveInternalApp: {
+    method: "PUT",
+    path: `${ORG}/internal-apps/{app}`,
+    summary:
+      "Adds or replaces one of the organization's own apps; a replace may cut or remove its connection and agents' access",
+    body: z.object({ definition, by: name }),
+    responses: { 200: s.InternalAppSaved },
+  },
+  deleteInternalApp: {
+    method: "DELETE",
+    path: `${ORG}/internal-apps/{app}`,
+    summary:
+      "Removes one of the organization's own apps, its connection and every agent's access to it",
+    body: by,
+    responses: { 204: null, ...notFound },
+  },
+  draftInternalApp: {
+    method: "POST",
+    path: "/internal-apps/draft",
+    summary: "Drafts an internal app's definition from an OpenAPI 3.x spec (JSON)",
+    body: z
+      .object({
+        spec: z.record(z.string(), z.unknown()),
+        id: z.string().regex(/^[a-z0-9-]+$/),
+        operations: z.array(z.string()).optional(),
+        tags: z.array(z.string()).optional(),
+      })
+      .refine((b) => b.operations?.length || b.tags?.length, "Name operations or tags"),
+    responses: { 200: s.InternalAppDraft },
   },
   providers: {
     method: "GET",
