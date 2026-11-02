@@ -38,6 +38,8 @@ host. Its own tables live in its own schema (`agent_connect`, see Database below
   with an http, soap, odata or sql block, parsed by parseConnector and built and checked by the
   same `build` as a loaded app; no `events` or `signsInAs`; the id may not be a connectors/
   folder, a loaded app or `agents`, and its tool names must be new to the organization; a
+  loaded app added later with a saved internal app's id is offered to neither that
+  organization (its kept connection was entered for its own app) until the internal app goes; a
   replace keeps the connection only when `signIn()` (form fields, accountKey, the block but its
   tools) is unchanged, then cuts the ceiling and grants to the new capabilities and removes
   grants whose limits no longer validate; otherwise removes the connection and grants; DELETE
@@ -444,7 +446,8 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # by an owner that cannot bypass RLS
                       # internal-apps.test.ts: internal apps through the admin API on Postgres
                       # (save, refusals, id and tool clashes, org isolation, an agent calling
-                      # a local fake app, the replace and delete rules, OpenAPI drafts)
+                      # a local fake app, the replace and delete rules, OpenAPI drafts, a deployment app
+                       # later taking an internal app's id)
                       # events.test.ts: app events on a made-up app (signatures, replays,
                       # repeats, limits, conditions, own changes, caps, poll cursor, the signed
                       # webhook runner end to end, admin); deliver.test.ts its pure rules

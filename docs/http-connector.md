@@ -172,8 +172,17 @@ access as for any other app.
   says what happened (`disconnected`, `grantsRemoved`), and an audit row records it.
 - Deleting an internal app removes its connection and every agent's access with it, in one step,
   with an audit row.
-- If the deployment later adds an app with the same id, the deployment's wins and
-  `internalApps` shows the organization's as having a `problem`; save it under another id.
+- If the deployment later adds an app with the same id, or a tool with the same name, the
+  organization's app is not used and `internalApps` shows it with a `problem`. For the same id,
+  the deployment's app is not offered to that organization either, since the connection kept
+  under that id was entered for the organization's own app: save it under another id, then
+  delete the old one, which removes that connection.
+- An internal app reaches whatever address its definition names, from inside the service's
+  network, as an app loaded from a folder does. Saving one takes the admin token, so whoever
+  can save definitions decides where the service connects: if people who should not reach the
+  service's own network can save them (an organization's admins, through your own admin
+  pages), limit where the service may connect with your network rules, and in particular
+  block the cloud's instance metadata address (169.254.169.254).
 
 To start from an OpenAPI spec, `POST /agent-connect/admin/v1/internal-apps/draft` with
 `{"spec": <the spec as JSON>, "id": "tracker", "tags": ["issues"]}` (or `"operations"`) answers

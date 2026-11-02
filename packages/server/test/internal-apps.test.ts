@@ -307,3 +307,40 @@ test("a draft from an OpenAPI spec saves as an internal app", db, async () => {
     refused(400, /OpenAPI 3/),
   );
 });
+
+test("an app the deployment adds later under the same id never gets the organization's connection", db, async () => {
+  await client.saveInternalApp(B, "orders", definition(), BY);
+  await client.connect(B, "orders", {
+    capabilities: ["read"],
+    fields: { api_key: "k1" },
+    connectedBy: BY,
+  });
+  const { agent, key: bKey } = await client.createAgent(B, { name: "Clerk", createdBy: BY });
+  await client.setGrant(B, agent.id, "orders", ["read"], {}, BY);
+  assert.deepEqual(await toolNames(bKey), ["orders_get", "orders_list"]);
+
+  // The next release of the deployment has its own orders app, at another address.
+  const first = service;
+  service = await createAgentConnect({
+    database: sql!,
+    schema: SCHEMA,
+    encryptionKey: Buffer.alloc(32, 3).toString("base64"),
+    adminToken: TOKEN,
+    log: { log() {}, error() {} },
+    connectors: [definition((d) => (d.http.baseUrl = "https://orders.example.com/api"))],
+  });
+  try {
+    assert.match((await client.internalApp(B, "orders"))?.problem ?? "", /neither is used/);
+    assert.ok(!(await client.orgConnectors(B)).some((c) => c.id === "orders"));
+    assert.ok(!(await client.connections(B)).some((c) => c.connectorId === "orders"));
+    assert.deepEqual(await toolNames(bKey), []);
+    await assert.rejects(client.peek(B, "orders"), refused(400, /neither is used/));
+    // Deleting the organization's own removes the connection made for it.
+    await client.deleteInternalApp(B, "orders", BY);
+    assert.ok((await client.orgConnectors(B)).some((c) => c.id === "orders"));
+    assert.ok(!(await client.connections(B)).some((c) => c.connectorId === "orders"));
+  } finally {
+    await service.stop();
+    service = first;
+  }
+});

@@ -305,11 +305,15 @@ export function createService(deps: {
     return found;
   }
 
-  // The one lookup of an app for an organization: a loaded app, else one of its own.
+  // The one lookup of an app for an organization: a loaded app, else one of its own. A loaded
+  // app whose id one of the organization's own already has is neither: the connection kept
+  // under that id holds a credential entered for the organization's app, never to be sent to
+  // the deployment's.
   async function app(org: string, connectorId: string): Promise<App> {
     const found = apps.get(connectorId);
-    if (found) return found;
     const row = await store.getInternalApp(org, connectorId);
+    if (found && row) throw new InvalidInput(shadowed(connectorId));
+    if (found) return found;
     if (!row) throw new InvalidInput(`Unknown app ${connectorId}`);
     return internal(row);
   }
@@ -321,7 +325,10 @@ export function createService(deps: {
   async function orgApps(org: string): Promise<Map<string, App>> {
     const all = new Map(apps);
     for (const row of await store.listInternalApps(org)) {
-      if (apps.has(row.id)) continue;
+      if (apps.has(row.id)) {
+        all.delete(row.id);
+        continue;
+      }
       try {
         all.set(row.id, internal(row));
       } catch (error) {
@@ -338,15 +345,18 @@ export function createService(deps: {
   const built = new Map<string, { json: string; app: App }>();
 
   function internal(row: InternalAppRow): App {
-    if (apps.has(row.id))
-      throw new InvalidInput(
-        `This deployment now has its own app with the id ${row.id}, so this one is not used. Save it under another id.`,
-      );
+    if (apps.has(row.id)) throw new InvalidInput(shadowed(row.id));
     const json = JSON.stringify(row.definition);
     const cacheKey = `${row.organizationId}/${row.id}`;
     const hit = built.get(cacheKey);
     if (hit?.json === json) return hit.app;
     const made = defined(row.definition, row.id);
+    // A tool the deployment added later would sit twice in an agent's list.
+    const clash = made.toolset.names.filter((t) => loadedTools.has(t));
+    if (clash.length)
+      throw new InvalidInput(
+        `This deployment now has its own tool named ${clash.join(", ")}, so this app is not used. Rename its tools and save it again.`,
+      );
     built.set(cacheKey, { json, app: made });
     return made;
   }
@@ -1424,6 +1434,9 @@ export function plainParseError(message: string): string {
   }
   return `This definition does not load: ${out.join("; ")}`;
 }
+
+const shadowed = (id: string) =>
+  `This deployment now has its own app with the id ${id}, so neither is used in this organization. Save this one under another id, then delete it here, which also removes its connection.`;
 
 // How a definition signs in and where it reaches, compared across a replace.
 function signIn(c: Connector): string {
