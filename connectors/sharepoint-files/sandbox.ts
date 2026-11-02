@@ -17,11 +17,15 @@ export type SandboxLimits = {
   memoryCapMb?: number;
   // How long a call waits for a place before "busy".
   waitMs?: number;
+  // Tests: a stand-in for parse-host.mjs, to answer as a broken parse process would.
+  host?: URL;
 };
 
 export type Kind = "pdf" | "docx";
 
-const DEFAULTS: Record<Kind, Required<SandboxLimits>> = {
+type Limits = Required<Omit<SandboxLimits, "host">> & Pick<SandboxLimits, "host">;
+
+const DEFAULTS: Record<Kind, Limits> = {
   pdf: { timeoutMs: 20_000, maxOldGenerationSizeMb: 512, memoryCapMb: 768, waitMs: 5_000 },
   docx: { timeoutMs: 20_000, maxOldGenerationSizeMb: 768, memoryCapMb: 1_024, waitMs: 5_000 },
 };
@@ -54,7 +58,8 @@ function checked<T>(m: unknown): Answer<T> | null {
   return null;
 }
 
-/** File-controlled text (part names, tags, parser messages) cut to fit an error or audit row. */
+/** Text a caller gave, or a parse process answered, cut to fit an error or audit row. Text
+ *  from a file itself never gets this far: refusals about a file are fixed wording (ooxml.ts). */
 export const clip = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}...` : s);
 
 // Two places per kind, one per agent at a time.
@@ -136,8 +141,8 @@ export async function sandboxed<T>(
   }
 }
 
-function run<T>(file: URL, data: unknown, limits: Required<SandboxLimits>, what: string): Promise<T> {
-  const child = fork(new URL("./parse-host.mjs", import.meta.url), [], {
+function run<T>(file: URL, data: unknown, limits: Limits, what: string): Promise<T> {
+  const child = fork(limits.host ?? new URL("./parse-host.mjs", import.meta.url), [], {
     env: {},
     // No heap flag here: V8 applies it to the worker too, under its resourceLimits (seen
     // 2026-11-01: --max-old-space-size=128 made a 768 MB worker run out at 128).
@@ -193,7 +198,9 @@ function run<T>(file: URL, data: unknown, limits: Required<SandboxLimits>, what:
         const name = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(got.reason) ? got.reason : "Error";
         console.error(`[agent-connect] ${what.toLowerCase()} failed to parse: ${name}`);
       }
-      throw new Denied(clip(got.denied || `${what} could not be read`, 300));
+      // A refusal is one line: a parse process that answers otherwise cannot break the audit row.
+      const denied = got.denied.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
+      throw new Denied(clip(denied || `${what} could not be read`, 300));
     }
     if (timedOut) throw new Denied(`${what} took too long to read, so it was stopped`);
     if (code === MEMORY) throw new Denied(`${what} needs too much memory to read, so it was stopped`);

@@ -701,11 +701,15 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   (`liveParses()`). Each parse costs a Node process start (tens of ms). The parse process never
   outlives the server: it exits when its IPC channel closes, on a clock of its own (the
   server's timeout plus 2 s, 10 s with no job), and when its answer cannot be sent. The server
-  takes one answer only, of the expected shape (`{ok: true, value}` or `{ok: false, denied:
+  takes one answer only (a second voids the first and kills the process at once; tested
+  through a stand-in parse process, the `host` limit), of the expected shape (`{ok: true, value}` or `{ok: false, denied:
   string}`) and at most 80 MB serialized (checked in both processes); anything else is "could not
   be read". The parse process runs as the same user as the server, with no OS sandbox (no
-  seccomp, namespaces or separate user): its limits are memory, time and an empty environment. Anything but a refusal inside a worker becomes "could not be read"; file-controlled
-  text in refusals is cut to about 100 characters. Zips through fflate's `unzipSync` only, with a filter checking every size
+  seccomp, namespaces or separate user): its limits are memory, time and an empty environment. Anything but a refusal inside a worker becomes "could not be read". A refusal never quotes
+  the file (it reaches the agent and the audit row's reason): fixed wording, no parser message,
+  tag or attribute, and a part named only when the name is one of Word's own (`shownPart` in
+  ooxml.ts), else "a part"; the server also cuts a parse process's refusal to one line of 300
+  characters. Zips through fflate's `unzipSync` only, with a filter checking every size
   from the directory before anything is inflated (2,000 entries, 50 MB in all, a ratio over 200
   past 1 MB, compression 0 or 8, no `..` or rooted names, no repeated names), then each part's
   length and CRC-32 against the directory (fflate checks neither: a header that lies about a
