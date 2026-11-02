@@ -17,13 +17,11 @@ export type SandboxLimits = {
   memoryCapMb?: number;
   // How long a call waits for a place before "busy".
   waitMs?: number;
-  // Tests: a stand-in for parse-host.mjs, to answer as a broken parse process would.
-  host?: URL;
 };
 
 export type Kind = "pdf" | "docx";
 
-type Limits = Required<Omit<SandboxLimits, "host">> & Pick<SandboxLimits, "host">;
+type Limits = Required<SandboxLimits>;
 
 const DEFAULTS: Record<Kind, Limits> = {
   pdf: { timeoutMs: 20_000, maxOldGenerationSizeMb: 512, memoryCapMb: 768, waitMs: 5_000 },
@@ -123,26 +121,29 @@ export function sibling(name: string): URL {
 }
 
 /** Runs `file` with `data` in a parse process; it answers {ok: true, value} or {ok: false, denied}.
- *  `owner`: the agent asking, for the one-place-per-agent rule. */
+ *  `owner`: the agent asking, for the one-place-per-agent rule. `host`: tests only, a stand-in for
+ *  parse-host.mjs that answers as a broken parse process would. It is a separate argument, not a
+ *  limit, so limits read from config can never choose the program the server starts. */
 export async function sandboxed<T>(
   kind: Kind,
   file: URL,
   data: unknown,
   given: SandboxLimits = {},
   owner = "unknown",
+  host = new URL("./parse-host.mjs", import.meta.url),
 ): Promise<T> {
   const limits = { ...DEFAULTS[kind], ...given };
   const what = kind === "pdf" ? "That PDF" : "That file";
   const release = await places[kind].acquire(owner, limits.waitMs);
   try {
-    return await run<T>(file, data, limits, what);
+    return await run<T>(host, file, data, limits, what);
   } finally {
     release();
   }
 }
 
-function run<T>(file: URL, data: unknown, limits: Limits, what: string): Promise<T> {
-  const child = fork(limits.host ?? new URL("./parse-host.mjs", import.meta.url), [], {
+function run<T>(host: URL, file: URL, data: unknown, limits: Limits, what: string): Promise<T> {
+  const child = fork(host, [], {
     env: {},
     // No heap flag here: V8 applies it to the worker too, under its resourceLimits (seen
     // 2026-11-01: --max-old-space-size=128 made a 768 MB worker run out at 128).
@@ -198,8 +199,9 @@ function run<T>(file: URL, data: unknown, limits: Limits, what: string): Promise
         const name = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(got.reason) ? got.reason : "Error";
         console.error(`[agent-connect] ${what.toLowerCase()} failed to parse: ${name}`);
       }
-      // A refusal is one line: a parse process that answers otherwise cannot break the audit row.
-      const denied = got.denied.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
+      // A refusal is one plain line: control, format (bidi, zero-width) and line-separator
+      // characters become a space, so a parse process cannot break or reorder the audit row.
+      const denied = got.denied.replace(/[\p{C}\u2028\u2029]+/gu, " ").trim();
       throw new Denied(clip(denied || `${what} could not be read`, 300));
     }
     if (timedOut) throw new Denied(`${what} took too long to read, so it was stopped`);

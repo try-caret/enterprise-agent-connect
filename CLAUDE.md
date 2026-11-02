@@ -702,7 +702,7 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   outlives the server: it exits when its IPC channel closes, on a clock of its own (the
   server's timeout plus 2 s, 10 s with no job), and when its answer cannot be sent. The server
   takes one answer only (a second voids the first and kills the process at once; tested
-  through a stand-in parse process, the `host` limit), of the expected shape (`{ok: true, value}` or `{ok: false, denied:
+  through a stand-in parse process, `sandboxed`'s test-only `host` argument), of the expected shape (`{ok: true, value}` or `{ok: false, denied:
   string}`) and at most 80 MB serialized (checked in both processes); anything else is "could not
   be read". The parse process runs as the same user as the server, with no OS sandbox (no
   seccomp, namespaces or separate user): its limits are memory, time and an empty environment. Anything but a refusal inside a worker becomes "could not be read". A refusal never quotes

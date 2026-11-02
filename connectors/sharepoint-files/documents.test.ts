@@ -1303,7 +1303,7 @@ test("a parse process that answers twice is refused, never believed, and stopped
      });\n`,
   );
   const started = Date.now();
-  const call = sandboxed("pdf", LOOP, {}, { host, timeoutMs: 10_000 });
+  const call = sandboxed("pdf", LOOP, {}, { timeoutMs: 10_000 }, "unknown", host);
   await new Promise((done) => setImmediate(done));
   const [pid] = parsePids();
   assert.ok(pid, "the stand-in parse process started");
@@ -1315,8 +1315,8 @@ test("a parse process that answers twice is refused, never believed, and stopped
 
 test("a parse process's refusal reaches the caller as one line", async () => {
   const forged = parser("forged-denied.mjs",
-    'import { parentPort } from "node:worker_threads";\nparentPort.postMessage({ ok: false, denied: "Refused\\r\\n[agent-connect] forged\\u2028line" });\n');
-  await assert.rejects(sandboxed("pdf", forged, {}, {}), (e: Error) => e.message === "Refused [agent-connect] forged line");
+    'import { parentPort } from "node:worker_threads";\nparentPort.postMessage({ ok: false, denied: "Refused\\r\\n[agent-connect] forged\\u2028line\\u202Ereversed\\u200Bjoined" });\n');
+  await assert.rejects(sandboxed("pdf", forged, {}, {}), (e: Error) => e.message === "Refused [agent-connect] forged line reversed joined");
 });
 
 // ---------------------------------------------------------------------------------------------
