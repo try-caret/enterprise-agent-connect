@@ -104,6 +104,10 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     },
     request: { method: "GET", path: "/api/data/v9.2/WhoAmI" },
   },
+  churnzero: {
+    conn: { config: { instance: "acme", username: "u" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/Account" },
+  },
   lusha: {
     conn: { config: { host: "api.lusha.com" }, secret: { api_key: "k" } },
     request: { method: "GET", path: "/v3/account/usage" },

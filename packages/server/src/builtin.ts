@@ -54,4 +54,5 @@ export const builtinConnectors: BuiltinModule[] = [
   dynamics365,
   gong,
   lusha,
+  describedApp("churnzero", odataConnector),
 ];
