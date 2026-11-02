@@ -1,0 +1,335 @@
+{
+  "id": "docusign",
+  "name": "DocuSign",
+  "description": "Let agents check DocuSign envelopes: list envelopes by status and date, read one envelope's status, recipients, documents and history, and send an envelope again to recipients who have not acted. For tracking signatures and chasing signers.",
+  "logo": "/brand/registry/docusign.svg",
+  "identity": "A DocuSign app (integration key) signing in with JWT Grant, acting as the DocuSign user you name. Agents see the envelopes that user can see.",
+  "accountKey": "account",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an app with an RSA key pair",
+      "body": "Create the app in the DocuSign account agents should reach: a developer account for testing, or your production account once DocuSign has approved the app for it. DocuSign shows the private key only once.",
+      "link": {
+        "label": "DocuSign: JWT Grant",
+        "href": "https://developers.docusign.com/platform/auth/jwt-get-token/"
+      },
+      "click": [
+        "In DocuSign eSignature, open Settings > Apps and Keys > Add App and Integration Key. Name: AI agents.",
+        "Under Authentication, select Generate RSA and copy the private key, from -----BEGIN to -----END. Add a redirect URI such as https://www.docusign.com, used only to grant consent. Select Save."
+      ]
+    },
+    {
+      "title": "Choose the user agents act as and grant consent",
+      "body": "Every call acts as one DocuSign user: agents see that user's envelopes, and envelopes are sent again in that user's name. Sign in as that user and open the consent address below with your integration key and redirect URI, then select Accept. Use account-d.docusign.com in place of account.docusign.com for a developer account.",
+      "copy": [
+        "https://account.docusign.com/oauth/auth?response_type=code&scope=signature%20impersonation&client_id=<integration key>&redirect_uri=https://www.docusign.com"
+      ]
+    },
+    {
+      "title": "Find the user ID, account ID and base address",
+      "body": "Settings > Apps and Keys shows, under My Account Information, the User ID (sign in as the user agents act as), the API Account ID and the Account's Base URI. Enter the base URI's host only, such as na3.docusign.net, or demo.docusign.net for a developer account."
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "auth_host",
+      "label": "Sign-in host",
+      "help": "account.docusign.com, or account-d.docusign.com for a developer account.",
+      "placeholder": "account.docusign.com",
+      "secret": false
+    },
+    {
+      "id": "host",
+      "label": "Account base address",
+      "help": "The host of the Account's Base URI, such as na3.docusign.net or eu.docusign.net. The host name only.",
+      "placeholder": "na3.docusign.net",
+      "secret": false
+    },
+    {
+      "id": "account",
+      "label": "API Account ID",
+      "placeholder": "11111111-2222-3333-4444-555555555555",
+      "secret": false
+    },
+    {
+      "id": "integration_key",
+      "label": "Integration key",
+      "secret": false
+    },
+    {
+      "id": "user_id",
+      "label": "User ID",
+      "help": "The User ID of the DocuSign user agents act as, who granted consent.",
+      "secret": false
+    },
+    {
+      "id": "private_key",
+      "label": "RSA private key",
+      "help": "The whole private key DocuSign generated, from -----BEGIN to -----END.",
+      "placeholder": "-----BEGIN RSA PRIVATE KEY-----",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read envelopes",
+      "description": "List envelopes by status and date, and read one envelope's status, recipients, documents' details and history.",
+      "required": true,
+      "note": "Read-only. Reaches every envelope the user agents act as can see. Not the documents' content.",
+      "scopes": [
+        "signature",
+        "impersonation"
+      ],
+      "permissions": [],
+      "tools": [
+        "docusign_list_envelopes",
+        "docusign_get_envelope",
+        "docusign_list_recipients",
+        "docusign_list_documents",
+        "docusign_list_audit_events"
+      ]
+    },
+    {
+      "id": "resend",
+      "label": "Send envelopes again",
+      "description": "Send an envelope that is out for signature again, so recipients who have not acted get the email again. Nothing in the envelope changes.",
+      "note": "Emails go out in the name of the user agents act as.",
+      "scopes": [
+        "signature",
+        "impersonation"
+      ],
+      "permissions": [],
+      "tools": [
+        "docusign_resend_envelope"
+      ]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/folders",
+    "label": "Folders the user can see",
+    "show": "folders[].name"
+  },
+  "revoke": "In DocuSign, open Settings > Apps and Keys, open the app and delete its RSA key pair. Agents lose access to DocuSign at once.",
+  "http": {
+    "baseUrl": "https://{host}/restapi/v2.1/accounts/{account}",
+    "allowedHosts": [
+      "*.docusign.net",
+      "account.docusign.com",
+      "account-d.docusign.com"
+    ],
+    "auth": {
+      "type": "oauth2_jwt",
+      "tokenUrl": "https://{auth_host}/oauth/token",
+      "issuer": "integration_key",
+      "subject": "user_id",
+      "privateKey": "private_key",
+      "audience": "{auth_host}",
+      "scope": "signature impersonation"
+    },
+    "tools": [
+      {
+        "name": "docusign_list_envelopes",
+        "description": "List the account's envelopes whose status changed since a date, newest first, optionally only some statuses or matching words in the subject, sender or recipients. Answers one page; ask for the next page with a start position past this one while a page comes back full.",
+        "method": "GET",
+        "path": "/envelopes",
+        "params": {
+          "from_date": {
+            "type": "string",
+            "description": "Only envelopes whose status changed (or, with from_to_status, that reached it) on or after this date, such as 2026-10-01",
+            "in": "query"
+          },
+          "to_date": {
+            "type": "string",
+            "description": "Only up to this date; now when left out",
+            "in": "query",
+            "required": false
+          },
+          "status": {
+            "type": "string",
+            "description": "Only envelopes now in these statuses, separated by commas: created, sent, delivered, signed, completed, declined, voided, timedout, processing or deleted",
+            "in": "query",
+            "required": false
+          },
+          "from_to_status": {
+            "type": "string",
+            "enum": [
+              "changed",
+              "created",
+              "sent",
+              "delivered",
+              "signed",
+              "completed",
+              "declined",
+              "voided",
+              "timedout",
+              "processing",
+              "deleted"
+            ],
+            "description": "What happened between from_date and to_date",
+            "in": "query",
+            "default": "changed"
+          },
+          "search_text": {
+            "type": "string",
+            "description": "Words to find in the subject, the sender, the recipients or custom fields",
+            "in": "query",
+            "required": false
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "description": "Sort direction",
+            "in": "query",
+            "default": "desc"
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many per page, at most 100",
+            "in": "query",
+            "default": 25
+          },
+          "start_position": {
+            "type": "integer",
+            "description": "How many to skip, starting at 0",
+            "in": "query",
+            "default": 0
+          }
+        },
+        "result": {
+          "items": "envelopes",
+          "fields": [
+            "envelopeId",
+            "status",
+            "emailSubject",
+            "createdDateTime",
+            "sentDateTime",
+            "deliveredDateTime",
+            "completedDateTime",
+            "declinedDateTime",
+            "voidedDateTime",
+            "voidedReason",
+            "statusChangedDateTime",
+            "expireDateTime",
+            "lastModifiedDateTime",
+            "sender.userName",
+            "sender.email"
+          ]
+        }
+      },
+      {
+        "name": "docusign_get_envelope",
+        "description": "Read one envelope's status, subject, sender and when it was sent, delivered, completed, declined or voided (with the void reason).",
+        "method": "GET",
+        "path": "/envelopes/{envelope_id}",
+        "params": {
+          "envelope_id": {
+            "type": "string",
+            "description": "The envelope id",
+            "in": "path"
+          }
+        },
+        "result": {
+          "fields": [
+            "envelopeId",
+            "status",
+            "emailSubject",
+            "createdDateTime",
+            "sentDateTime",
+            "deliveredDateTime",
+            "completedDateTime",
+            "declinedDateTime",
+            "voidedDateTime",
+            "voidedReason",
+            "statusChangedDateTime",
+            "expireDateTime",
+            "lastModifiedDateTime",
+            "sender.userName",
+            "sender.email"
+          ]
+        }
+      },
+      {
+        "name": "docusign_list_recipients",
+        "description": "List an envelope's recipients by type (signers, carbon copies and others): each one's name, email, routing order and status, with when they were sent, delivered, signed or declined and any decline reason.",
+        "method": "GET",
+        "path": "/envelopes/{envelope_id}/recipients",
+        "params": {
+          "envelope_id": {
+            "type": "string",
+            "description": "The envelope id",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "docusign_list_documents",
+        "description": "List an envelope's documents: each one's id, name, type, page count and order. Details only, not the files.",
+        "method": "GET",
+        "path": "/envelopes/{envelope_id}/documents",
+        "params": {
+          "envelope_id": {
+            "type": "string",
+            "description": "The envelope id",
+            "in": "path"
+          }
+        },
+        "result": {
+          "items": "envelopeDocuments",
+          "fields": [
+            "documentId",
+            "name",
+            "type",
+            "order",
+            "pages",
+            "sizeBytes",
+            "hasDigitalSignature"
+          ]
+        }
+      },
+      {
+        "name": "docusign_list_audit_events",
+        "description": "Read an envelope's history: who sent, viewed, signed, declined or voided it, and when, as DocuSign's envelope history shows it.",
+        "method": "GET",
+        "path": "/envelopes/{envelope_id}/audit_events",
+        "params": {
+          "envelope_id": {
+            "type": "string",
+            "description": "The envelope id",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "docusign_resend_envelope",
+        "description": "Send an envelope that is out for signature again, so the recipients who still have to act get the email again. Changes nothing in the envelope.",
+        "method": "PUT",
+        "path": "/envelopes/{envelope_id}",
+        "params": {
+          "envelope_id": {
+            "type": "string",
+            "description": "The envelope id",
+            "in": "path"
+          },
+          "resend_envelope": {
+            "type": "string",
+            "enum": [
+              "true"
+            ],
+            "description": "Always true: send the envelope again",
+            "in": "query",
+            "default": "true"
+          }
+        },
+        "body": {}
+      }
+    ]
+  }
+}

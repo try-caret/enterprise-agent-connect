@@ -9,7 +9,8 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
   Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect; and, described in JSON only,
   GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr Scale, Confluence, Lusha,
   ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia,
-  WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream.
+  WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream,
+  ZoomInfo, DocuSign, Axonius.
 - **Your own apps without code:** describe an internal REST API or a SaaS app's in one
   `connector.json`, or draft one from its OpenAPI spec
   ([docs/http-connector.md](docs/http-connector.md)); a SOAP service

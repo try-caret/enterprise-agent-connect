@@ -207,6 +207,27 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     conn: { config: { host: "acme.onestreamcloud.com" }, secret: { token: "t" } },
     request: { method: "POST", path: "/DataProvider/GetAdoDataSetForAdapter", body: {} },
   },
+  zoominfo: {
+    conn: { config: { client_id: "i" }, secret: { client_secret: "s" } },
+    request: { method: "POST", path: "/data/v1/companies/search", body: {} },
+  },
+  docusign: {
+    conn: {
+      config: {
+        auth_host: "account-d.docusign.com",
+        host: "demo.docusign.net",
+        account: GUID,
+        integration_key: "ik",
+        user_id: GUID,
+      },
+      secret: { private_key: okta },
+    },
+    request: { method: "GET", path: "/folders" },
+  },
+  axonius: {
+    conn: { config: { host: "acme.on.axonius.com" }, secret: { api_key: "k", api_secret: "s" } },
+    request: { method: "GET", path: "/api/v2/assets/asset_types" },
+  },
 };
 for (const id of [
   "outlook-mail",

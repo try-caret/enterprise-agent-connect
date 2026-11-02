@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad and OneStream) once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, ZoomInfo, DocuSign and Axonius) once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -1342,6 +1342,55 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   documentation.onestream.com REST API (Authentication2, OneStream WebAPI Endpoints, REST API
   Summary, Data Provider API) and IDM (Personal Access Tokens, Requirements for Using, Manage,
   Access the Manage page, About Using Personal Access Tokens in APIs).
+- ZoomInfo (`zoominfo`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): the GTM Data API at `https://api.zoominfo.com/gtm`, client credentials at
+  `/gtm/oauth/v1/token` with `clientAuth: basic` (ZoomInfo's recommended form) and no `scope`
+  (the token gets the app's configured scopes, `api:data:company`, `api:data:contact`).
+  JSON:API bodies: `contentType` and `Accept` `application/vnd.api+json`, each tool's fixed
+  `data.type` (CompanySearch, CompanyEnrich, ContactSearch, ContactEnrich) and params under
+  `data.attributes`; enrich matches one record at `matchCompanyInput.0` / `matchPersonInput.0`
+  with `outputFields` (enum from the spec, a default set). Search companies and contacts (no
+  credits) in a required capability; enrich (one credit per match) in its own. Paging is
+  `page[number]`/`page[size]` with a total in `meta`, so no `paging` block. Left out: lookup,
+  intent, news, scoops and webhooks (no IDC use), bulk enrich past one record, and anything
+  that writes. Verify is a one-result company search for "ZoomInfo" (uses no credits).
+  Sources: docs.gtm.ai client-credentials-flow, reference searchinterface_searchcompany,
+  searchinterface_searchcontact, enrichinterface_enrichcompany, enrichinterface_enrichcontact
+  (their OpenAPI blocks).
+- DocuSign (`docusign`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): eSignature REST v2.1 at `https://{host}/restapi/v2.1/accounts/{account}`, the host
+  (the account's base URI) and token host held to `*.docusign.net`, `account.docusign.com` and
+  `account-d.docusign.com`. Auth `oauth2_jwt` (JWT Grant) at `https://{auth_host}/oauth/token`,
+  `iss` the integration key, `sub` the user agents act as, `aud` `{auth_host}` (a bare host, as
+  the official Node SDK's `generateAndSignJWTAssertion` sends it), scope `signature
+  impersonation`; consent is granted once in the browser (setup step). Envelopes by date and
+  status (`from_date` required, `start_position`/`count`, no `paging` block), one envelope,
+  recipients, documents' details, audit events; resending is `PUT /envelopes/{id}` with
+  `resend_envelope=true` and a fixed empty body, in its own capability. Left out: sending,
+  voiding, correcting or purging envelopes (the same PUT with a body; IDC's rules forbid sending
+  without a human), document downloads (files, not JSON), templates. Verify lists folders.
+  Sources: docusign-esign-node-client ApiClient.js (JWT claims, token request) and
+  EnvelopesApi.js, FoldersApi.js and models (paths, query names, fields); developers.docusign.com
+  JWT Grant (client-rendered, read through the SDK).
+- Axonius (`axonius`, JSON only, `describedApp`; read November 2, 2026, tested only against
+  fakes): each customer's own host (`https://{host}`, no `allowedHosts`: no public host
+  pattern), `api-key` as the header auth and `api-secret` through fieldHeaders, as the SDK and
+  XSOAR send them. Device and user search is the v2 POST `/api/v2/assets/{devices|users}` with
+  body `{query, fields, page: {limit, cursor}}` (nested `page.*` params), paged by
+  `meta.next_page`; default fields are the SDK's `fields_default`. One asset by
+  `internal_axon_id` (v1 `GET /api/{asset_type}/{id}`), fields (`GET /api/{asset_type}/fields`)
+  and saved queries (`GET /api/v2/queries`). Read-only: enforcements (list or run), labels,
+  custom data, saved query writes and destroy endpoints are left out. Verify is
+  `GET /api/v2/assets/asset_types`. The v2 reference needs a customer login, so every path is
+  from axonius-api-client 5.0.22 (api_endpoints.py, assets/devices.py, users.py, asset_mixin.py,
+  auth/api_key.py) and the XSOAR Axonius integration (Axonius.py, its tests and README).
+- SAP Concur: not built. Company-level sign-in is only the password grant with
+  `credtype=authtoken` and a one-time company request token; it answers a refresh token that
+  rotates on every use (six months) and a geolocation that becomes the API host, both of which
+  must be stored back after each refresh. A Vendor's `call` cannot write the connection's
+  secret, so the store cannot keep the rotating token; adding that is a store change, not an
+  http block one. Source: developer.concur.com api-reference/authentication/apidoc (read
+  November 2, 2026).
 - Teams (`teams`, provider microsoft, `signsInAs: "agentBot"`): the app row holds only the
   ceiling; each agent signs in as its own bot (its own single-tenant Entra app, Azure Bot and
   Teams app, made by the generated script with a service-made certificate sealed under
