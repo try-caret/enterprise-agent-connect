@@ -1152,6 +1152,7 @@ export function createService(deps: {
       if (asBot && (bot?.status !== "connected" || !bot.botAppId)) return [];
       let conn: VendorConnection | null = null;
       const ctx: TeamsToolContext = {
+        agentId: agent.id,
         limits: grant.limits,
         config: provider ? { ...provider.config, ...row.config } : row.config,
         call: (request) => {

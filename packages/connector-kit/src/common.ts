@@ -8,6 +8,9 @@ export type ToolContext = {
   limits: Limits;
   /** The connection's settings, e.g. the sites it was connected with. */
   config: Record<string, string>;
+  /** The calling agent's id, for limits shared across its calls (e.g. one document parse at a
+   *  time). Set by the server; absent in some tests. */
+  agentId?: string;
   call(request: VendorRequest): Promise<VendorResponse>;
   /** Per tool: what to add to a 403 from the app (its capability's `forbidden`). */
   forbidden?: Record<string, string>;

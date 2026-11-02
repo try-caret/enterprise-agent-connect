@@ -16,7 +16,11 @@ export type VendorRequest = {
   body?: unknown;
   headers?: Record<string, string>;
   // "text": the answer is returned as text, not parsed as JSON (file content).
-  responseType?: "text";
+  // "bytes": the answer is returned as a Uint8Array (a binary file's content).
+  responseType?: "text" | "bytes";
+  // With "bytes": stop reading past this many bytes (a ConnectError), whatever the file's
+  // details said its size was.
+  maxBytes?: number;
 };
 
 // `headers` (lower-case names): set by vendors whose tools read them, e.g. a Link header.

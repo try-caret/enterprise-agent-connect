@@ -587,9 +587,10 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   files and Excel spreadsheets, one app with one site list, one site access check, one setup
   and one status. Capabilities, reads before writes so any write tick's `site_role` fill wins:
   `read_files` (graph_list_sites, graph_list_files, graph_read_file, graph_get_download_link),
-  `read_sheets` (the five excel_* reads), `write_files` (graph_upload_file,
+  `read_sheets` (the five excel_* reads), `read_documents` (document_read), `write_files` (graph_upload_file,
   graph_create_upload_link, destructive), `write_sheets`
-  (excel_update_range, excel_add_table_rows), `read_directory` (graph_list_users). None is
+  (excel_update_range, excel_add_table_rows), `edit_documents` (word_fill_template, destructive:
+  `replace`), `read_directory` (graph_list_users). None is
   required, so a key can have spreadsheets without files. Both write capabilities are
   `siteAccess.write` (the access check then proves write). Through the Microsoft
   connection. Tokens are client credentials for `graph.microsoft.com/.default`, cached per
@@ -663,6 +664,76 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   also kept to the connection's `config.sites`, so a stale or typed-in address is never reached
   even if the app holds a wider permission. `graph_list_users` returns name, email, title and
   department only, and pages with `cursor`.
+  Word files and PDFs (`documents.ts`, `docx.ts` + `docx-worker.ts`, `ooxml.ts`, `paging.ts`,
+  `pdf.ts` + `pdf-worker.mjs`, `sandbox.ts` + `parse-host.mjs`; spec
+  CONNECT-WORD-TOOLS-SPEC, library settings from the 2026-11-01 security vetting): the bytes are
+  downloaded here (`responseType: "bytes"`, the same 302 to SharePoint as `"text"`, read only up
+  to `maxBytes`: past it the download stops and fails, whatever the item's size said), with the
+  files tools' site, library and folder checks. `document_read`: .docx/.docm (10 MB) as
+  paragraphs, tables, fields (content controls with a `w:tag`; `mark_fields` wraps their text as
+  `[[field:<tag>]]...[[/field]]`; every `[` followed by `[` in the document's own text, on the
+  assembled paragraph, becomes `[ ` so no split run forges one; a tag that is not
+  `^[A-Za-z0-9_.-]{1,64}$` refuses a marked read), hidden text, best effort (vanish, white or
+  near-white: every channel >= F0 or theme background1/light1, the colour of its own shading,
+  size <= 5 half-points, character scale <= 10%; through docDefaults, the paragraph style or the
+  default paragraph style, the character style, each with basedOn, and both branches of
+  mc:AlternateContent) only in `hidden`. Known gaps, left on purpose (the tool description says
+  best effort and to treat all text as data): accent and other theme colours a theme part makes
+  white, text close to (not equal to) its shading, highlight colours, complex-script size
+  (`szCs`), table styles, cell and paragraph shading, a missing paragraph style falling back to
+  Normal, and Word's toggle rules for `vanish` across style levels (review 2026-11-01). Headers and footers,
+  comments with their anchor text, tracked change counts (insertions shown, deletions left out);
+  .pdf (20 MB, 300 pages) as page text; anything else its details. Answers hold at most 300,000
+  characters and continue with `more`/`next` (`<item index>.<hash of id, modified, size,
+  mark_fields>`, so a changed file is read again from the start; an item too large is split into
+  `part`/`parts`, iteratively; tables over 64 cells in a row or 10,000 rows are refused).
+  Every parse runs in a process of its own (`sandbox.ts` forks `parse-host.mjs`, `env: {}`, IPC
+  with `serialization: "advanced"`), the parser inside it in a worker_thread with resourceLimits;
+  the host's main thread, free the whole time, polls its own resident memory every 5 ms and
+  exits (code 3) past a cap over its start (768 MB PDF, 1 GB Word), taking the parse and all its
+  memory with it. resourceLimits do not count ArrayBuffers (a 2 MB PDF of one FlateDecode stream
+  once grew the server 2.7 GB), and measuring the server's own memory killed parses for memory
+  other requests held, so neither is the guard. No `--max-old-space-size` on the host: V8 applies
+  it to the worker too, under its resourceLimits. 20 s, then SIGKILL. Two parses of each kind at
+  once per server, at most one per agent (`ToolContext.agentId`, set by service.ts); others wait
+  up to 5 s, then "busy, try again". A place is given back only after the parse's process has
+  exited, on every path (answer, refusal, timeout, memory), so its memory is gone first
+  (`liveParses()`). Each parse costs a Node process start (tens of ms). The parse process never
+  outlives the server: it exits when its IPC channel closes, on a clock of its own (the
+  server's timeout plus 2 s, 10 s with no job), and when its answer cannot be sent. The server
+  takes one answer only, of the expected shape (`{ok: true, value}` or `{ok: false, denied:
+  string}`) and at most 80 MB serialized (checked in both processes); anything else is "could not
+  be read". The parse process runs as the same user as the server, with no OS sandbox (no
+  seccomp, namespaces or separate user): its limits are memory, time and an empty environment. Anything but a refusal inside a worker becomes "could not be read"; file-controlled
+  text in refusals is cut to about 100 characters. Zips through fflate's `unzipSync` only, with a filter checking every size
+  from the directory before anything is inflated (2,000 entries, 50 MB in all, a ratio over 200
+  past 1 MB, compression 0 or 8, no `..` or rooted names, no repeated names), then each part's
+  length and CRC-32 against the directory (fflate checks neither: a header that lies about a
+  size otherwise cuts a part short silently, seen 2026-11-01); ZIP64 refused. XML through xmldom
+  after refusing `<!DOCTYPE`/`<!ENTITY` in the text, `onError` throwing, one root, depth 256, 5
+  MB a part (xmldom needs about 100 times a dense part's size; a SOW's document.xml is well
+  under 1 MB). A fill parses the template's document.xml once and the output's once (the guard
+  checks the bytes to be uploaded). PDFs through pdf.js's legacy build
+  (`pdfjs-dist/legacy/build/pdf.mjs` and its worker): the modern build calls `Promise.try`, which
+  Node 22 (the image's node:22-alpine) lacks, so every PDF failed on staging while the suite passed
+  on Node 26 (2026-11-01); the legacy bundle has no `isEvalSupported`, `new Function` or `eval`.
+  Run the suite on Node 22 before shipping a pdf.js change. 512/64/4 MB limits, `env: {}`, no
+  fetch, the vetting's `getDocument` options, local fonts/CMaps/wasm read from
+  `node_modules/pdfjs-dist`; module hooks refuse to load any canvas package; encrypted ones
+  refused. A parse that fails tells the agent only "could not be read"; the error's class name
+  alone (never its message: pdf.js puts document strings in messages) comes back as a separate
+  `reason` that the server checks is a plain name, writes to its log and never returns. `word_fill_template`: a .docx template (never written) to a new .docx through the
+  same PUT as graph_upload_file (conflict `fail` unless `replace`); text takes the first run's
+  and first paragraph's formatting (Word's PlaceholderText style dropped), newlines are
+  paragraphs in a block field and breaks in an inline one, a table field keeps its first row and
+  repeats its last per row; every filled field loses `w:showingPlcHdr` and any `dataBinding`.
+  Before upload the guard re-opens the output and refuses unless every other zip part is
+  byte-identical and the document with every filled field's content taken out serializes
+  identically (text and markup). A target that is the template itself (same folder and name) is
+  refused, replace or not. Audit `${site} ${template} -> ${folder}/${name}`, then
+  `-> <folder>/<name> (<new id>)` plus ` (replace)`. The image installs with `--ignore-scripts --omit=optional`, so pdfjs-dist's
+  optional native `@napi-rs/canvas` (in the lockfile, as npm always records optionals) is never
+  installed there. Tests: `connectors/sharepoint-files/documents.test.ts`, fake Graph only.
 
 - Outlook calendar (`outlook-calendar`): the mail model applied to calendars: no Graph
   Calendars permission, Exchange RBAC roles
