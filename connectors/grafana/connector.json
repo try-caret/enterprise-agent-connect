@@ -1,0 +1,162 @@
+{
+  "id": "grafana",
+  "name": "Grafana",
+  "description": "Let agents find and read Grafana dashboards and alert rules, and read alert state changes and annotations around an incident. For first response to production alerts.",
+  "logo": "/brand/registry/grafana.svg",
+  "identity": "A Grafana service account token. The service account has the Viewer role, so it reads what a viewer in your organization may read.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a service account with the Viewer role",
+      "body": "You need a Grafana organization administrator for this. Viewer lets agents read dashboards, alert rules and annotations and change nothing.",
+      "link": {
+        "label": "Grafana: service accounts",
+        "href": "https://grafana.com/docs/grafana/latest/administration/service-accounts/"
+      },
+      "click": [
+        "In Grafana, select Administration > Users and access > Service accounts > Add service account.",
+        "Display name: AI agents. Select Create.",
+        "On the AI agents service account, set its role to Viewer with the role picker."
+      ]
+    },
+    {
+      "title": "Add a token",
+      "body": "Grafana shows the token only once. You can test it with the command below: it shows your organization's name and changes nothing.",
+      "click": [
+        "On the AI agents service account, select Add service account token.",
+        "Name: AI agents. Set an expiration date, then select Generate token and copy it."
+      ],
+      "copy": [
+        "GRAFANA_HOST=grafana.example.com",
+        "curl -s -H \"Authorization: Bearer $GRAFANA_TOKEN\" \"https://$GRAFANA_HOST/api/org/\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "Grafana address",
+      "help": "The host name of your Grafana, such as grafana.example.com or yourstack.grafana.net, without https://.",
+      "placeholder": "grafana.example.com",
+      "secret": false
+    },
+    { "id": "token", "label": "Service account token", "secret": true }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read dashboards and alert rules",
+      "description": "Search dashboards and folders, read a dashboard's panels and queries, and list and read alert rules.",
+      "required": true,
+      "note": "Read-only. Reaches every dashboard and alert rule a viewer can see unless you keep a key to chosen folders. Reading alert rules with the Viewer role needs Grafana 11 or later.",
+      "scopes": [],
+      "permissions": ["Viewer"],
+      "tools": ["grafana_search", "grafana_get_dashboard", "grafana_list_alert_rules", "grafana_get_alert_rule"]
+    },
+    {
+      "id": "read_annotations",
+      "label": "Read annotations",
+      "description": "Read annotations in a time window, such as alert state changes, deployments and notes people added to graphs.",
+      "note": "Annotations are read across the organization, whatever folders a key is kept to.",
+      "scopes": [],
+      "permissions": ["Viewer"],
+      "tools": ["grafana_list_annotations"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "folders",
+      "label": "Folders",
+      "help": "Optional: only dashboards and alert rules in these folders, by folder UID (in the folder's address after /dashboards/f/). Leave empty for every folder.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_-]{1,40}$"
+    }
+  ],
+  "verify": { "method": "GET", "path": "/api/org/", "label": "Grafana organization", "show": "name" },
+  "revoke": "In Grafana, go to Administration > Users and access > Service accounts, select AI agents and delete its token, or the service account. Agents lose access to Grafana at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "auth": { "type": "bearer", "token": "token" },
+    "tools": [
+      {
+        "name": "grafana_search",
+        "description": "Search dashboards or folders by title, tag or folder. Pass page to read further pages, from 1.",
+        "method": "GET",
+        "path": "/api/search",
+        "params": {
+          "query": { "type": "string", "description": "Words in the title", "in": "query", "required": false },
+          "tag": { "type": "array", "items": "string", "description": "Only those with all these tags", "in": "query", "required": false },
+          "type": { "type": "string", "enum": ["dash-db", "dash-folder"], "description": "Dashboards or folders", "in": "query", "default": "dash-db" },
+          "folder_uids": {
+            "type": "array",
+            "items": "string",
+            "description": "Only in these folders, by UID",
+            "in": "query",
+            "name": "folderUIDs",
+            "required": false,
+            "limit": "folders"
+          },
+          "limit": { "type": "integer", "description": "Results per page", "in": "query", "default": 50 },
+          "page": { "type": "integer", "description": "The page, from 1", "in": "query", "default": 1 }
+        },
+        "result": { "fields": ["uid", "title", "type", "tags", "folderUid", "folderTitle", "url"] }
+      },
+      {
+        "name": "grafana_get_dashboard",
+        "description": "Read a dashboard by UID: its panels with their titles, queries and data sources, its variables and its folder.",
+        "method": "GET",
+        "path": "/api/dashboards/uid/{uid}",
+        "params": { "uid": { "type": "string", "description": "The dashboard UID", "in": "path" } },
+        "answerLimits": [{ "field": "meta.folderUid", "limit": "folders" }],
+        "result": {
+          "fields": [
+            "dashboard.uid",
+            "dashboard.title",
+            "dashboard.tags",
+            "dashboard.panels",
+            "dashboard.templating",
+            "meta.folderUid",
+            "meta.folderTitle",
+            "meta.url",
+            "meta.updated"
+          ]
+        }
+      },
+      {
+        "name": "grafana_list_alert_rules",
+        "description": "List every alert rule with its folder, group, condition and labels. Under a key kept to some folders, this answers only when every rule is in them; read one rule instead.",
+        "method": "GET",
+        "path": "/api/v1/provisioning/alert-rules",
+        "answerLimits": [{ "field": "folderUID", "limit": "folders" }],
+        "result": { "fields": ["uid", "title", "folderUID", "ruleGroup", "condition", "for", "labels", "annotations", "isPaused"] }
+      },
+      {
+        "name": "grafana_get_alert_rule",
+        "description": "Read one alert rule by UID: its queries, condition, labels, annotations such as the runbook, and how long it must hold before firing.",
+        "method": "GET",
+        "path": "/api/v1/provisioning/alert-rules/{uid}",
+        "params": { "uid": { "type": "string", "description": "The alert rule UID", "in": "path" } },
+        "answerLimits": [{ "field": "folderUID", "limit": "folders" }]
+      },
+      {
+        "name": "grafana_list_annotations",
+        "description": "List annotations in a time window, newest first: alert state changes (type alert) or notes people added (type annotation), optionally on one dashboard or with tags.",
+        "method": "GET",
+        "path": "/api/annotations",
+        "params": {
+          "from": { "type": "integer", "description": "Start of the window, milliseconds since 1970", "in": "query", "required": false },
+          "to": { "type": "integer", "description": "End of the window, milliseconds since 1970", "in": "query", "required": false },
+          "type": { "type": "string", "enum": ["alert", "annotation"], "description": "Alert state changes or notes", "in": "query", "required": false },
+          "dashboard_uid": { "type": "string", "description": "Only on this dashboard", "in": "query", "name": "dashboardUID", "required": false },
+          "tags": { "type": "array", "items": "string", "description": "Only those with all these tags", "in": "query", "required": false },
+          "limit": { "type": "integer", "description": "At most this many", "in": "query", "default": 100 }
+        },
+        "result": { "fields": ["id", "time", "timeEnd", "text", "tags", "dashboardUID", "panelId", "alertName", "newState", "prevState"] }
+      }
+    ]
+  }
+}

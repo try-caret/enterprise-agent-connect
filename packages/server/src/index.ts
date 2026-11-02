@@ -114,31 +114,35 @@ export async function createAgentConnect(options: AgentConnectOptions) {
       throw new Error(
         `Connector module ${id} has no definition: give it as its connector, or its folder in extraConnectorDirs`,
       );
-  const apps: App[] = connectors.map((connector) => {
-    if (connectors.filter((c) => c.id === connector.id).length > 1)
-      throw new Error(`Two connectors have the id ${connector.id}`);
-    // An app described entirely in its connector.json runs on a generic module.
-    const module: BuiltinModule | undefined =
-      modules.get(connector.id) ??
-      (connector.http
-        ? httpConnector
-        : connector.soap
-          ? soapConnector
-          : connector.odata
-            ? odataConnector
-            : connector.sql
-              ? sqlConnector
-              : undefined);
-    if (!module) throw new Error(`Connector ${connector.id} has no code (ConnectorModule)`);
-    return { connector, ...module.create({ microsoft, connector }) };
-  });
-  if (!apps.length) throw new Error("No connectors: pass at least one app in connectors");
-  assertToolsImplemented(apps);
-  // Every `live` step check a connector names is one the Teams admin runs.
-  for (const { connector } of apps)
+  // An app described entirely in its connector.json runs on a generic module.
+  const generic = (connector: Connector): BuiltinModule | undefined =>
+    connector.http
+      ? httpConnector
+      : connector.soap
+        ? soapConnector
+        : connector.odata
+          ? odataConnector
+          : connector.sql
+            ? sqlConnector
+            : undefined;
+  // Every app, loaded here or an organization's own, passes the same checks.
+  const build = (connector: Connector, module: BuiltinModule): App => {
+    const app = { connector, ...module.create({ microsoft, connector }) };
+    assertToolsImplemented([app]);
+    // Every `live` step check a connector names is one the Teams admin runs.
     for (const step of [...connector.setup, ...connector.afterConnect])
       if (step.live && !(LIVE_CHECKS as readonly string[]).includes(step.live))
         throw new Error(`Connector ${connector.id}: no live check ${step.live}`);
+    return app;
+  };
+  const apps: App[] = connectors.map((connector) => {
+    if (connectors.filter((c) => c.id === connector.id).length > 1)
+      throw new Error(`Two connectors have the id ${connector.id}`);
+    const module = modules.get(connector.id) ?? generic(connector);
+    if (!module) throw new Error(`Connector ${connector.id} has no code (ConnectorModule)`);
+    return build(connector, module);
+  });
+  if (!apps.length) throw new Error("No connectors: pass at least one app in connectors");
   const providerClients: Record<string, ProviderApp["client"]> = { microsoft: microsoft.provider };
   // A built-in app left out drops out of its provider's add-agent steps.
   const left = new Set(
@@ -183,6 +187,11 @@ export async function createAgentConnect(options: AgentConnectOptions) {
   });
   const service = createService({
     apps,
+    internalApp: (connector) => build(connector, generic(connector)!),
+    // Built-in folders stay reserved even when this deployment does not offer them.
+    reservedIds: readdirSync(CONNECTORS_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name),
     providers,
     store,
     key,

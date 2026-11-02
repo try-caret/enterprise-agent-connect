@@ -2,6 +2,7 @@ import { chosenSteps, type AppLive } from "./steps.js";
 import type {
   Agent,
   Answer,
+  Body,
   CheckOutcome,
   Connection,
   Connector,
@@ -98,6 +99,20 @@ export function createClient(options: ClientOptions) {
     },
     branding: () => call<Answer<"branding">>("GET", "/branding"),
     connectors: () => call<Answer<"connectors">>("GET", "/connectors"),
+    /** The deployment's apps and the organization's own internal apps. */
+    orgConnectors: (o: string) => call<Answer<"orgConnectors">>("GET", `${org(o)}/connectors`),
+    internalApps: (o: string) => call<Answer<"internalApps">>("GET", `${org(o)}/internal-apps`),
+    internalApp: (o: string, a: string) =>
+      maybe<Answer<"internalApp">>(`${org(o)}/internal-apps/${seg(a)}`),
+    saveInternalApp: (o: string, a: string, definition: Record<string, unknown>, by: string) =>
+      call<Answer<"saveInternalApp">>("PUT", `${org(o)}/internal-apps/${seg(a)}`, {
+        definition,
+        by,
+      }),
+    deleteInternalApp: (o: string, a: string, by: string) =>
+      call<void>("DELETE", `${org(o)}/internal-apps/${seg(a)}`, { by }),
+    draftInternalApp: (body: Body<"draftInternalApp">) =>
+      call<Answer<"draftInternalApp">>("POST", "/internal-apps/draft", body),
     providers: () => call<Answer<"providers">>("GET", "/providers"),
     providerConnections: (o: string) =>
       call<Answer<"providerConnections">>("GET", `${org(o)}/providers`),

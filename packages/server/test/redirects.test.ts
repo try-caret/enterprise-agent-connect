@@ -104,6 +104,109 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     },
     request: { method: "GET", path: "/api/data/v9.2/WhoAmI" },
   },
+  gitlab: {
+    conn: { config: { host: "gitlab.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/user" },
+  },
+  "argo-cd": {
+    conn: { config: { host: "argocd.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/api/v1/session/userinfo" },
+  },
+  sonarqube: {
+    conn: { config: { host: "sonarqube.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/api/authentication/validate" },
+  },
+  datadog: {
+    conn: { config: { host: "api.datadoghq.com" }, secret: { api_key: "k", application_key: "a" } },
+    request: { method: "GET", path: "/api/v1/monitor/search" },
+  },
+  pagerduty: {
+    conn: { config: { host: "api.pagerduty.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/abilities" },
+  },
+  grafana: {
+    conn: { config: { host: "grafana.example.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/api/org/" },
+  },
+  zephyr: {
+    conn: { config: { host: "api.zephyrscale.smartbear.com" }, secret: { token: "t" } },
+    request: { method: "GET", path: "/projects" },
+  },
+  confluence: {
+    conn: { config: { cloud: GUID, client_id: "i" }, secret: { client_secret: "s" } },
+    request: { method: "GET", path: "/api/v2/spaces" },
+  },
+  automox: {
+    conn: { config: {}, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/orgs" },
+  },
+  qualys: {
+    conn: {
+      config: { api_host: "qualysapi.qualys.com", username: "u" },
+      secret: { password: "p" },
+    },
+    request: { method: "GET", path: "/api/2.0/fo/asset/host/" },
+  },
+  druva: {
+    conn: { config: { client_id: "i" }, secret: { secret_key: "s" } },
+    request: { method: "GET", path: "/usermanagement/v1/users" },
+  },
+  drata: {
+    conn: { config: { api_host: "public-api.drata.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/company" },
+  },
+  safebase: {
+    conn: { config: {}, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/organizations" },
+  },
+  "adobe-admin-console": {
+    conn: {
+      config: { client_id: "i", organization: "A1@AdobeOrg" },
+      secret: { client_secret: "s" },
+    },
+    request: { method: "GET", path: "/groups/A1%40AdobeOrg/0" },
+  },
+  adestra: { conn: { config: {}, secret: { api_token: "t" } }, request: { method: "GET", path: "/projects" } },
+  cvent: {
+    conn: { config: { client_id: "i" }, secret: { client_secret: "s" } },
+    request: { method: "GET", path: "/events" },
+  },
+  "forsta-decipher": {
+    conn: { config: { host: "acme.decipherinc.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/hello?name=x" },
+  },
+  intercom: {
+    conn: { config: { host: "api.intercom.io" }, secret: { access_token: "t" } },
+    request: { method: "GET", path: "/me" },
+  },
+  "sprout-social": {
+    conn: { config: { customer: "1" }, secret: { api_token: "t" } },
+    request: { method: "GET", path: "/metadata/customer" },
+  },
+  synthesia: { conn: { config: {}, secret: { api_key: "k" } }, request: { method: "GET", path: "/videos" } },
+  wordpress: {
+    conn: { config: { host: "blog.example.com", username: "u" }, secret: { app_password: "p" } },
+    request: { method: "GET", path: "/users/me" },
+  },
+  churnzero: {
+    conn: { config: { instance: "acme", username: "u" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/Account" },
+  },
+  lusha: {
+    conn: { config: { host: "api.lusha.com" }, secret: { api_key: "k" } },
+    request: { method: "GET", path: "/v3/account/usage" },
+  },
+  ironclad: {
+    conn: {
+      config: { host: "ironcladapp.com", client_id: "i", user_email: "a@example.com" },
+      secret: { client_secret: "s" },
+    },
+    request: { method: "GET", path: "/workflows" },
+  },
+  onestream: {
+    conn: { config: { host: "acme.onestreamcloud.com" }, secret: { token: "t" } },
+    request: { method: "POST", path: "/DataProvider/GetAdoDataSetForAdapter", body: {} },
+  },
 };
 for (const id of [
   "outlook-mail",

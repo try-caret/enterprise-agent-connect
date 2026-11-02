@@ -1,0 +1,258 @@
+{
+  "id": "druva",
+  "name": "Druva",
+  "description": "Let agents read which laptops and desktops Druva backs up, when each last backed up and who owns it. For checking that every device is protected.",
+  "logo": "/brand/registry/druva.svg",
+  "identity": "Druva API credentials (a client ID and secret key), restricted to an inSync role that can only view. For Druva's commercial cloud.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create API credentials",
+      "body": "You need a Druva Cloud Administrator for this. Unrestricted credentials can use every Druva API, including changes and deletes, so restrict them to an inSync custom role that can only view users, devices and backups. Copy both values when Druva shows them; to see the secret again you must generate a new one.",
+      "link": {
+        "label": "Druva: create and manage API credentials",
+        "href": "https://help.druva.com/en/articles/8580838-create-and-manage-api-credentials"
+      },
+      "click": [
+        "In the Druva Cloud Platform Console, open Global Navigation, then Integration Center.",
+        "Select API Credentials in the left panel, then New Credentials.",
+        "Enter a name, such as AI agents, and optionally restrict the networks it may be used from.",
+        "Select Save, then copy the Client ID and Secret Key from Credential Details.",
+        "Select the new credentials, then Edit.",
+        "Under authorization restrictions, choose Product Administrator, then for inSync a custom role that can only view users, devices and backups, and select Save."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "secret": false
+    },
+    {
+      "id": "secret_key",
+      "label": "Secret Key",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read devices and backups",
+      "description": "List backed-up devices by user, name, serial number, operating system or last connection, read one device, list each device's last successful backup, and look up users by name or email.",
+      "required": true,
+      "note": "Reaches every device and user in Druva Endpoints. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["druva_list_devices", "druva_get_device", "druva_list_last_backups", "druva_list_users"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/usermanagement/v1/users",
+    "label": "Druva users",
+    "show": "totalSize"
+  },
+  "revoke": "In the Druva Cloud Platform Console, go to Integration Center, then API Credentials, and delete the credentials. Agents lose access to Druva at once.",
+  "http": {
+    "baseUrl": "https://apis.druva.com/insync",
+    "auth": {
+      "type": "oauth2",
+      "tokenUrl": "https://apis.druva.com/token",
+      "clientId": "client_id",
+      "clientSecret": "secret_key",
+      "clientAuth": "basic",
+      "scope": "read"
+    },
+    "tools": [
+      {
+        "name": "druva_list_devices",
+        "description": "List the devices Druva backs up, filtered by owner, name, serial number, operating system, status or when they last connected.",
+        "method": "GET",
+        "path": "/endpoints/v2/devices",
+        "params": {
+          "user_id": {
+            "type": "integer",
+            "description": "Only this user's devices (the userID from the list of users)",
+            "in": "query",
+            "name": "userID",
+            "required": false
+          },
+          "name_prefix": {
+            "type": "string",
+            "description": "Only devices whose name starts with this",
+            "in": "query",
+            "name": "searchPrefixDeviceName",
+            "required": false
+          },
+          "serial_number": {
+            "type": "string",
+            "description": "Only the device with this hardware serial number",
+            "in": "query",
+            "name": "serialNumber",
+            "required": false
+          },
+          "platform": {
+            "type": "string",
+            "enum": ["win32", "linux2", "darwin", "android", "ios"],
+            "description": "Only devices on this platform",
+            "in": "query",
+            "name": "platformOS",
+            "required": false
+          },
+          "status": {
+            "type": "string",
+            "enum": ["enabled", "disabled"],
+            "description": "Only enabled or disabled devices",
+            "in": "query",
+            "name": "deviceStatus",
+            "required": false
+          },
+          "last_connected_before": {
+            "type": "string",
+            "description": "Only devices last connected before this time, as YYYY-MM-DDTHH:MM:SSZ",
+            "in": "query",
+            "name": "maxLastConnected",
+            "required": false
+          },
+          "page_token": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "name": "pageToken",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "devices",
+          "fields": [
+            "deviceID",
+            "deviceName",
+            "userID",
+            "serialNumber",
+            "platformOS",
+            "deviceOS",
+            "deviceOSVersion",
+            "deviceStatus",
+            "deviceMarkedInactive",
+            "lastConnected",
+            "clientVersion",
+            "upgradeState",
+            "totalBackupData"
+          ]
+        },
+        "paging": { "param": "page_token", "body": "nextPageToken" }
+      },
+      {
+        "name": "druva_get_device",
+        "description": "Read one device: owner, operating system, serial number, status, last connection, backup client version and total data backed up.",
+        "method": "GET",
+        "path": "/endpoints/v2/devices/{device_id}",
+        "params": {
+          "device_id": {
+            "type": "integer",
+            "description": "The deviceID",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "druva_list_last_backups",
+        "description": "List each device's last successful backup: when it started and ended, files backed up and files missed. Filter by device, user or when the backup ended.",
+        "method": "GET",
+        "path": "/endpoints/v1/backups",
+        "params": {
+          "last_successful": {
+            "type": "boolean",
+            "enum": [true],
+            "description": "Always true: the last successful backup",
+            "in": "query",
+            "name": "lastSuccessful",
+            "default": true
+          },
+          "device_id": {
+            "type": "integer",
+            "description": "Only this device",
+            "in": "query",
+            "name": "deviceID",
+            "required": false
+          },
+          "user_id": {
+            "type": "integer",
+            "description": "Only this user's devices",
+            "in": "query",
+            "name": "userID",
+            "required": false
+          },
+          "ended_before": {
+            "type": "string",
+            "description": "Only backups that ended before this time, as YYYY-MM-DDTHH:MM:SSZ, to find devices not backed up lately",
+            "in": "query",
+            "name": "maxBackupEndTime",
+            "required": false
+          },
+          "page_token": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "name": "pageToken",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "backups",
+          "fields": ["deviceID", "backupStatus", "startTime", "endTime", "filesBackedUp", "filesMissed", "bytesTransferred"]
+        },
+        "paging": { "param": "page_token", "body": "nextPageToken" }
+      },
+      {
+        "name": "druva_list_users",
+        "description": "Find Druva users by email, email prefix or name prefix, with their status (active or preserved).",
+        "method": "GET",
+        "path": "/usermanagement/v1/users",
+        "params": {
+          "email": {
+            "type": "string",
+            "description": "The user's exact email address",
+            "in": "query",
+            "name": "emailID",
+            "required": false
+          },
+          "email_prefix": {
+            "type": "string",
+            "description": "Only users whose email starts with this",
+            "in": "query",
+            "name": "searchPrefixEmailID",
+            "required": false
+          },
+          "name_prefix": {
+            "type": "string",
+            "description": "Only users whose name starts with this",
+            "in": "query",
+            "name": "searchPrefixUserName",
+            "required": false
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "preserved"],
+            "description": "Only users in this status",
+            "in": "query",
+            "required": false
+          },
+          "page_token": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "name": "pageToken",
+            "required": false
+          }
+        },
+        "result": { "items": "users", "fields": ["userID", "userName", "emailID", "status", "profileID", "addedOn"] },
+        "paging": { "param": "page_token", "body": "nextPageToken" }
+      }
+    ]
+  }
+}

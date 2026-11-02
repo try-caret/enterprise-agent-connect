@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { connectorSchema } from "../../connector-kit/src/connector.ts";
 import { assertToolsImplemented } from "../src/service.ts";
 import { httpTools, httpVendor } from "../../../connectors/http/index.ts";
-import { draftConnector } from "../../../scripts/openapi-to-connector.ts";
+import { draftConnector } from "../../../connectors/http/openapi.ts";
 
 const script = fileURLToPath(new URL("../../../scripts/openapi-to-connector.ts", import.meta.url));
 const fixture = fileURLToPath(

@@ -4,6 +4,7 @@ import { describeCertificate, newCertificate } from "../../connector-kit/src/cer
 import { signInNonce, signState, verifyState } from "./consent.js";
 import {
   effectiveCapabilities,
+  parseConnector,
   pickDisplay,
   pickLabels,
   providerSettings,
@@ -20,6 +21,8 @@ import type {
   AgentRow,
   ConnectionRow,
   GrantRow,
+  InternalAppChange,
+  InternalAppRow,
   Limits,
   ProviderRow,
   PublicConnection,
@@ -257,6 +260,12 @@ export function createService(deps: {
   providers?: ProviderApp[];
   store: Store;
   key: CredentialKey;
+  // Builds an organization's own app (its definition parsed) on the generic module of its
+  // kind, checked as startup checks a loaded app; throws on a problem. Without it, the
+  // deployment takes no internal apps.
+  internalApp?: (connector: Connector) => App;
+  // Ids no internal app may take, beside the loaded apps' (every built-in folder, offered or not).
+  reservedIds?: Iterable<string>;
   // Apps that sign in as the agent's own bot (connector `signsInAs: "agentBot"`).
   bots?: {
     botForAgent(org: string, agentId: string): Promise<BotRow | null>;
@@ -289,10 +298,138 @@ export function createService(deps: {
 
   const sharedClientId = (id: string) => providers.get(id)?.client.approval?.clientId ?? null;
 
-  function app(connectorId: string): App {
+  // A loaded app (built in or from a folder), the same for every organization.
+  function loaded(connectorId: string): App {
     const found = apps.get(connectorId);
     if (!found) throw new InvalidInput(`Unknown app ${connectorId}`);
     return found;
+  }
+
+  // The one lookup of an app for an organization: a loaded app, else one of its own. A loaded
+  // app whose id one of the organization's own already has is neither: the connection kept
+  // under that id holds a credential entered for the organization's app, never to be sent to
+  // the deployment's.
+  async function app(org: string, connectorId: string): Promise<App> {
+    const found = apps.get(connectorId);
+    const row = await store.getInternalApp(org, connectorId);
+    if (found && row) throw new InvalidInput(shadowed(connectorId));
+    if (found) return found;
+    if (!row) throw new InvalidInput(`Unknown app ${connectorId}`);
+    return internal(row);
+  }
+
+  // Every app the organization has: the loaded ones and its own. One of its own that no longer
+  // loads (the deployment now has its id, or a newer release reads it differently) is left out
+  // and logged, rather than cutting off the organization's other apps; GET internal-apps names
+  // the problem.
+  async function orgApps(org: string): Promise<Map<string, App>> {
+    const all = new Map(apps);
+    for (const row of await store.listInternalApps(org)) {
+      if (apps.has(row.id)) {
+        all.delete(row.id);
+        continue;
+      }
+      try {
+        all.set(row.id, internal(row));
+      } catch (error) {
+        if (!(error instanceof InvalidInput)) throw error;
+        console.error(`[agent-connect] internal app ${row.id} of ${org}: ${error.message}`);
+      }
+    }
+    return all;
+  }
+
+  const reserved = new Set([...(deps.reservedIds ?? []), ...apps.keys(), "agents"]);
+  const loadedTools = new Set(deps.apps.flatMap((a) => a.toolset.names));
+  // Built internal apps by organization and id, kept while their definition is unchanged.
+  const built = new Map<string, { json: string; app: App }>();
+
+  function internal(row: InternalAppRow): App {
+    if (apps.has(row.id)) throw new InvalidInput(shadowed(row.id));
+    const json = JSON.stringify(row.definition);
+    const cacheKey = `${row.organizationId}/${row.id}`;
+    const hit = built.get(cacheKey);
+    if (hit?.json === json) return hit.app;
+    const made = defined(row.definition, row.id);
+    // A tool the deployment added later would sit twice in an agent's list.
+    const clash = made.toolset.names.filter((t) => loadedTools.has(t));
+    if (clash.length)
+      throw new InvalidInput(
+        `This deployment now has its own tool named ${clash.join(", ")}, so this app is not used. Rename its tools and save it again.`,
+      );
+    built.set(cacheKey, { json, app: made });
+    return made;
+  }
+
+  function withProblem(row: InternalAppRow) {
+    try {
+      internal(row);
+      return { ...row, problem: null };
+    } catch (error) {
+      if (!(error instanceof InvalidInput)) throw error;
+      return { ...row, problem: error.message };
+    }
+  }
+
+  // A definition parsed exactly as a connector.json file is, then built; every problem in
+  // plain words.
+  function defined(raw: unknown, id: string): App {
+    if (!deps.internalApp) throw new InvalidInput("This deployment does not take internal apps");
+    let connector: Connector;
+    try {
+      connector = parseConnector(raw, "definition");
+    } catch (error) {
+      throw new InvalidInput(plainParseError((error as Error).message));
+    }
+    if (connector.id !== id)
+      throw new InvalidInput(`The definition's id is ${connector.id}, but it is saved as ${id}`);
+    if (!connector.http && !connector.soap && !connector.odata && !connector.sql)
+      throw new InvalidInput("An internal app needs an http, soap, odata or sql block");
+    if (connector.events)
+      throw new InvalidInput("Internal apps cannot start agents from events yet: remove events");
+    if (connector.signsInAs)
+      throw new InvalidInput("Internal apps sign in with their own connection: remove signsInAs");
+    try {
+      return deps.internalApp(connector);
+    } catch (error) {
+      throw new InvalidInput((error as Error).message);
+    }
+  }
+
+  // What replacing a connected app's definition does: a change to how it signs in or where it
+  // reaches (form fields, accountKey, the http, soap, odata or sql block but its tools) removes
+  // the connection and its grants, since the credential was entered for the old one. Otherwise
+  // the ceiling and grants are cut to the capabilities the new definition still has, and a
+  // grant whose limits no longer fit it, or left with nothing, is removed.
+  function replaceChange(
+    previous: Connector | null,
+    next: Connector,
+    connection: ConnectionRow | null,
+    grants: GrantRow[],
+  ): InternalAppChange {
+    if (!connection) return { kind: "none" };
+    if (!previous || signIn(previous) !== signIn(next))
+      return { kind: "disconnect", reason: "its sign-in or address changed" };
+    const ceiling = next.capabilities
+      .filter((c) => c.required || connection.capabilities.includes(c.id))
+      .map((c) => c.id);
+    if (!ceiling.length) return { kind: "disconnect", reason: "none of its capabilities is left" };
+    const kept: { agentId: string; capabilities: string[]; limits: Limits }[] = [];
+    const removed: string[] = [];
+    for (const g of grants) {
+      const capabilities = ceiling.filter(
+        (id) => g.capabilities.includes(id) || next.capabilities.find((c) => c.id === id)!.required,
+      );
+      let limits: Limits | null = null;
+      try {
+        limits = validateLimits(next, g.limits);
+      } catch (error) {
+        if (!(error instanceof InvalidInput)) throw error;
+      }
+      if (limits && capabilities.length) kept.push({ agentId: g.agentId, capabilities, limits });
+      else removed.push(g.agentId);
+    }
+    return { kind: "keep", ceiling, grants: kept, removed };
   }
 
   function providerApp(id: string): ProviderApp {
@@ -302,7 +439,7 @@ export function createService(deps: {
   }
 
   function approvalFor(connectorId: string) {
-    const target = app(connectorId);
+    const target = loaded(connectorId);
     const approval = target.connector.provider
       ? providerApp(target.connector.provider).client.approval
       : undefined;
@@ -524,13 +661,25 @@ export function createService(deps: {
         });
         continue;
       }
-      // {name} in a probe path is the connection's config value, e.g. the signed-in user's id.
-      const path = p.path.replace(/\{([A-Za-z_]+)\}/g, (_, name: string) => {
+      // {name} in a probe path, or as a whole string value of its body, is the connection's
+      // config value, e.g. the signed-in user's id.
+      const config = (name: string) => {
         const value = conn.config[name];
         if (!value) throw new Error(`${connector.id} probe needs config ${name}`);
-        return encodeURIComponent(value);
-      });
-      const res = await vendor.call(conn, { method: p.method, path, body: p.body });
+        return value;
+      };
+      const path = p.path.replace(/\{([A-Za-z_]+)\}/g, (_, name: string) =>
+        encodeURIComponent(config(name)),
+      );
+      const body =
+        p.body &&
+        Object.fromEntries(
+          Object.entries(p.body).map(([k, v]) => {
+            const name = typeof v === "string" ? /^\{([A-Za-z_]+)\}$/.exec(v)?.[1] : undefined;
+            return [k, name ? config(name) : v];
+          }),
+        );
+      const res = await vendor.call(conn, { method: p.method, path, body });
       if (res.status < 200 || res.status >= 300)
         throw new ConnectError(`${p.label}: ${connector.name} answered ${res.status}`);
       const values = pickDisplay(res.data, p.show, p.match);
@@ -547,6 +696,95 @@ export function createService(deps: {
   return {
     connectors: () => deps.apps.map(({ connector }) => connector),
 
+    // Every app the organization can connect: the deployment's and its own.
+    async connectorsFor(org: string) {
+      return [...(await orgApps(org)).values()].map(({ connector }) => connector);
+    },
+
+    // The organization's own apps as saved, each with what keeps it from loading, if anything.
+    async listInternalApps(org: string) {
+      return (await store.listInternalApps(org)).map(withProblem);
+    },
+
+    async getInternalApp(org: string, id: string) {
+      const row = await store.getInternalApp(org, id);
+      return row ? withProblem(row) : null;
+    },
+
+    // Creates or replaces one of the organization's own apps (see replaceChange for what a
+    // replace does to its connection and grants), audited in the same transaction.
+    async saveInternalApp(
+      org: string,
+      id: string,
+      definition: Record<string, unknown>,
+      by: string,
+    ) {
+      if (reserved.has(id))
+        throw new InvalidInput(
+          `${id} is the id of one of this deployment's apps. Choose another id.`,
+        );
+      const next = defined(definition, id).connector;
+      const others = await orgApps(org);
+      others.delete(id);
+      const taken = next.capabilities
+        .flatMap((c) => c.tools)
+        .filter(
+          (t) =>
+            loadedTools.has(t) || [...others.values()].some((a) => a.toolset.names.includes(t)),
+        );
+      if (taken.length)
+        throw new InvalidInput(
+          `Another app already has a tool named ${taken.join(", ")}. Tool names must be unique: rename them.`,
+        );
+      const { row, created, change } = await store.saveInternalApp(
+        { organizationId: org, id, definition, by },
+        (previous, connection, grants) => {
+          let before: Connector | null = null;
+          try {
+            before = previous ? parseConnector(previous, "definition") : null;
+          } catch {
+            // A stored definition that no longer parses cannot vouch for the connection.
+          }
+          return replaceChange(before, next, connection, grants);
+        },
+        (isNew, c) => ({
+          organizationId: org,
+          agentId: null,
+          agentName: by,
+          connectorId: id,
+          tool: `admin:${isNew ? "create" : "replace"}_internal_app`,
+          target: changeTarget(c),
+          decision: "allowed",
+          reason: null,
+          vendorStatus: null,
+        }),
+      );
+      return {
+        app: withProblem(row),
+        connector: next,
+        created,
+        disconnected: change.kind === "disconnect",
+        grantsRemoved: change.kind === "keep" ? change.removed : [],
+      };
+    },
+
+    // Removes one of the organization's own apps with its connection and every grant of it.
+    async deleteInternalApp(org: string, id: string, by: string) {
+      const deleted = await store.deleteInternalApp(org, id, {
+        organizationId: org,
+        agentId: null,
+        agentName: by,
+        connectorId: id,
+        tool: "admin:delete_internal_app",
+        target: `${id}, with its connection and every agent's access to it`,
+        decision: "allowed",
+        reason: null,
+        vendorStatus: null,
+      });
+      if (deleted) built.delete(`${org}/${id}`);
+      return deleted;
+    },
+
     providers: () =>
       [...providers.values()].map(({ provider, client }) => ({
         ...provider,
@@ -555,8 +793,9 @@ export function createService(deps: {
       })),
 
     async listConnections(org: string) {
+      const known = await orgApps(org);
       return (await store.listConnections(org))
-        .filter((r) => apps.has(r.connectorId))
+        .filter((r) => known.has(r.connectorId))
         .map(publicConnection);
     },
 
@@ -576,7 +815,11 @@ export function createService(deps: {
     },
 
     async setConfirmed(org: string, step: string, by: string, on: boolean) {
-      const owner = confirmable.get(step);
+      const owner =
+        confirmable.get(step) ??
+        [...(await orgApps(org)).values()].find(({ connector }) =>
+          [...connector.setup, ...connector.afterConnect].some((s) => s.confirm === step),
+        )?.connector.id;
       if (!owner) throw new InvalidInput(`No setup step ${step} to confirm`);
       await store.setConfirmed(org, step, by, on);
       await logAdmin(org, by, owner, on ? "confirm_step" : "unconfirm_step", step);
@@ -590,7 +833,7 @@ export function createService(deps: {
       fields: Record<string, string>;
       connectedBy: string;
     }) {
-      return save(app(input.connectorId), input);
+      return save(await app(input.organizationId, input.connectorId), input);
     },
 
     // The provider's own sign-in, shared by its apps. Proven before it is stored. Reaching
@@ -887,7 +1130,7 @@ export function createService(deps: {
       connectorId: string,
       { record = true, by }: { record?: boolean; by?: string } = {},
     ) {
-      const target = app(connectorId);
+      const target = await app(org, connectorId);
       const row = await store.getConnection(org, connectorId);
       if (!row) return null;
       const providerRows = row.providerId ? await store.listProviders(org) : [];
@@ -922,7 +1165,7 @@ export function createService(deps: {
 
     // Sites added after connecting, the whole list at once (adding or removing one).
     async setSites(org: string, connectorId: string, raw: string[]) {
-      const { connector, vendor } = app(connectorId);
+      const { connector, vendor } = await app(org, connectorId);
       if (!connector.siteAccess || !vendor.sites)
         throw new InvalidInput(`${connector.name} has no sites to add`);
       const row = await store.getConnection(org, connectorId);
@@ -938,7 +1181,7 @@ export function createService(deps: {
 
     // Whether Microsoft gave the app each added site (or the one asked about), read live.
     async siteAccess(org: string, connectorId: string, only?: string) {
-      const { connector, vendor } = app(connectorId);
+      const { connector, vendor } = await app(org, connectorId);
       if (!connector.siteAccess || !vendor.sites)
         throw new InvalidInput(`${connector.name} has no sites to check`);
       const row = await store.getConnection(org, connectorId);
@@ -959,7 +1202,7 @@ export function createService(deps: {
     // A check of an address no key holds yet is recorded, so lookups of other mailboxes in the
     // tenant leave a trace.
     async agentAccess(org: string, connectorId: string, value: string, by: string) {
-      const { connector, vendor } = app(connectorId);
+      const { connector, vendor } = await app(org, connectorId);
       const access = connector.agentAccess;
       if (!access) throw new InvalidInput(`${connector.name} has no agent address to check`);
       const limit = connector.limits.find((l) => l.id === access.limit)!;
@@ -1030,7 +1273,7 @@ export function createService(deps: {
 
     // The saved ceiling, or null when the app is not connected.
     async setCeiling(org: string, connectorId: string, ceiling: unknown) {
-      const caps = validateCapabilities(app(connectorId).connector, ceiling);
+      const caps = validateCapabilities((await app(org, connectorId)).connector, ceiling);
       return (await store.setCeiling(org, connectorId, caps)) ? caps : null;
     },
 
@@ -1041,7 +1284,7 @@ export function createService(deps: {
       capabilities: unknown,
       limits: unknown,
     ) {
-      const { connector, vendor } = app(connectorId);
+      const { connector, vendor } = await app(org, connectorId);
       const caps = validateCapabilities(connector, capabilities);
       const checked = validateLimits(connector, limits);
       const row = await store.getConnection(org, connectorId);
@@ -1081,7 +1324,7 @@ export function createService(deps: {
     /** A call with the organization's own connection, no agent's (an event poll or a webhook
      *  registration). Null when the app is not connected. */
     async appCall(org: string, connectorId: string, request: VendorRequest) {
-      const target = app(connectorId);
+      const target = await app(org, connectorId);
       const row = await store.getConnection(org, connectorId);
       if (!row || row.status !== "connected") return null;
       const providerRows = row.providerId ? await store.listProviders(org) : [];
@@ -1093,16 +1336,17 @@ export function createService(deps: {
       if (!looksLikeAgentKey(rawKey)) return null;
       const agent = await store.agentByKeyHash(hashAgentKey(rawKey));
       if (!agent || agent.status !== "active") return null;
-      const [grants, connections, providerRows] = await Promise.all([
+      const [grants, connections, providerRows, known] = await Promise.all([
         store.grantsFor(agent.id),
         store.listConnections(agent.organizationId),
         store.listProviders(agent.organizationId),
+        orgApps(agent.organizationId),
       ]);
-      const needsBot = grants.some((g) => apps.get(g.connectorId)?.connector.signsInAs);
+      const needsBot = grants.some((g) => known.get(g.connectorId)?.connector.signsInAs);
       if (needsBot && !deps.bots)
         throw new Error("An app signs in as the agent's bot, but bots are not loaded");
       const bot = needsBot ? await deps.bots!.botForAgent(agent.organizationId, agent.id) : null;
-      const toolsets = sessionToolsets(agent, grants, connections, providerRows, bot);
+      const toolsets = sessionToolsets(known, agent, grants, connections, providerRows, bot);
       const granted = new Set(toolsets.flatMap((t) => [...t.allowed]));
       return {
         agent,
@@ -1111,7 +1355,7 @@ export function createService(deps: {
         // server answers "not found"), so it is recorded here.
         async refuseUngranted(tool: string, args: unknown) {
           if (granted.has(tool)) return;
-          const owner = deps.apps.find((a) => a.toolset.names.includes(tool));
+          const owner = [...known.values()].find((a) => a.toolset.names.includes(tool));
           if (!owner) return;
           await store.audit({
             organizationId: agent.organizationId,
@@ -1130,6 +1374,7 @@ export function createService(deps: {
   };
 
   function sessionToolsets(
+    known: Map<string, App>,
     agent: AgentRow,
     grants: GrantRow[],
     connections: ConnectionRow[],
@@ -1137,7 +1382,7 @@ export function createService(deps: {
     bot: BotRow | null,
   ) {
     return grants.flatMap((grant) => {
-      const target = apps.get(grant.connectorId);
+      const target = known.get(grant.connectorId);
       const row = connections.find((c) => c.connectorId === grant.connectorId);
       if (!target || !row || row.status !== "connected") return [];
       const provider = row.providerId ? providerRows.find((p) => p.id === row.providerId) : null;
@@ -1184,6 +1429,44 @@ export function createService(deps: {
       ];
     });
   }
+}
+
+// The parser's message (z.prettifyError: "✖ problem" lines, each followed by "→ at path") as
+// plain sentences.
+export function plainParseError(message: string): string {
+  const lines = message
+    .replace(/^definition: /, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("→ at ")) out[out.length - 1] += ` (at ${line.slice(5)})`;
+    else out.push(line.replace(/^✖\s*/, ""));
+  }
+  return `This definition does not load: ${out.join("; ")}`;
+}
+
+const shadowed = (id: string) =>
+  `This deployment now has its own app with the id ${id}, so neither is used in this organization. Save this one under another id, then delete it here, which also removes its connection.`;
+
+// How a definition signs in and where it reaches, compared across a replace.
+function signIn(c: Connector): string {
+  const block = c.http ?? c.soap ?? c.odata ?? c.sql;
+  const { tools: _, ...reach } = (block ?? {}) as Record<string, unknown>;
+  return JSON.stringify({
+    fields: c.fields.map((f) => [f.id, Boolean(f.secret), f.options?.map((o) => o.value) ?? null]),
+    accountKey: c.accountKey,
+    reach,
+  });
+}
+
+function changeTarget(change: InternalAppChange): string {
+  if (change.kind === "none") return "not connected";
+  if (change.kind === "disconnect") return `disconnected: ${change.reason}`;
+  return `capabilities ${change.ceiling.join(", ")}${
+    change.removed.length ? `; access removed for agents ${change.removed.join(", ")}` : ""
+  }`;
 }
 
 export type Service = ReturnType<typeof createService>;

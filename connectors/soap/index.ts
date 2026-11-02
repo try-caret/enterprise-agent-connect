@@ -25,8 +25,8 @@ import {
 import {
   answerWithin,
   authHeaders,
+  connectionAddress,
   formValues,
-  guardedFetch,
   MAX_BODY_BYTES,
   paramLimits,
   zodType,
@@ -105,14 +105,22 @@ function failure(status: number, data: unknown): string {
 
 export function soapVendor(connector: Connector, fetchImpl: Fetch = fetch): Vendor {
   const soap = connector.soap!;
-  const endpoint = new URL(soap.endpoint);
-  const safe = guardedFetch([endpoint.origin], fetchImpl, XML_TYPES, "XML, JSON or text");
+  const addressOf = connectionAddress(
+    connector,
+    soap.endpoint,
+    undefined,
+    null,
+    fetchImpl,
+    XML_TYPES,
+    "XML, JSON or text",
+  );
   const ns = Object.entries(soap.namespaces)
     .map(([prefix, uri]) => ` xmlns:${prefix}="${escapeXml(uri)}"`)
     .join("");
 
   // request.body is the Body's content (already escaped), request.headers.soapaction its action.
   const call: Vendor["call"] = async (c, request) => {
+    const { url: endpoint, safe } = addressOf(c);
     const ws = soap.wsSecurity;
     const header = ws
       ? `<soap:Header>${usernameToken(c.config[ws.username], c.secret[ws.password], ws.digest)}</soap:Header>`
@@ -157,6 +165,7 @@ export function soapVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
   return {
     async connect(fields) {
       const { config, secret } = formValues(connector, fields);
+      const endpoint = addressOf({ config }).url;
       const conn: VendorConnection = { config: { host: endpoint.host, ...config }, secret };
       return { ...conn, accountLabel: conn.config[connector.accountKey] ?? endpoint.host };
     },

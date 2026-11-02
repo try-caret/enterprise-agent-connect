@@ -12,8 +12,17 @@ import {
 // kept until a minute before its expires_in and minted again once after a 401. The token is
 // never logged or returned: refusals carry only the vendor's own error text.
 
-// `scope`: for token services that need one, e.g. Microsoft Entra's v2 endpoint.
-type Credentials = { tokenUrl: string; clientId: string; clientSecret: string; scope?: string };
+// `scope`: for token services that need one, e.g. Microsoft Entra's v2 endpoint. `clientAuth`
+// "basic" sends the client id and secret as HTTP Basic (RFC 6749 2.3.1) instead of in the body;
+// `audience`: for token services that ask for one, e.g. Auth0's.
+type Credentials = {
+  tokenUrl: string;
+  clientId: string;
+  clientSecret: string;
+  scope?: string;
+  clientAuth?: "body" | "basic";
+  audience?: string;
+};
 
 // FedEx: { errors: [{ code, message }] }; Dell and most others: { error, error_description }.
 export function vendorError(data: unknown): string {
@@ -38,18 +47,28 @@ export function clientCredentials(name: string, unguarded: Fetch) {
   const tokens = new TokenCache();
   const key = (c: Credentials) =>
     createHash("sha256")
-      .update(`${c.tokenUrl}\n${c.clientId}\n${c.clientSecret}\n${c.scope ?? ""}`)
+      .update(
+        `${c.tokenUrl}\n${c.clientId}\n${c.clientSecret}\n${c.scope ?? ""}\n${c.audience ?? ""}`,
+      )
       .digest("hex");
 
   async function mint(c: Credentials) {
+    const basic = c.clientAuth === "basic";
+    // RFC 6749 2.3.1: each form-encoded before joining.
+    const form = (v: string) => encodeURIComponent(v).replace(/%20/g, "+");
+    const pair = Buffer.from(`${form(c.clientId)}:${form(c.clientSecret)}`).toString("base64");
     const res = await fetchImpl(c.tokenUrl, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+        ...(basic ? { authorization: `Basic ${pair}` } : {}),
+      },
       body: new URLSearchParams({
         grant_type: "client_credentials",
-        client_id: c.clientId,
-        client_secret: c.clientSecret,
+        ...(basic ? {} : { client_id: c.clientId, client_secret: c.clientSecret }),
         ...(c.scope ? { scope: c.scope } : {}),
+        ...(c.audience ? { audience: c.audience } : {}),
       }),
     });
     const raw = await res.text();

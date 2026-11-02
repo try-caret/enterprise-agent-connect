@@ -1,0 +1,249 @@
+{
+  "id": "intercom",
+  "name": "Intercom",
+  "description": "Let agents read client conversations in Intercom, look up the person and company behind them, leave internal notes for your team and assign conversations. If you allow it, they can also reply to clients.",
+  "logo": "/brand/registry/intercom.svg",
+  "identity": "The access token of an app in your Intercom workspace. It acts as the workspace, with the permissions you tick on the app, so keep them to the ones below.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an app for agents",
+      "body": "You need an Intercom admin for this. An app made in your own workspace gets an access token for that workspace straight away.",
+      "link": {
+        "label": "Intercom: authentication",
+        "href": "https://developers.intercom.com/docs/build-an-integration/learn-more/authentication"
+      },
+      "click": [
+        "Open the Intercom Developer Hub (app.intercom.com/a/apps/_/developer-hub) and select New app.",
+        "Name it Agents, pick your workspace, then Create app."
+      ]
+    },
+    {
+      "title": "Set its permissions and copy the token",
+      "body": "Tick only the permissions below, then copy the access token for the form below.",
+      "link": {
+        "label": "Intercom: permissions",
+        "href": "https://developers.intercom.com/docs/build-an-integration/learn-more/authentication/oauth-scopes"
+      },
+      "click": [
+        "In the app, go to Configure, then Authentication, and select Edit.",
+        "Tick only the permissions below, then Save.",
+        "Copy the Access token shown on the same page."
+      ],
+      "copy": ["{scope}"]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "host",
+      "label": "API address",
+      "help": "api.intercom.io, or api.eu.intercom.io or api.au.intercom.io if your workspace is hosted in Europe or Australia.",
+      "placeholder": "api.intercom.io",
+      "secret": false
+    },
+    {
+      "id": "access_token",
+      "label": "Access token",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read conversations",
+      "description": "List and read conversations, read a person's contact record, look up a company (its plan and custom attributes, such as what it is entitled to) and its people, and list your teammates.",
+      "required": true,
+      "note": "Reaches every conversation, person and company in the workspace. Read-only.",
+      "scopes": ["Read conversations", "Read and list users and companies", "Read admins"],
+      "permissions": [],
+      "tools": [
+        "intercom_list_conversations",
+        "intercom_get_conversation",
+        "intercom_get_contact",
+        "intercom_find_company",
+        "intercom_list_company_contacts",
+        "intercom_list_admins"
+      ]
+    },
+    {
+      "id": "triage",
+      "label": "Add notes and assign",
+      "description": "Leave an internal note on a conversation, which clients never see, and assign a conversation to a teammate or team.",
+      "scopes": ["Write conversations"],
+      "permissions": [],
+      "tools": ["intercom_add_note", "intercom_assign_conversation"]
+    },
+    {
+      "id": "reply",
+      "label": "Reply to clients",
+      "description": "Reply to a conversation as a teammate. The client sees the reply.",
+      "destructive": true,
+      "note": "Sends messages to your clients.",
+      "scopes": ["Write conversations"],
+      "permissions": [],
+      "tools": ["intercom_reply"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/me",
+    "label": "Intercom workspace",
+    "show": "app.name"
+  },
+  "revoke": "In the Intercom Developer Hub, open the app, go to Configure, then Authentication, and regenerate the access token, or delete the app. Agents lose access to Intercom at once.",
+  "http": {
+    "baseUrl": "https://{host}",
+    "allowedHosts": ["api.intercom.io", "api.eu.intercom.io", "api.au.intercom.io"],
+    "auth": { "type": "bearer", "token": "access_token" },
+    "headers": { "Intercom-Version": "2.14" },
+    "tools": [
+      {
+        "name": "intercom_list_conversations",
+        "description": "List conversations, most recently updated first.",
+        "method": "GET",
+        "path": "/conversations",
+        "params": {
+          "per_page": { "type": "integer", "description": "Conversations per page, up to 150", "in": "query", "default": 20 },
+          "starting_after": { "type": "string", "description": "The next page's cursor, from the previous answer", "in": "query", "required": false }
+        },
+        "result": {
+          "items": "conversations",
+          "fields": [
+            "id",
+            "title",
+            "state",
+            "open",
+            "created_at",
+            "updated_at",
+            "waiting_since",
+            "admin_assignee_id",
+            "team_assignee_id",
+            "source.author.name",
+            "source.author.email",
+            "source.subject",
+            "contacts.contacts.id",
+            "tags.tags.name"
+          ]
+        },
+        "paging": { "param": "starting_after", "body": "pages.next.starting_after" }
+      },
+      {
+        "name": "intercom_get_conversation",
+        "description": "Read one conversation with its messages, as plain text.",
+        "method": "GET",
+        "path": "/conversations/{conversation_id}",
+        "params": {
+          "conversation_id": { "type": "string", "description": "The conversation id", "in": "path" },
+          "display_as": { "type": "string", "description": "Message format", "in": "query", "enum": ["plaintext"], "default": "plaintext" }
+        },
+        "result": {
+          "fields": [
+            "id",
+            "title",
+            "state",
+            "created_at",
+            "admin_assignee_id",
+            "team_assignee_id",
+            "custom_attributes",
+            "source.author.name",
+            "source.author.email",
+            "source.subject",
+            "source.body",
+            "contacts.contacts.id",
+            "conversation_parts.conversation_parts.part_type",
+            "conversation_parts.conversation_parts.body",
+            "conversation_parts.conversation_parts.created_at",
+            "conversation_parts.conversation_parts.author.name",
+            "conversation_parts.conversation_parts.author.type"
+          ]
+        }
+      },
+      {
+        "name": "intercom_get_contact",
+        "description": "Read one person's contact record: name, email, companies and custom attributes.",
+        "method": "GET",
+        "path": "/contacts/{contact_id}",
+        "params": {
+          "contact_id": { "type": "string", "description": "The contact id (from a conversation's contacts)", "in": "path" }
+        },
+        "result": {
+          "fields": ["id", "role", "name", "email", "phone", "external_id", "custom_attributes", "companies.data.id", "location.country", "last_seen_at"]
+        }
+      },
+      {
+        "name": "intercom_find_company",
+        "description": "Find a company by your own company id or by name: its plan, size and custom attributes, such as what it is entitled to.",
+        "method": "GET",
+        "path": "/companies",
+        "params": {
+          "company_id": { "type": "string", "description": "Your own id for the company", "in": "query", "required": false },
+          "name": { "type": "string", "description": "The company's name", "in": "query", "required": false }
+        }
+      },
+      {
+        "name": "intercom_list_company_contacts",
+        "description": "List the people at a company.",
+        "method": "GET",
+        "path": "/companies/{id}/contacts",
+        "params": {
+          "id": { "type": "string", "description": "Intercom's id for the company (its id field, not company_id)", "in": "path" }
+        },
+        "result": { "items": "data", "fields": ["id", "name", "email", "role"] }
+      },
+      {
+        "name": "intercom_list_admins",
+        "description": "List your teammates (admins), with their ids, emails and whether they are away. Use an id to assign a conversation or to write as that teammate.",
+        "method": "GET",
+        "path": "/admins",
+        "result": { "items": "admins", "fields": ["id", "name", "email", "job_title", "away_mode_enabled", "team_ids"] }
+      },
+      {
+        "name": "intercom_add_note",
+        "description": "Leave an internal note on a conversation. Clients never see notes.",
+        "method": "POST",
+        "path": "/conversations/{conversation_id}/reply",
+        "params": {
+          "conversation_id": { "type": "string", "description": "The conversation id", "in": "path" },
+          "admin_id": { "type": "string", "description": "The teammate the note is from", "in": "body" },
+          "body": { "type": "string", "description": "The note, as text or simple HTML", "in": "body" },
+          "message_type": { "type": "string", "description": "Always a note", "in": "body", "enum": ["note"], "default": "note" },
+          "type": { "type": "string", "description": "Always from a teammate", "in": "body", "enum": ["admin"], "default": "admin" }
+        },
+        "result": { "fields": ["id", "state", "admin_assignee_id"] }
+      },
+      {
+        "name": "intercom_assign_conversation",
+        "description": "Assign a conversation to a teammate or a team, with an optional note.",
+        "method": "POST",
+        "path": "/conversations/{conversation_id}/parts",
+        "params": {
+          "conversation_id": { "type": "string", "description": "The conversation id", "in": "path" },
+          "admin_id": { "type": "string", "description": "The teammate doing the assigning", "in": "body" },
+          "assignee_id": { "type": "string", "description": "The teammate or team to assign it to", "in": "body" },
+          "type": { "type": "string", "description": "Whether assignee_id is a teammate or a team", "in": "body", "enum": ["admin", "team"] },
+          "body": { "type": "string", "description": "An optional note with the assignment", "in": "body", "required": false },
+          "message_type": { "type": "string", "description": "Always an assignment", "in": "body", "enum": ["assignment"], "default": "assignment" }
+        },
+        "result": { "fields": ["id", "state", "admin_assignee_id", "team_assignee_id"] }
+      },
+      {
+        "name": "intercom_reply",
+        "description": "Reply to a conversation as a teammate. The client sees the reply.",
+        "method": "POST",
+        "path": "/conversations/{conversation_id}/reply",
+        "destructive": true,
+        "params": {
+          "conversation_id": { "type": "string", "description": "The conversation id", "in": "path" },
+          "admin_id": { "type": "string", "description": "The teammate the reply is from", "in": "body" },
+          "body": { "type": "string", "description": "The reply, as text or simple HTML", "in": "body" },
+          "message_type": { "type": "string", "description": "Always a reply", "in": "body", "enum": ["comment"], "default": "comment" },
+          "type": { "type": "string", "description": "Always from a teammate", "in": "body", "enum": ["admin"], "default": "admin" }
+        },
+        "result": { "fields": ["id", "state", "admin_assignee_id"] }
+      }
+    ]
+  }
+}

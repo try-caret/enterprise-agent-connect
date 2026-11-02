@@ -425,6 +425,519 @@
         }
       }
     },
+    "/orgs/{org}/connectors": {
+      "get": {
+        "operationId": "orgConnectors",
+        "summary": "The apps the organization can use: the deployment's and its own internal apps",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Connector"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/internal-apps": {
+      "get": {
+        "operationId": "internalApps",
+        "summary": "The organization's own apps, as saved",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InternalApp"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/internal-apps/{app}": {
+      "get": {
+        "operationId": "internalApp",
+        "summary": "One of the organization's own apps, as saved",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalApp"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "saveInternalApp",
+        "summary": "Adds or replaces one of the organization's own apps; a replace may cut or remove its connection and agents' access",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "definition": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {},
+                    "description": "A connector.json with an http, soap, odata or sql block, as written (docs/http-connector.md)"
+                  },
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "definition",
+                  "by"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalAppSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteInternalApp",
+        "summary": "Removes one of the organization's own apps, its connection and every agent's access to it",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "by"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal-apps/draft": {
+      "post": {
+        "operationId": "draftInternalApp",
+        "summary": "Drafts an internal app's definition from an OpenAPI 3.x spec (JSON)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spec": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9-]+$"
+                  },
+                  "operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "spec",
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalAppDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/providers": {
       "get": {
         "operationId": "providers",
@@ -8199,8 +8712,15 @@
             "type": "object",
             "properties": {
               "baseUrl": {
-                "type": "string",
-                "format": "uri"
+                "type": "string"
+              },
+              "allowedHosts": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(\\*\\.)?[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$"
+                }
               },
               "auth": {
                 "oneOf": [
@@ -8280,8 +8800,7 @@
                         "const": "oauth2"
                       },
                       "tokenUrl": {
-                        "type": "string",
-                        "format": "uri"
+                        "type": "string"
                       },
                       "clientId": {
                         "type": "string",
@@ -8294,6 +8813,18 @@
                       "scope": {
                         "type": "string",
                         "pattern": "^[\\x21-\\x7e]+( [\\x21-\\x7e]+)*$"
+                      },
+                      "clientAuth": {
+                        "type": "string",
+                        "enum": [
+                          "body",
+                          "basic"
+                        ]
+                      },
+                      "audience": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       }
                     },
                     "required": [
@@ -8339,6 +8870,18 @@
                 "additionalProperties": {
                   "type": "string",
                   "pattern": "^[\\x20-\\x7E]*$"
+                }
+              },
+              "fieldHeaders": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9-]+$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
                 }
               },
               "tools": {
@@ -8403,7 +8946,7 @@
                           },
                           "name": {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9_.\\-[\\]]+$"
+                            "pattern": "^[A-Za-z0-9_.:\\-[\\]]+$"
                           },
                           "required": {
                             "default": true,
@@ -8456,6 +8999,10 @@
                             "maxLength": 3
                           },
                           "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "field": {
                             "type": "string",
                             "pattern": "^[a-z][a-z0-9_]*$"
                           }
@@ -8593,6 +9140,7 @@
               "baseUrl",
               "auth",
               "headers",
+              "fieldHeaders",
               "tools",
               "allowInsecureHttp"
             ],
@@ -8602,8 +9150,7 @@
             "type": "object",
             "properties": {
               "endpoint": {
-                "type": "string",
-                "format": "uri"
+                "type": "string"
               },
               "version": {
                 "default": "1.1",
@@ -8894,8 +9441,15 @@
             "type": "object",
             "properties": {
               "serviceRoot": {
-                "type": "string",
-                "format": "uri"
+                "type": "string"
+              },
+              "allowedHosts": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(\\*\\.)?[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$"
+                }
               },
               "version": {
                 "type": "string",
@@ -8982,8 +9536,7 @@
                         "const": "oauth2"
                       },
                       "tokenUrl": {
-                        "type": "string",
-                        "format": "uri"
+                        "type": "string"
                       },
                       "clientId": {
                         "type": "string",
@@ -8996,6 +9549,18 @@
                       "scope": {
                         "type": "string",
                         "pattern": "^[\\x21-\\x7e]+( [\\x21-\\x7e]+)*$"
+                      },
+                      "clientAuth": {
+                        "type": "string",
+                        "enum": [
+                          "body",
+                          "basic"
+                        ]
+                      },
+                      "audience": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       }
                     },
                     "required": [
@@ -10690,6 +11255,118 @@
           "id",
           "name",
           "detail"
+        ],
+        "additionalProperties": false
+      },
+      "InternalApp": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "organizationId": {
+            "type": "string"
+          },
+          "definition": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "A connector.json with an http, soap, odata or sql block, as written (docs/http-connector.md)"
+          },
+          "problem": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO 8601, UTC"
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "ISO 8601, UTC"
+          }
+        },
+        "required": [
+          "id",
+          "organizationId",
+          "definition",
+          "problem",
+          "createdBy",
+          "createdAt",
+          "updatedBy",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "InternalAppDraft": {
+        "type": "object",
+        "properties": {
+          "definition": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "A connector.json with an http, soap, odata or sql block, as written (docs/http-connector.md)"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "problem": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "definition",
+          "notes",
+          "problem"
+        ],
+        "additionalProperties": false
+      },
+      "InternalAppSaved": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "$ref": "#/components/schemas/InternalApp"
+          },
+          "connector": {
+            "$ref": "#/components/schemas/Connector"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "disconnected": {
+            "type": "boolean"
+          },
+          "grantsRemoved": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "app",
+          "connector",
+          "created",
+          "disconnected",
+          "grantsRemoved"
         ],
         "additionalProperties": false
       },

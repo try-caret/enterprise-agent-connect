@@ -41,6 +41,7 @@ const TABLES = [
   "app_events",
   "event_triggers",
   "event_runs",
+  "internal_apps",
 ] as const;
 
 export type Tables = Record<(typeof TABLES)[number], postgres.Helper<string, []>>;
@@ -118,6 +119,29 @@ export type GrantRow = {
   updatedAt: string;
 };
 
+// An organization's own app: its connector.json as the admin gave it.
+export type InternalAppRow = {
+  id: string;
+  organizationId: string;
+  definition: Record<string, unknown>;
+  createdBy: string;
+  createdAt: string;
+  updatedBy: string;
+  updatedAt: string;
+};
+
+// What replacing an internal app's definition does to its connection: nothing (not
+// connected), keep it cut to what the new definition still has, or remove it with its grants.
+export type InternalAppChange =
+  | { kind: "none" }
+  | { kind: "disconnect"; reason: string }
+  | {
+      kind: "keep";
+      ceiling: string[];
+      grants: { agentId: string; capabilities: string[]; limits: Limits }[];
+      removed: string[];
+    };
+
 // Another admin action changed the provider connection between reading and saving it.
 export class ProviderChanged extends ConnectError {
   constructor() {
@@ -160,6 +184,10 @@ const AGENT_COLUMNS = `id::text, organization_id::text as "organizationId", name
 
 const GRANT_COLUMNS = `g.agent_id::text as "agentId", g.connector_id as "connectorId",
   g.capabilities, g.limits, ${iso("g.updated_at")} as "updatedAt"`;
+
+const INTERNAL_APP_COLUMNS = `id, organization_id::text as "organizationId", definition,
+  created_by as "createdBy", ${iso("created_at")} as "createdAt", updated_by as "updatedBy",
+  ${iso("updated_at")} as "updatedAt"`;
 
 const ONE_ORG_PER_TENANT = "agent_connect_providers_one_org_per_tenant";
 
@@ -637,6 +665,103 @@ export function createStore(sql: Sql, schema: string) {
         await sql`
           delete from ${t.confirmed}
            where organization_id = ${org} and step = ${step}`;
+    },
+
+    async listInternalApps(org: string): Promise<InternalAppRow[]> {
+      return sql.unsafe(
+        `select ${INTERNAL_APP_COLUMNS} from ${t.internal_apps}
+          where organization_id = $1 order by id`,
+        [org],
+      );
+    },
+
+    async getInternalApp(org: string, id: string): Promise<InternalAppRow | null> {
+      const [row] = await sql.unsafe<InternalAppRow[]>(
+        `select ${INTERNAL_APP_COLUMNS} from ${t.internal_apps}
+          where organization_id = $1 and id = $2`,
+        [org, id],
+      );
+      return row ?? null;
+    },
+
+    /** Creates or replaces the definition, and applies what `plan` decides for its connection
+     *  and grants, read and changed under locks in the same transaction, with its audit row. */
+    async saveInternalApp(
+      input: { organizationId: string; id: string; definition: unknown; by: string },
+      plan: (
+        previous: Record<string, unknown> | null,
+        connection: ConnectionRow | null,
+        grants: GrantRow[],
+      ) => InternalAppChange,
+      audit: (created: boolean, change: InternalAppChange) => AuditEntry,
+    ): Promise<{ row: InternalAppRow; created: boolean; change: InternalAppChange }> {
+      const org = input.organizationId;
+      return sql.begin(async (tx) => {
+        const [previous] = await tx`
+          select definition from ${t.internal_apps}
+           where organization_id = ${org} and id = ${input.id} for update`;
+        // Locked, so a grant saved meanwhile (setGrant shares this lock) lands before or after.
+        const [connection] = await tx.unsafe<ConnectionRow[]>(
+          `select ${CONNECTION_COLUMNS} from ${t.connections}
+            where organization_id = $1 and connector_id = $2 for update`,
+          [org, input.id],
+        );
+        const grants: GrantRow[] = connection
+          ? await tx.unsafe(
+              `select ${GRANT_COLUMNS} from ${t.grants} g join ${t.agents} a on a.id = g.agent_id
+                where a.organization_id = $1 and g.connector_id = $2`,
+              [org, input.id],
+            )
+          : [];
+        const change = plan(previous?.definition ?? null, connection ?? null, grants);
+        if (change.kind === "disconnect") {
+          await clearGrants(t, tx, org, input.id);
+          await tx`
+            delete from ${t.connections}
+             where organization_id = ${org} and connector_id = ${input.id}`;
+        } else if (change.kind === "keep") {
+          await tx`
+            update ${t.connections} set capabilities = ${tx.array(change.ceiling)}
+             where organization_id = ${org} and connector_id = ${input.id}`;
+          for (const g of change.grants)
+            await tx`
+              update ${t.grants}
+                 set capabilities = ${tx.array(g.capabilities)}, limits = ${tx.json(g.limits)},
+                     updated_at = now()
+               where agent_id = ${g.agentId} and connector_id = ${input.id}`;
+          if (change.removed.length)
+            await tx`
+              delete from ${t.grants}
+               where agent_id = any(${tx.array(change.removed)}::uuid[])
+                 and connector_id = ${input.id}`;
+        }
+        const [row] = await tx<InternalAppRow[]>`
+          insert into ${t.internal_apps}
+            (organization_id, id, definition, created_by, updated_by)
+          values (${org}, ${input.id}, ${tx.json(input.definition as never)}, ${input.by},
+                  ${input.by})
+          on conflict (organization_id, id) do update set
+            definition = excluded.definition, updated_by = excluded.updated_by, updated_at = now()
+          returning ${tx.unsafe(INTERNAL_APP_COLUMNS)}`;
+        const created = !previous;
+        await insertAudit(t, tx, audit(created, change));
+        return { row, created, change };
+      });
+    },
+
+    /** Removes the definition, its connection and every grant of it, with its audit row. */
+    async deleteInternalApp(org: string, id: string, audit: AuditEntry): Promise<boolean> {
+      return sql.begin(async (tx) => {
+        const rows = await tx`
+          delete from ${t.internal_apps} where organization_id = ${org} and id = ${id}
+          returning id`;
+        if (!rows.length) return false;
+        await clearGrants(t, tx, org, id);
+        await tx`
+          delete from ${t.connections} where organization_id = ${org} and connector_id = ${id}`;
+        await insertAudit(t, tx, audit);
+        return true;
+      });
     },
 
     async recentAudit(

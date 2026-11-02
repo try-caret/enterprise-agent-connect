@@ -4,7 +4,7 @@ import { PARAMS, routes, type RouteSpec, type Routes } from "./api.js";
 import { brand } from "../../connector-kit/src/branding.js";
 import { openapi } from "./openapi.js";
 import { hashAgentKey, newAgentKey, tokensEqual } from "./secrets.js";
-import { InvalidInput, type Service } from "./service.js";
+import { InvalidInput, plainParseError, type Service } from "./service.js";
 import type { Store } from "./store.js";
 import { argumentsTarget, type ToolContext, type Toolset } from "../../connector-kit/src/common.js";
 import type { EventsAdmin } from "./events/admin.js";
@@ -12,6 +12,8 @@ import type { EventsRuntime } from "./events/runtime.js";
 import type { TeamsAdmin } from "./teams/admin.js";
 import { readCapped, type TeamsRuntime } from "./teams/runtime.js";
 import { ConnectError } from "../../connector-kit/src/types.js";
+import { parseConnector } from "../../connector-kit/src/connector.js";
+import { draftConnector } from "../../../connectors/http/openapi.js";
 
 const BASE = "/agent-connect";
 
@@ -186,6 +188,29 @@ export function createApp(deps: {
       ok(await store.ensureOrganization(org, body.name)),
     branding: async () => ok(brand()),
     connectors: async () => ok(service.connectors()),
+    orgConnectors: async ({ params: [org] }) => ok(await service.connectorsFor(org)),
+    internalApps: async ({ params: [org] }) => ok(await service.listInternalApps(org)),
+    internalApp: async ({ params: [org, id] }) => some(await service.getInternalApp(org, id)),
+    saveInternalApp: async ({ params: [org, id], body }) =>
+      ok(await service.saveInternalApp(org, id, body.definition, body.by)),
+    deleteInternalApp: async ({ params: [org, id], body }) =>
+      found(await service.deleteInternalApp(org, id, body.by)),
+    draftInternalApp: async ({ body }) => {
+      let draft;
+      try {
+        draft = draftConnector(body.spec, body);
+      } catch (error) {
+        // The spec is the admin's: what the drafter could not read is theirs to fix.
+        throw new InvalidInput((error as Error).message);
+      }
+      let problem: string | null = null;
+      try {
+        parseConnector(draft.connector, "definition");
+      } catch (error) {
+        problem = plainParseError((error as Error).message);
+      }
+      return ok({ definition: draft.connector, notes: draft.notes, problem });
+    },
     providers: async () => ok(service.providers()),
     providerConnections: async ({ params: [org] }) => ok(await service.listProviders(org)),
     connectProvider: async ({ params: [org, provider], body }) =>
