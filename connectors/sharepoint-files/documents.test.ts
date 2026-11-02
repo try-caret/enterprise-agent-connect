@@ -5,7 +5,7 @@ import { DOMParser } from "@xmldom/xmldom";
 import { strToU8, unzipSync, zipSync, type Zippable } from "fflate";
 import { documentTools, MAX_ANSWER_CHARS, pieces } from "./documents.ts";
 import { fillDocx, readDocx } from "./docx.ts";
-import { openZip, W } from "./ooxml.ts";
+import { openZip, shownPart, W } from "./ooxml.ts";
 import { readPdf } from "./pdf.ts";
 import { liveParses, parsePids, sandboxed, sibling } from "./sandbox.ts";
 import { fork, spawn } from "node:child_process";
@@ -131,7 +131,7 @@ function pdfBomb(mb: number): Uint8Array {
 }
 
 // Sets an entry's sizes in the zip's central directory (where fflate reads them).
-function lie(zip: Uint8Array, name: string, sizes: { size?: number; originalSize?: number }) {
+function lie(zip: Uint8Array, name: string, sizes: { size?: number; originalSize?: number; crc?: number }) {
   const out = zip.slice();
   const view = new DataView(out.buffer);
   for (let i = 0; i + 46 < out.length; i++) {
@@ -140,6 +140,7 @@ function lie(zip: Uint8Array, name: string, sizes: { size?: number; originalSize
     if (Buffer.from(out.subarray(i + 46, i + 46 + n)).toString() !== name) continue;
     if (sizes.size !== undefined) view.setUint32(i + 20, sizes.size, true);
     if (sizes.originalSize !== undefined) view.setUint32(i + 24, sizes.originalSize, true);
+    if (sizes.crc !== undefined) view.setUint32(i + 16, sizes.crc, true);
     return out;
   }
   throw new Error(`no ${name}`);
@@ -1033,6 +1034,108 @@ test("review: file-controlled text in a refusal is cut short", async () => {
   assert.ok(res.text.length < 400, `${res.text.length}: ${res.text.slice(0, 100)}`);
 });
 
+// Every copy of the part name `from` in a zip (local header and directory) renamed `to`.
+function rename(zip: Uint8Array, from: string, to: string): Uint8Array {
+  assert.equal(Buffer.byteLength(from), Buffer.byteLength(to));
+  const out = Buffer.from(zip);
+  const [a, b] = [Buffer.from(from), Buffer.from(to)];
+  let n = 0;
+  for (let at = out.indexOf(a); at >= 0; at = out.indexOf(a, at + 1), n++) b.copy(out, at);
+  assert.equal(n, 2, `${from} found ${n} times`);
+  return new Uint8Array(out);
+}
+
+// What the agent and the audit row get when a file is refused: never the file's own text.
+function quotesNothing(s: ReturnType<typeof setup>, res: { isError: boolean; text: string }, why: RegExp) {
+  assert.equal(res.isError, true, res.text);
+  assert.match(res.text, why);
+  const reason = s.audit.at(-1)!.reason!;
+  assert.equal(reason, res.text);
+  assert.doesNotMatch(reason, /LEAKMARKER|[\r\n"<>&]/, reason);
+}
+
+const readIn = (bytes: Uint8Array) => {
+  const s = setup({ files: { F1: { item: item("F1", "f.docx"), bytes } } });
+  return { s, res: s.run("document_read", { site: SITE, item_id: "F1" }) };
+};
+const fillIn = (bytes: Uint8Array) => {
+  const s = setup({ files: { TPL: { item: item("TPL", "t.docx"), bytes } } });
+  return { s, res: fill(s, { fields: {} }) };
+};
+
+test("a refusal never quotes a malformed part: its tags, attributes, entities or the parser's message", async () => {
+  for (const xml of [
+    `<w:document ${NS}><w:body><w:p><LEAKMARKER></w:p></w:body></w:document>`,
+    `<w:document ${NS}><w:body>&LEAKMARKER;</w:body></w:document>`,
+    `<w:document ${NS}><w:body a=LEAKMARKER/></w:document>`,
+    `<w:document ${NS}><w:body LEAKMARKER/></w:document>`,
+    `<w:document ${NS}><w:body><w:p>LEAKMARKER <</w:p></w:body></w:document>`,
+  ]) {
+    for (const [where, bytes] of [
+      ["document", docx("", { "word/document.xml": xml })],
+      ["header", docx(p("x"), { "word/header1.xml": xml.replaceAll("w:document", "w:hdr") })],
+    ] as const) {
+      for (const go of [readIn, fillIn]) {
+        if (go === fillIn && where === "header") continue;
+        const { s, res } = go(bytes);
+        quotesNothing(s, await res, /not well-formed XML/);
+        assert.equal(s.uploads.length, 0);
+      }
+    }
+  }
+});
+
+test("a refusal names a part only by Word's own names, never the name the file gives it", async () => {
+  const odd = "customXml/x\nLEAKMARKER\".xml";
+  const base = () => docx(p("x"), { [odd]: "<a/>" });
+  // Its checksum is wrong, its size is a lie, or it is in the zip twice.
+  for (const [bytes, why] of [
+    [lie(base(), odd, { crc: 1 }), /a part does not match its checksum/],
+    [lie(base(), odd, { originalSize: 15 }), /disagrees with a part/],
+  ] as const) {
+    const { s, res } = fillIn(bytes);
+    quotesNothing(s, await res, why);
+  }
+  const twice = rename(docx(p("x"), { [odd]: "<a/>", [odd.replace("x", "y")]: "<b/>" }), odd.replace("x", "y"), odd);
+  for (const go of [readIn, fillIn]) {
+    const { s, res } = go(twice);
+    quotesNothing(s, await res, /holds one part twice/);
+  }
+  // Word's own name is still given, so the refusal says which part.
+  const { s, res } = fillIn(lie(docx(p("x")), "word/styles.xml", { crc: 1 }));
+  quotesNothing(s, await res, /word\/styles\.xml does not match its checksum/);
+});
+
+test("shownPart passes Word's own part names and nothing else", () => {
+  for (const name of [
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "docProps/core.xml",
+    "word/document.xml",
+    "word/_rels/document.xml.rels",
+    "word/header12.xml",
+    "word/footer.xml",
+    "word/theme/theme1.xml",
+    "word/media/image3.png",
+    "customXml/itemProps1.xml",
+    "customXml/_rels/item1.xml.rels",
+  ])
+    assert.equal(shownPart(name), name);
+  for (const name of [
+    "word/LEAKMARKER.xml",
+    "word/document.xml\n",
+    "word/document.xml\nLEAKMARKER",
+    "word/header1.xml\"",
+    "word/media/image1.png LEAKMARKER",
+    "../word/document.xml",
+    "/word/document.xml",
+    "Word/document.xml",
+    "word/document.xml.LEAKMARKER",
+    "",
+  ])
+    assert.equal(shownPart(name), "a part", JSON.stringify(name));
+});
+
 // ---------------------------------------------------------------------------------------------
 // Second review (2026-11-01): probes p6 to p10
 
@@ -1188,6 +1291,32 @@ test("an answer of the wrong shape or a huge one is refused, never believed", as
   assert.deepEqual(await sandboxed("pdf", ok, {}, {}), { fine: true });
   assert.equal(liveParses(), 0);
   assert.deepEqual(parsePids(), []);
+});
+
+test("a parse process that answers twice is refused, never believed, and stopped at once", async () => {
+  const host = parser(
+    "twice-host.mjs",
+    `process.once("message", () => {
+       process.send({ ok: true, value: { answer: "first" } });
+       process.send({ ok: true, value: { answer: "second" } });
+       setInterval(() => {}, 1_000);
+     });\n`,
+  );
+  const started = Date.now();
+  const call = sandboxed("pdf", LOOP, {}, { timeoutMs: 10_000 }, "unknown", host);
+  await new Promise((done) => setImmediate(done));
+  const [pid] = parsePids();
+  assert.ok(pid, "the stand-in parse process started");
+  await assert.rejects(call, (e: Error) => e.message === "That PDF could not be read");
+  assert.ok(Date.now() - started < 5_000, `stopped at the second answer, not by the clock: ${Date.now() - started} ms`);
+  assert.ok(!alive(pid), "the parse process is gone");
+  assert.equal(liveParses(), 0);
+});
+
+test("a parse process's refusal reaches the caller as one line", async () => {
+  const forged = parser("forged-denied.mjs",
+    'import { parentPort } from "node:worker_threads";\nparentPort.postMessage({ ok: false, denied: "Refused\\r\\n[agent-connect] forged\\u2028line\\u202Ereversed\\u200Bjoined" });\n');
+  await assert.rejects(sandboxed("pdf", forged, {}, {}), (e: Error) => e.message === "Refused [agent-connect] forged line reversed joined");
 });
 
 // ---------------------------------------------------------------------------------------------
