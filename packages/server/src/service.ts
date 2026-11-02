@@ -661,13 +661,25 @@ export function createService(deps: {
         });
         continue;
       }
-      // {name} in a probe path is the connection's config value, e.g. the signed-in user's id.
-      const path = p.path.replace(/\{([A-Za-z_]+)\}/g, (_, name: string) => {
+      // {name} in a probe path, or as a whole string value of its body, is the connection's
+      // config value, e.g. the signed-in user's id.
+      const config = (name: string) => {
         const value = conn.config[name];
         if (!value) throw new Error(`${connector.id} probe needs config ${name}`);
-        return encodeURIComponent(value);
-      });
-      const res = await vendor.call(conn, { method: p.method, path, body: p.body });
+        return value;
+      };
+      const path = p.path.replace(/\{([A-Za-z_]+)\}/g, (_, name: string) =>
+        encodeURIComponent(config(name)),
+      );
+      const body =
+        p.body &&
+        Object.fromEntries(
+          Object.entries(p.body).map(([k, v]) => {
+            const name = typeof v === "string" ? /^\{([A-Za-z_]+)\}$/.exec(v)?.[1] : undefined;
+            return [k, name ? config(name) : v];
+          }),
+        );
+      const res = await vendor.call(conn, { method: p.method, path, body });
       if (res.status < 200 || res.status >= 300)
         throw new ConnectError(`${p.label}: ${connector.name} answered ${res.status}`);
       const values = pickDisplay(res.data, p.show, p.match);

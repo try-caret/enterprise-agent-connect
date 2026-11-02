@@ -196,6 +196,17 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     conn: { config: { host: "api.lusha.com" }, secret: { api_key: "k" } },
     request: { method: "GET", path: "/v3/account/usage" },
   },
+  ironclad: {
+    conn: {
+      config: { host: "ironcladapp.com", client_id: "i", user_email: "a@example.com" },
+      secret: { client_secret: "s" },
+    },
+    request: { method: "GET", path: "/workflows" },
+  },
+  onestream: {
+    conn: { config: { host: "acme.onestreamcloud.com" }, secret: { token: "t" } },
+    request: { method: "POST", path: "/DataProvider/GetAdoDataSetForAdapter", body: {} },
+  },
 };
 for (const id of [
   "outlook-mail",

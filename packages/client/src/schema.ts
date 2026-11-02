@@ -1349,7 +1349,6 @@ export interface components {
                 } | {
                     /** @constant */
                     type: "oauth2";
-                    /** Format: uri */
                     tokenUrl: string;
                     clientId: string;
                     clientSecret: string;
@@ -1394,6 +1393,7 @@ export interface components {
                             items?: "string" | "number" | "integer" | "boolean";
                             join?: string;
                             limit?: string;
+                            field?: string;
                         };
                     };
                     /** @default false */
@@ -1518,7 +1518,6 @@ export interface components {
                 } | {
                     /** @constant */
                     type: "oauth2";
-                    /** Format: uri */
                     tokenUrl: string;
                     clientId: string;
                     clientSecret: string;

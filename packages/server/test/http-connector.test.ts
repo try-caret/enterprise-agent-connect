@@ -284,6 +284,75 @@ test("fieldHeaders send a form field as a header, never over the auth header", a
     assert.throws(() => orders({ fieldHeaders }, { fields: fieldsWith }));
 });
 
+test("a field param is filled from the connection, and the agent cannot send it", async () => {
+  const site = { id: "site", label: "Site", secret: false };
+  const withSite = (param: Record<string, unknown>, fields = [...example.fields, site]) =>
+    orders(
+      {
+        tools: example.http.tools.map((t: { name: string; params: object }) =>
+          t.name === "orders_add_note" ? { ...t, params: { ...t.params, site: param } } : t,
+        ),
+      },
+      { fields },
+    );
+  const param = { type: "string", description: "Site", in: "body", name: "Site", field: "site" };
+  respond = ok({ id: "1" });
+  seen.length = 0;
+  await run(withSite(param), "orders_add_note", { id: "1", text: "hi" }, { config: { site: "s1" } });
+  assert.deepEqual(JSON.parse(seen[0].body), { text: "hi", Site: "s1" });
+  await assert.rejects(
+    run(withSite(param), "orders_add_note", { id: "1", text: "hi", site: "s2" }, { config: { site: "s1" } }),
+  );
+  assert.throws(() => withSite({ ...param, limit: "customers" }), /field param/);
+  assert.throws(() => withSite(param, [...example.fields, { ...site, secret: true }]));
+});
+
+test("a tokenUrl {field} is filled per connection and held to allowedHosts", async () => {
+  const fields = [
+    { id: "site", label: "Site", secret: false },
+    { id: "client_id", label: "Client ID", secret: false },
+    { id: "client_secret", label: "Client secret", secret: true },
+  ];
+  const auth = {
+    type: "oauth2",
+    tokenUrl: "https://{site}/token",
+    clientId: "client_id",
+    clientSecret: "client_secret",
+  };
+  const connector = orders(
+    { baseUrl: "https://{site}/api", allowedHosts: ["*.example.com"], auth },
+    { fields },
+  );
+  const urls: string[] = [];
+  const vendor = httpVendor(connector, (async (input: string | URL) => {
+    urls.push(String(input));
+    return Response.json({ access_token: "t", expires_in: 3600 });
+  }) as typeof fetch);
+  await vendor.connect({ site: "eu.example.com", client_id: "i", client_secret: "s" });
+  assert.deepEqual(urls, ["https://eu.example.com/token"]);
+  await assert.rejects(
+    vendor.connect({ site: "evil.test", client_id: "i", client_secret: "s" }),
+    /not an address this app may use/,
+  );
+  assert.throws(() => orders({ baseUrl: "https://{site}/api", auth }, { fields: fields.slice(1) }));
+  // A token host of its own field is held to allowedHosts too, not only through baseUrl's.
+  const split = httpVendor(
+    orders(
+      {
+        baseUrl: "https://{site}/api",
+        allowedHosts: ["*.example.com"],
+        auth: { ...auth, tokenUrl: "https://{login}/token" },
+      },
+      { fields: [...fields, { id: "login", label: "Login", secret: false }] },
+    ),
+    (async () => assert.fail("no request leaves")) as typeof fetch,
+  );
+  await assert.rejects(
+    split.connect({ site: "eu.example.com", login: "evil.test", client_id: "i", client_secret: "s" }),
+    /evil\.test is not an address this app may use/,
+  );
+});
+
 test("path params are encoded and cannot climb out of the path", async () => {
   respond = ok({ id: "x" });
   seen.length = 0;

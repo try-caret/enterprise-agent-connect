@@ -8800,8 +8800,7 @@
                         "const": "oauth2"
                       },
                       "tokenUrl": {
-                        "type": "string",
-                        "format": "uri"
+                        "type": "string"
                       },
                       "clientId": {
                         "type": "string",
@@ -9000,6 +8999,10 @@
                             "maxLength": 3
                           },
                           "limit": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "field": {
                             "type": "string",
                             "pattern": "^[a-z][a-z0-9_]*$"
                           }
@@ -9533,8 +9536,7 @@
                         "const": "oauth2"
                       },
                       "tokenUrl": {
-                        "type": "string",
-                        "format": "uri"
+                        "type": "string"
                       },
                       "clientId": {
                         "type": "string",

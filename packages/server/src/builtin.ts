@@ -76,4 +76,6 @@ export const builtinConnectors: BuiltinModule[] = [
   describedApp("wordpress"),
   lusha,
   describedApp("churnzero", odataConnector),
+  describedApp("ironclad"),
+  describedApp("onestream"),
 ];
