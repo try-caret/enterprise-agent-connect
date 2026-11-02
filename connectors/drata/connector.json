@@ -1,0 +1,378 @@
+{
+  "id": "drata",
+  "name": "Drata",
+  "description": "Let agents read your compliance program in Drata: controls, evidence, monitoring tests and what is failing, policies and vendor security reviews. For audit evidence packs and security review drafts.",
+  "logo": "/brand/registry/drata.svg",
+  "identity": "A Drata API key with read access only.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a read-only API key",
+      "body": "Give the key read access only. Choose Custom and tick only the read permissions below, or All read. Drata shows the full key once, so copy it for the form below. You can also limit the key to your deployment's outbound IP addresses.",
+      "link": {
+        "label": "Drata: create an API key",
+        "href": "https://help.drata.com/en/articles/6695964"
+      },
+      "click": [
+        "In Drata, select your account at the bottom left, then Settings.",
+        "Select API Keys, then Create API Key.",
+        "Enter a name and an expiration date (12 months is the default).",
+        "Under Access, choose Custom and select: Workspaces: List Workspaces, Company Settings: Get Company Settings, Controls: List Controls, Controls: Get Control, Evidence Library: List Evidence, Monitoring: List Monitors, Monitoring: Get Monitor, Policies: List Policies, Vendors: List Vendors.",
+        "Create the key and copy it."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "api_host",
+      "label": "API address",
+      "help": "Where your Drata account is hosted: public-api.drata.com (US), public-api.eu.drata.com (EU) or public-api.apac.drata.com (Asia Pacific).",
+      "placeholder": "public-api.drata.com",
+      "secret": false
+    },
+    {
+      "id": "api_key",
+      "label": "API key",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read compliance program",
+      "description": "List workspaces, controls and their evidence, monitoring tests and the resources failing them, and published policies.",
+      "required": true,
+      "note": "Reaches every workspace unless you keep an agent to chosen workspaces. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "drata_list_workspaces",
+        "drata_list_controls",
+        "drata_get_control",
+        "drata_list_evidence",
+        "drata_list_monitoring_tests",
+        "drata_list_test_failures",
+        "drata_list_policies"
+      ]
+    },
+    {
+      "id": "read_vendor_reviews",
+      "label": "Read vendor security reviews",
+      "description": "List security reviews across your vendors: status, decision, deadline and reviewer.",
+      "note": "Needs Drata's third-party risk management plan. Vendor reviews are not kept to workspaces.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["drata_list_vendor_reviews"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "workspaces",
+      "label": "Workspaces",
+      "help": "Optional: only these Drata workspaces, by their numeric id (shown under Drata workspaces after connecting). Leave empty for every workspace.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,20}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/company",
+    "label": "Drata company",
+    "show": "name"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/workspaces",
+    "label": "Drata workspaces",
+    "show": "data[].id",
+    "name": "data[].name"
+  },
+  "revoke": "In Drata, go to Settings, then API Keys, and revoke the key. Agents lose access to Drata at once.",
+  "http": {
+    "baseUrl": "https://{api_host}/public/v2",
+    "allowedHosts": ["public-api.drata.com", "public-api.eu.drata.com", "public-api.apac.drata.com"],
+    "auth": { "type": "bearer", "token": "api_key" },
+    "tools": [
+      {
+        "name": "drata_list_workspaces",
+        "description": "List the Drata workspaces and the frameworks each covers.",
+        "method": "GET",
+        "path": "/workspaces",
+        "params": {
+          "cursor": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": { "items": "data", "fields": ["id", "name", "description", "primary", "frameworks.name"] },
+        "paging": { "param": "cursor", "body": "pagination.cursor" }
+      },
+      {
+        "name": "drata_list_controls",
+        "description": "List a workspace's controls, optionally only those ready, with or without evidence, a policy or a passing test.",
+        "method": "GET",
+        "path": "/workspaces/{workspace_id}/controls",
+        "params": {
+          "workspace_id": {
+            "type": "integer",
+            "description": "The workspace id",
+            "in": "path",
+            "limit": "workspaces"
+          },
+          "is_ready": {
+            "type": "boolean",
+            "description": "Only controls that are (true) or are not (false) ready",
+            "in": "query",
+            "name": "isReady",
+            "required": false
+          },
+          "has_evidence": {
+            "type": "boolean",
+            "description": "Only controls with (true) or without (false) evidence",
+            "in": "query",
+            "name": "hasEvidence",
+            "required": false
+          },
+          "has_policy": {
+            "type": "boolean",
+            "description": "Only controls with (true) or without (false) a policy",
+            "in": "query",
+            "name": "hasPolicy",
+            "required": false
+          },
+          "has_passing_test": {
+            "type": "boolean",
+            "description": "Only controls with (true) or without (false) a passing test",
+            "in": "query",
+            "name": "hasPassingTest",
+            "required": false
+          },
+          "size": {
+            "type": "integer",
+            "description": "How many per page, up to 500",
+            "in": "query",
+            "default": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["id", "code", "name", "description", "frameworkTags", "owners", "testIds", "evidenceIds", "archivedAt", "updatedAt"]
+        },
+        "paging": { "param": "cursor", "body": "pagination.cursor" }
+      },
+      {
+        "name": "drata_get_control",
+        "description": "Read one control: its description, question, rationale, owners, framework requirements, tests and evidence.",
+        "method": "GET",
+        "path": "/workspaces/{workspace_id}/controls/{control_id}",
+        "params": {
+          "workspace_id": {
+            "type": "integer",
+            "description": "The workspace id",
+            "in": "path",
+            "limit": "workspaces"
+          },
+          "control_id": {
+            "type": "string",
+            "description": "The control's numeric id, or its code prefixed with code:, such as code:DCF-1",
+            "in": "path"
+          }
+        }
+      },
+      {
+        "name": "drata_list_evidence",
+        "description": "List a workspace's evidence items: name, status, renewal date, owners, files and the controls they support. Filter by name or status.",
+        "method": "GET",
+        "path": "/workspaces/{workspace_id}/evidence",
+        "params": {
+          "workspace_id": {
+            "type": "integer",
+            "description": "The workspace id",
+            "in": "path",
+            "limit": "workspaces"
+          },
+          "name": {
+            "type": "string",
+            "description": "Only evidence whose name starts with this",
+            "in": "query",
+            "required": false
+          },
+          "statuses": {
+            "type": "array",
+            "items": "string",
+            "enum": ["NEEDS_ARTIFACT", "EXPIRED", "EXPIRING_SOON", "TEST_ERROR", "TEST_FAILED", "READY", "TEST_PASSED", "TEST_UNUSED", "TEST_DISABLED", "TEST_DELETED"],
+            "description": "Only evidence in these statuses",
+            "in": "query",
+            "name": "evidenceStatuses[]",
+            "required": false
+          },
+          "size": {
+            "type": "integer",
+            "description": "How many per page, up to 500",
+            "in": "query",
+            "default": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["id", "name", "description", "status", "renewalDate", "updatedAt", "owners", "artifacts", "controls"]
+        },
+        "paging": { "param": "cursor", "body": "pagination.cursor" }
+      },
+      {
+        "name": "drata_list_monitoring_tests",
+        "description": "List a workspace's monitoring tests and their latest result, such as only the failing ones.",
+        "method": "GET",
+        "path": "/workspaces/{workspace_id}/monitoring-tests",
+        "params": {
+          "workspace_id": {
+            "type": "integer",
+            "description": "The workspace id",
+            "in": "path",
+            "limit": "workspaces"
+          },
+          "result_status": {
+            "type": "string",
+            "enum": ["READY", "PASSED", "FAILED", "ERROR", "PREAUDIT"],
+            "description": "Only tests with this latest result",
+            "in": "query",
+            "name": "checkResultStatus",
+            "required": false
+          },
+          "size": {
+            "type": "integer",
+            "description": "How many per page, up to 500",
+            "in": "query",
+            "default": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["testId", "name", "description", "checkResultStatus", "checkStatus", "lastPassedAt", "failedSince", "controls"]
+        },
+        "paging": { "param": "cursor", "body": "pagination.cursor" }
+      },
+      {
+        "name": "drata_list_test_failures",
+        "description": "List the resources failing one monitoring test: provider, account, resource and why it fails.",
+        "method": "GET",
+        "path": "/workspaces/{workspace_id}/monitoring-tests/{test_id}/failures",
+        "params": {
+          "workspace_id": {
+            "type": "integer",
+            "description": "The workspace id",
+            "in": "path",
+            "limit": "workspaces"
+          },
+          "test_id": {
+            "type": "integer",
+            "description": "The test's testId, from the list of monitoring tests",
+            "in": "path"
+          },
+          "size": {
+            "type": "integer",
+            "description": "How many per page, up to 500",
+            "in": "query",
+            "default": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["status", "providerName", "accountName", "resourceName", "resourceType", "region", "cause"]
+        },
+        "paging": { "param": "cursor", "body": "pagination.cursor" }
+      },
+      {
+        "name": "drata_list_policies",
+        "description": "List published policies: name, status, version, owner, renewal date and the controls they cover. Filter by name or status.",
+        "method": "GET",
+        "path": "/policies",
+        "params": {
+          "name": {
+            "type": "string",
+            "description": "Only policies whose name contains this",
+            "in": "query",
+            "required": false
+          },
+          "statuses": {
+            "type": "array",
+            "items": "string",
+            "enum": ["ACTIVE", "ARCHIVED", "REPLACED", "UNACCEPTABLE", "OUTDATED"],
+            "description": "Only policies in these statuses",
+            "in": "query",
+            "name": "statuses[]",
+            "required": false
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["id", "name", "description", "status", "version", "renewalDate", "publishedAt", "approvedAt", "owner", "controls"]
+        },
+        "paging": { "param": "cursor", "body": "pagination.cursor" }
+      },
+      {
+        "name": "drata_list_vendor_reviews",
+        "description": "List security reviews across vendors, optionally only those in some statuses: title, vendor, status, decision, deadline and reviewer.",
+        "method": "GET",
+        "path": "/vendor-security-reviews",
+        "params": {
+          "statuses": {
+            "type": "array",
+            "items": "string",
+            "enum": ["NOT_YET_STARTED", "IN_PROGRESS", "COMPLETED", "NOT_REQUIRED"],
+            "description": "Only reviews in these statuses",
+            "in": "query",
+            "name": "status[]",
+            "required": false
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The next value from the previous page; leave out for the first page",
+            "in": "query",
+            "required": false
+          }
+        },
+        "result": {
+          "items": "data",
+          "fields": ["id", "title", "vendorId", "vendor", "status", "type", "decision", "requestedAt", "reviewDeadlineAt", "note", "user"]
+        },
+        "paging": { "param": "cursor", "body": "pagination.cursor" }
+      }
+    ]
+  }
+}

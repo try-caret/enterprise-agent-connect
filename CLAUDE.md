@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, Automox, Qualys, Druva, Drata, SafeBase and Adobe Admin Console once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -436,6 +436,8 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
                       # trigger off; each store guard and two clicks at once)
                       # Generic machinery only: no suite or case for one connector's behavior
+connectors/http/apps.test.ts # every built-in app with only an `http` block (describedApp) loads,
+                      # and one tool of each runs against a local fake (method, path, query, auth)
 connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's test harness
                       # (packages/server/test/helpers.ts) with its fake vendor answers; run by
                       # npm test, typechecked by tsconfig.test.json, left out of the build
@@ -965,6 +967,24 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   only after approval. `dell_warranty_lookup` returns model, ship date and each entitlement
   with an `active` flag; an answer that is not a list fails loudly. Asset components (parts)
   are left out: a separate API not confirmed under the same key. No limits.
+- JSON-only built-ins (`describedApp`, `http` block, no code; read October/November 2026 from
+  each vendor's own reference): Automox (`automox`, console.automox.com/api/docs console-api
+  OpenAPI; bearer API key, `o` the org id under the `organizations` limit, discover `GET /orgs`;
+  read plus a "Scan devices" capability whose only command is `GetOS`), Qualys (`qualys`, VM
+  API v2 `/api/2.0/fo/...` host list, host detection list and KnowledgeBase, basic auth of a
+  Reader user, fixed `X-Requested-With`, host per platform from qualys.com/platform-identification
+  held to `allowedHosts`; answers are XML passed as text, so no `result` or paging, the agent
+  passes `id_min`; `ag_ids` under the `asset_groups` limit), Druva (`druva`, developer.druva.com
+  inSync Endpoints v1/v2; token `https://apis.druva.com/token` with `clientAuth: basic` and
+  scope `read`; commercial cloud only), Drata (`drata`, public API v2 OpenAPI at
+  developers.drata.com; bearer key, host per region held to `allowedHosts`, cursor paging from
+  `pagination.cursor`, `workspaces` limit), SafeBase (`safebase`, docs.safebase.io reference;
+  `x-sb-api-key` with per-operation scopes, `products` limit and an answer limit on documents)
+  and Adobe Admin Console (`adobe-admin-console`, User Management API at usermanagement.adobe.io;
+  IMS token v2 with scope `openid,AdobeID,user_management_sdk`, `fieldHeaders` x-api-key = the
+  client id; the org id is a path segment mid-path, so agents send it under a required
+  `organizations` limit). All read-only except Automox's scan. Axonius was left out: its API v2
+  reference needs a customer login. Tested only against fakes (connectors/http/apps.test.ts).
 - Generic `soap` and `odata` modules (docs/soap-connector.md, docs/odata-connector.md), siblings
   of `http`, sharing its guarded fetch (origin, no redirects, 30 s, 1 MB; SOAP also takes XML
   types), auth headers, form values and limit checks. At most one of http, soap, odata, sql

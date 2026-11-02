@@ -1462,7 +1462,12 @@ function pick(data: unknown, path: string, match: Record<string, unknown> = {}):
     const many = part.endsWith("[]");
     const key = many ? part.slice(0, -2) : part;
     values = values.flatMap((v) => {
-      const next = v && typeof v === "object" ? (v as Record<string, unknown>)[key] : undefined;
+      // "[]" alone is an answer that is itself a list, e.g. "[].name".
+      const next = !key
+        ? v
+        : v && typeof v === "object"
+          ? (v as Record<string, unknown>)[key]
+          : undefined;
       return many ? (Array.isArray(next) ? next.filter(matches) : []) : [next];
     });
   }

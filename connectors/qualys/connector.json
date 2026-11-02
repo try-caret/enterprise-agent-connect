@@ -1,0 +1,271 @@
+{
+  "id": "qualys",
+  "name": "Qualys",
+  "description": "Let agents read your Qualys vulnerability data: hosts and when they were last scanned, the vulnerabilities found on them, and what each vulnerability is and how to fix it. For endpoint compliance checks and remediation tickets.",
+  "logo": "/brand/registry/qualys.svg",
+  "identity": "A Qualys user with the Reader role and API access. Qualys answers in XML, which agents read as text.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a Reader user for agents",
+      "body": "You need a Qualys Manager. Give agents their own user with the Reader role, the least a user with API access can have, and only the asset groups agents should see.",
+      "link": {
+        "label": "Qualys: user roles and API access",
+        "href": "https://docs.qualys.com/en/admin/portal/latest/platform/user_roles_faq.htm"
+      },
+      "click": [
+        "In Qualys, go to Users, then Users, and select New, then User.",
+        "Enter the user's name, email and other details.",
+        "Under User Role, choose Reader and allow API access.",
+        "Under Asset Groups, add the asset groups agents should see.",
+        "Save, then sign in once as the new user to set its password."
+      ]
+    },
+    {
+      "title": "Find your API address",
+      "body": "Qualys runs on several platforms, each with its own API address, such as qualysapi.qualys.com (US1) or qualysapi.qualys.eu (EU1). You can test the user with the command below: it lists one host and changes nothing.",
+      "link": {
+        "label": "Qualys: platform identification",
+        "href": "https://www.qualys.com/platform-identification/"
+      },
+      "click": [
+        "Find your platform from the identifier in your Qualys username, as Qualys' platform identification page explains.",
+        "Copy that platform's API server address from the same page."
+      ],
+      "copy": [
+        "QUALYS=qualysapi.qualys.com",
+        "curl -s -u \"$QUALYS_USER:$QUALYS_PASSWORD\" -H \"X-Requested-With: curl\" \"https://$QUALYS/api/2.0/fo/asset/host/?action=list&details=Basic&truncation_limit=1\""
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "api_host",
+      "label": "API address",
+      "help": "Your platform's API server, without https://, such as qualysapi.qualys.com.",
+      "placeholder": "qualysapi.qualys.com",
+      "secret": false
+    },
+    {
+      "id": "username",
+      "label": "Username",
+      "secret": false
+    },
+    {
+      "id": "password",
+      "label": "Password",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read hosts and vulnerabilities",
+      "description": "List hosts with their operating system and last scan, list the vulnerabilities detected on hosts by severity and status, and look up vulnerabilities in the Qualys KnowledgeBase by QID.",
+      "required": true,
+      "note": "Reaches every host in the Reader's asset groups unless you keep an agent to chosen asset groups. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["qualys_list_hosts", "qualys_list_detections", "qualys_get_vulnerabilities"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "asset_groups",
+      "label": "Asset groups",
+      "help": "Optional: only hosts in these Qualys asset groups, by their numeric id (in Qualys under Assets, then Asset Groups). Leave empty for every host the user can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,20}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/api/2.0/fo/asset/host/?action=list&details=None&truncation_limit=1",
+    "label": "Qualys answers",
+    "show": "HOST_LIST_OUTPUT"
+  },
+  "revoke": "In Qualys, go to Users, then Users, and deactivate or delete the agents' user. Agents lose access to Qualys at once.",
+  "http": {
+    "baseUrl": "https://{api_host}",
+    "allowedHosts": [
+      "qualysapi.qualys.com",
+      "qualysapi.qualys.eu",
+      "qualysapi.gov1.qualys.us",
+      "*.apps.qualys.com",
+      "*.apps.qualys.eu",
+      "*.apps.qualys.it",
+      "*.apps.qualys.in",
+      "*.apps.qualys.ca",
+      "*.apps.qualys.ae",
+      "*.apps.qualys.co.uk",
+      "*.apps.qualys.com.au",
+      "*.apps.qualysksa.com"
+    ],
+    "auth": { "type": "basic", "username": "username", "password": "password" },
+    "headers": { "X-Requested-With": "Enterprise Agent Connect" },
+    "tools": [
+      {
+        "name": "qualys_list_hosts",
+        "description": "List hosts, as XML: id, IP, DNS name, operating system and when each was last scanned. Up to 100 a time by default; when there are more, the answer ends with a warning naming the next id_min to pass.",
+        "method": "GET",
+        "path": "/api/2.0/fo/asset/host/",
+        "params": {
+          "action": { "type": "string", "enum": ["list"], "description": "Always list", "in": "query", "default": "list" },
+          "details": {
+            "type": "string",
+            "enum": ["Basic", "Basic/AGs", "All", "All/AGs"],
+            "description": "How much of each host: Basic, or All for every field; /AGs adds its asset groups",
+            "in": "query",
+            "default": "Basic"
+          },
+          "asset_groups": {
+            "type": "array",
+            "items": "string",
+            "description": "Only hosts in these asset group ids",
+            "in": "query",
+            "name": "ag_ids",
+            "join": ",",
+            "required": false,
+            "limit": "asset_groups"
+          },
+          "ips": {
+            "type": "string",
+            "description": "Only these IP addresses or ranges, comma-separated, such as 10.0.0.1,10.0.1.0-10.0.1.255",
+            "in": "query",
+            "required": false
+          },
+          "ids": {
+            "type": "string",
+            "description": "Only these host ids or ranges, comma-separated, such as 190-400",
+            "in": "query",
+            "required": false
+          },
+          "os_pattern": {
+            "type": "string",
+            "description": "Only hosts whose operating system matches this regular expression, such as ^Windows",
+            "in": "query",
+            "required": false
+          },
+          "no_vm_scan_since": {
+            "type": "string",
+            "description": "Only hosts not scanned since this date, YYYY-MM-DD",
+            "in": "query",
+            "required": false
+          },
+          "id_min": {
+            "type": "integer",
+            "description": "Only hosts with this id or above, for the next batch",
+            "in": "query",
+            "required": false
+          },
+          "truncation_limit": {
+            "type": "integer",
+            "description": "How many hosts at most, 1 to 1000",
+            "in": "query",
+            "default": 100
+          }
+        }
+      },
+      {
+        "name": "qualys_list_detections",
+        "description": "List the vulnerabilities detected on hosts, as XML: per host its id, IP and operating system, then each detection's QID, severity, status (New, Active, Re-Opened, Fixed) and first and last found dates. Up to 50 hosts a time by default; when there are more, the answer ends with a warning naming the next id_min to pass. Look up what a QID is with qualys_get_vulnerabilities.",
+        "method": "GET",
+        "path": "/api/2.0/fo/asset/host/vm/detection/",
+        "params": {
+          "action": { "type": "string", "enum": ["list"], "description": "Always list", "in": "query", "default": "list" },
+          "asset_groups": {
+            "type": "array",
+            "items": "string",
+            "description": "Only hosts in these asset group ids",
+            "in": "query",
+            "name": "ag_ids",
+            "join": ",",
+            "required": false,
+            "limit": "asset_groups"
+          },
+          "ips": {
+            "type": "string",
+            "description": "Only these IP addresses or ranges, comma-separated",
+            "in": "query",
+            "required": false
+          },
+          "ids": {
+            "type": "string",
+            "description": "Only these host ids or ranges, comma-separated",
+            "in": "query",
+            "required": false
+          },
+          "qids": {
+            "type": "string",
+            "description": "Only these QIDs or ranges, comma-separated",
+            "in": "query",
+            "required": false
+          },
+          "severities": {
+            "type": "string",
+            "description": "Only these severities, 1 to 5, comma-separated or a range, such as 4-5",
+            "in": "query",
+            "required": false
+          },
+          "status": {
+            "type": "string",
+            "description": "Only detections in these states, comma-separated: New, Active, Re-Opened, Fixed",
+            "in": "query",
+            "required": false
+          },
+          "include_vuln_type": {
+            "type": "string",
+            "enum": ["confirmed", "potential"],
+            "description": "Only confirmed or only potential vulnerabilities",
+            "in": "query",
+            "required": false
+          },
+          "show_results": {
+            "type": "integer",
+            "enum": [0, 1],
+            "description": "1 to include what the scan found for each detection, 0 to leave it out",
+            "in": "query",
+            "default": 0
+          },
+          "id_min": {
+            "type": "integer",
+            "description": "Only hosts with this id or above, for the next batch",
+            "in": "query",
+            "required": false
+          },
+          "truncation_limit": {
+            "type": "integer",
+            "description": "How many hosts at most, 1 to 1000",
+            "in": "query",
+            "default": 50
+          }
+        }
+      },
+      {
+        "name": "qualys_get_vulnerabilities",
+        "description": "Look up vulnerabilities in the Qualys KnowledgeBase by QID, as XML: title, severity, CVEs, whether a patch exists, and with details All the diagnosis, consequence and solution.",
+        "method": "GET",
+        "path": "/api/2.0/fo/knowledge_base/vuln/",
+        "params": {
+          "action": { "type": "string", "enum": ["list"], "description": "Always list", "in": "query", "default": "list" },
+          "ids": {
+            "type": "string",
+            "description": "The QIDs, comma-separated, or a range such as 1-200",
+            "in": "query"
+          },
+          "details": {
+            "type": "string",
+            "enum": ["Basic", "All"],
+            "description": "Basic, or All to include diagnosis, consequence and solution",
+            "in": "query",
+            "default": "All"
+          }
+        }
+      }
+    ]
+  }
+}

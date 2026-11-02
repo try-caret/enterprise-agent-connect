@@ -48,4 +48,10 @@ export const builtinConnectors: BuiltinModule[] = [
   netsuite,
   dynamics365,
   gong,
+  describedApp("automox"),
+  describedApp("qualys"),
+  describedApp("druva"),
+  describedApp("drata"),
+  describedApp("safebase"),
+  describedApp("adobe-admin-console"),
 ];
