@@ -185,6 +185,10 @@ const orders: ConnectorJson = {
 };
 ```
 
+**Your own app, per organization.** Each organization can add its own apps through the admin
+API, as many as it wants, without a restart: see [Add internal apps through the admin
+API](docs/http-connector.md#add-internal-apps-through-the-admin-api).
+
 **Your own app, as code.** Build a `ConnectorModule` on the connector kit and give it its
 definition as `connector` ([docs/connectors.md](docs/connectors.md)). `create` gets a
 `ConnectorContext`, `{ connector }`: the definition parsed, with the branding filled in.
@@ -249,7 +253,8 @@ authority signed, name a ConfigMap or Secret holding its bundle in `caBundle`
   described only in its `connector.json` (docs/http-connector.md, docs/soap-connector.md,
   docs/odata-connector.md, docs/sql-connector.md)
 - `examples/internal-app`: a small internal API and its connector, for the quick start
-- `scripts/openapi-to-connector.ts`: drafts an http connector from an OpenAPI 3.x spec
+- `scripts/openapi-to-connector.ts`: drafts an http connector from an OpenAPI 3.x spec (the
+  drafting itself is `connectors/http/openapi.ts`, also behind the admin API's internal app drafts)
 - `examples/legacy-apps`: a SOAP and an SAP OData connector, described only in JSON
 - `scripts/wsdl-to-connector.ts`, `scripts/odata-to-connector.ts`: draft a connector from a WSDL
   or an OData `$metadata`

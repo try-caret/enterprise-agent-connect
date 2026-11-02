@@ -31,7 +31,19 @@ host. Its own tables live in its own schema (`agent_connect`, see Database below
   {name?} makes it with that id if missing; a name given replaces the kept one). DEPRECATED:
   the unversioned `/agent-connect/admin/*` serves the same routes for one release (an admin of
   the previous release during an upgrade), and creates an organization it does not know on its
-  first `/orgs/<org>/` request; it goes in the release after. Routes: `GET connectors`,
+  first `/orgs/<org>/` request; it goes in the release after. Routes: `GET connectors` (the
+  deployment's apps), `GET orgs/:org/connectors` (those plus the organization's internal apps),
+  internal apps (docs/http-connector.md "Add internal apps through the admin API"): `GET
+  orgs/:org/internal-apps`, `GET/PUT/DELETE …/:app` (PUT {definition, by}: a connector.json
+  with an http, soap, odata or sql block, parsed by parseConnector and built and checked by the
+  same `build` as a loaded app; no `events` or `signsInAs`; the id may not be a connectors/
+  folder, a loaded app or `agents`, and its tool names must be new to the organization; a
+  replace keeps the connection only when `signIn()` (form fields, accountKey, the block but its
+  tools) is unchanged, then cuts the ceiling and grants to the new capabilities and removes
+  grants whose limits no longer validate; otherwise removes the connection and grants; DELETE
+  removes the definition, connection and grants; each in one transaction with its audit row
+  `admin:create_internal_app` / `replace_internal_app` / `delete_internal_app`) and `POST
+  internal-apps/draft` {spec, id, operations|tags} (connectors/http/openapi.ts),
   `orgs/:org/connections` (GET; `PUT/PATCH/DELETE …/:app`; `POST …/:app/check`, which marks the
   connection connected or needs_reconnect unless `?record=false` (read only: limit choices, opening an app page, the Integrations tab; only the admin's Check again records, with body {by}, and a recorded check that changes the status is audited as `admin:check_app`);
   `PUT …/:app/sites` {sites} (apps with `siteAccess`: the whole list of added sites, normalized)
@@ -186,7 +198,7 @@ deliveryId, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: fa
 
 Schema `agent_connect` (`DATABASE_SCHEMA`), tables without a prefix (`agents`, `providers`,
 `connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`,
-`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`); index and
+`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`, `internal_apps`); index and
 constraint names keep the `agent_connect_<table>_...` spelling they had in public (`store.ts`
 matches `agent_connect_providers_one_org_per_tenant`). `packages/server/src/migrate.ts` applies
 `packages/server/migrations/NNNN_*.sql` on start, all pending in one transaction under an advisory lock, with
@@ -201,7 +213,8 @@ the org ids already in them, 0003 drops two never-used columns, 0004 gives trigg
 (`claude-managed-agents` for every earlier row), its settings and a sealed signing secret, 0005
 records each run's runner (a trigger moved to another runner stops the old runner's live
 sessions and never reuses them), 0006 makes `approvals` (Teams approval cards; the
-rollback drops it), 0007 the app event tables (rollback drops them). The adopting run then makes simple views
+rollback drops it), 0007 the app event tables (rollback drops them), 0008 `internal_apps` (organizations' own
+connector definitions; rollback drops it). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -324,7 +337,9 @@ packages/client/      # @arbium/enterprise-agent-connect-client: createClient (t
                       # shapes), src/steps.ts (pure step and status logic the admin pages share).
                       # `npm run client` regenerates schema.ts and builds lib/; CI fails when
                       # openapi.json or schema.ts is stale
-packages/server/src/service.ts # connect (verify before save), check, grants, agent sessions
+packages/server/src/service.ts # connect (verify before save), check, grants, agent sessions; the
+                      # one per-organization app lookup (`app(org, id)`, `orgApps(org)`): loaded
+                      # apps, then the organization's internal apps, built once per definition
 packages/server/src/store.ts # Postgres; every table named through tables() in the configured schema,
                       # never through search_path. Timestamps out as ISO 8601
 packages/server/src/migrate.ts # the schema runner (see Database)
@@ -343,7 +358,9 @@ scripts/openapi-to-connector.ts # drafts an http connector.json from an OpenAPI 
 packages/server/src/consent.ts # signed approval state (org, app, capability ceiling, return address, tenant once
                       # approved, nonce, 15 min expiry)
 connectors/http/      # the generic module for a connector.json `http` block; exports guardedFetch,
-                      # authHeaders, formValues, paramLimits and answerWithin for its siblings
+                      # authHeaders, formValues, paramLimits and answerWithin for its siblings;
+                      # openapi.ts: draftConnector (the OpenAPI drafter the script and the
+                      # admin API's internal app drafts share)
 connectors/soap/      # `soap` block: index.ts (envelope 1.1/1.2, WS-Security UsernameToken, body
                       # templates with XML-escaped values, faults, result path), xml.ts (the XML
                       # reader: no DTD, five entities, depth 100; also used by the scripts)
@@ -425,6 +442,9 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # upgrade.test.ts: an install from fixtures/legacy-20261023200000.sql (a
                       # frozen copy of the earlier layout) adopted, against a fresh one, and
                       # by an owner that cannot bypass RLS
+                      # internal-apps.test.ts: internal apps through the admin API on Postgres
+                      # (save, refusals, id and tool clashes, org isolation, an agent calling
+                      # a local fake app, the replace and delete rules, OpenAPI drafts)
                       # events.test.ts: app events on a made-up app (signatures, replays,
                       # repeats, limits, conditions, own changes, caps, poll cursor, the signed
                       # webhook runner end to end, admin); deliver.test.ts its pure rules
