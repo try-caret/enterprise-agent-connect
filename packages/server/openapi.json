@@ -8213,7 +8213,7 @@
                       },
                       "header": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9_-]+$"
+                        "pattern": "^[A-Za-z0-9-]+$"
                       },
                       "value": {
                         "type": "string",
@@ -8334,7 +8334,7 @@
                 "type": "object",
                 "propertyNames": {
                   "type": "string",
-                  "pattern": "^[A-Za-z0-9_-]+$"
+                  "pattern": "^[A-Za-z0-9-]+$"
                 },
                 "additionalProperties": {
                   "type": "string",
@@ -8542,7 +8542,7 @@
                             },
                             "header": {
                               "type": "string",
-                              "pattern": "^[A-Za-z0-9_-]+$"
+                              "pattern": "^[A-Za-z0-9-]+$"
                             }
                           },
                           "required": [
@@ -8636,7 +8636,7 @@
                       },
                       "header": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9_-]+$"
+                        "pattern": "^[A-Za-z0-9-]+$"
                       },
                       "value": {
                         "type": "string",
@@ -8915,7 +8915,7 @@
                       },
                       "header": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9_-]+$"
+                        "pattern": "^[A-Za-z0-9-]+$"
                       },
                       "value": {
                         "type": "string",
@@ -9036,7 +9036,7 @@
                 "type": "object",
                 "propertyNames": {
                   "type": "string",
-                  "pattern": "^[A-Za-z0-9_-]+$"
+                  "pattern": "^[A-Za-z0-9-]+$"
                 },
                 "additionalProperties": {
                   "type": "string",
@@ -9605,7 +9605,7 @@
                           },
                           "header": {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9_-]+$"
+                            "pattern": "^[A-Za-z0-9-]+$"
                           },
                           "prefix": {
                             "default": "",
@@ -9629,7 +9629,7 @@
                           },
                           "header": {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9_-]+$"
+                            "pattern": "^[A-Za-z0-9-]+$"
                           }
                         },
                         "required": [
@@ -9677,7 +9677,7 @@
                         "properties": {
                           "header": {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9_-]+$"
+                            "pattern": "^[A-Za-z0-9-]+$"
                           }
                         },
                         "required": [
@@ -9707,7 +9707,7 @@
                         "properties": {
                           "header": {
                             "type": "string",
-                            "pattern": "^[A-Za-z0-9_-]+$"
+                            "pattern": "^[A-Za-z0-9-]+$"
                           }
                         },
                         "required": [
@@ -9740,7 +9740,7 @@
                             "properties": {
                               "header": {
                                 "type": "string",
-                                "pattern": "^[A-Za-z0-9_-]+$"
+                                "pattern": "^[A-Za-z0-9-]+$"
                               }
                             },
                             "required": [

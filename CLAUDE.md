@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Lusha, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx and Dell TechDirect once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -364,7 +364,8 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # makes their modules); sharepoint-files: SharePoint sites (sitesVendor);
                       # salesforce: External Client App client credentials on the My Domain;
                       # gong: an API access key as Basic auth on the company's *.api.gong.io,
-                      # short 429 waits retried;
+                      # short 429 waits retried; lusha: an API key in the api_key header, v3
+                      # search-and-enrich (v2 ends November 30, 2026), one person or company a call;
                       # sap-s4hana: OData v2 with basic auth or Cloud OAuth, sap-client, CSRF;
                       # servicenow: OAuth client credentials or basic, on the instance;
                       # fedex, dell-techdirect, jamf on the kit's oauth.ts (client credentials, a
@@ -375,9 +376,9 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # workday: an API client for integrations' refresh token;
                       # dynamics-365: the Microsoft connection signing in to one Dataverse
                       # environment)
-connectors/lusha/, connectors/churnzero/ # JSON only: Lusha on the http block, ChurnZero on the
-                      # odata block (v4, host from the connect form's instance field); each has one
-                      # test loading it and calling a tool against a local fake
+connectors/churnzero/ # JSON only, on the odata block (v4, host from the connect form's instance
+                      # field); not a built-in until address placeholders land. Its test loads it
+                      # and calls a tool against a local fake
 connectors/sql/       # the generic module for connector.json files with an `sql` block:
                       # index.ts (vendor: a pool per credential, the `database` check; tools),
                       # engines.ts (:name parsing, one adapter per engine: postgres, sqlserver

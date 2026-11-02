@@ -172,8 +172,7 @@ export type Probe = z.infer<typeof probeSchema>;
 
 // An app described entirely here, e.g. a company's internal REST API: the generic http module
 // (connectors/http) runs it, so it needs no code. Auth values are the ids of connect form fields.
-// Underscores too: Lusha's key header is api_key.
-const headerName = z.string().regex(/^[A-Za-z0-9_-]+$/);
+const headerName = z.string().regex(/^[A-Za-z0-9-]+$/);
 // Printable ASCII only: a header value can never carry a line break into the request.
 const headerValue = z.string().regex(/^[\x20-\x7E]*$/);
 const keyAuths = [

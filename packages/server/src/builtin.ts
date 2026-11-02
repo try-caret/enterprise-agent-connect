@@ -6,6 +6,7 @@ import gong from "../../../connectors/gong/index.js";
 import intune from "../../../connectors/intune/index.js";
 import jamf from "../../../connectors/jamf/index.js";
 import jira from "../../../connectors/jira/index.js";
+import lusha from "../../../connectors/lusha/index.js";
 import netsuite from "../../../connectors/netsuite/index.js";
 import okta from "../../../connectors/okta/index.js";
 import outlookCalendar from "../../../connectors/outlook-calendar/index.js";
@@ -43,4 +44,5 @@ export const builtinConnectors: BuiltinModule[] = [
   netsuite,
   dynamics365,
   gong,
+  lusha,
 ];
