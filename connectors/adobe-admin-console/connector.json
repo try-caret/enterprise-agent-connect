@@ -88,7 +88,7 @@
     "baseUrl": "https://usermanagement.adobe.io/v2/usermanagement",
     "auth": {
       "type": "oauth2",
-      "tokenUrl": "https://ims-na1.adobelogin.com/ims/token/v2",
+      "tokenUrl": "https://ims-na1.adobelogin.com/ims/token/v3",
       "clientId": "client_id",
       "clientSecret": "client_secret",
       "scope": "openid,AdobeID,user_management_sdk"
