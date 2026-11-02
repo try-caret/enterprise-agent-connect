@@ -98,7 +98,8 @@ A connector with an `http` block is like any other connector (name, setup steps,
   - `"default": "open"`: sent when the agent leaves the param out.
   - `"type": "array", "items": "string"`: a list of values. In the query it is sent as one
     `name=` per value, or as one value joined with `"join": ","`.
-  - `"name": "pageToken"`: the name the app uses, when it is not a lower-case param name.
+  - `"name": "pageToken"`: the name the app uses, when it is not a lower-case param name
+    (letters, digits and `_ . : - [ ]`, e.g. `"search:name"`).
 - **result**: what the agent gets of a successful answer, so it reads the few fields it needs
   instead of the whole payload. `"items"` is the dot path of the list in the answer and
   `"fields"` the dot paths kept of each item (or of the answer itself without `items`):

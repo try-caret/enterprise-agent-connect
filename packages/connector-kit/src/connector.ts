@@ -343,10 +343,11 @@ const httpParamSchema = z
     description: text,
     // Where it goes; a {name} in the path template is always "path".
     in: z.enum(["path", "query", "body"]),
-    // The name the app knows it by, when it is not this param's own (e.g. pageToken).
+    // The name the app knows it by, when it is not this param's own (e.g. pageToken, or
+    // Adestra's search:name).
     name: z
       .string()
-      .regex(/^[A-Za-z0-9_.\-[\]]+$/)
+      .regex(/^[A-Za-z0-9_.:\-[\]]+$/)
       .optional(),
     required: z.boolean().default(true),
     // Sent when the agent leaves the param out; such a param is never required.

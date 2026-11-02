@@ -1,0 +1,158 @@
+{
+  "id": "sprout-social",
+  "name": "Sprout Social",
+  "description": "Let agents draft social posts in Sprout Social for your team to review and schedule: list your profiles, groups and tags, create draft posts and read them back. Agents never publish.",
+  "logo": "/brand/registry/sprout-social.svg",
+  "identity": "A Sprout Social API token. It acts as the user who created it, with that user's access to profiles and groups.",
+  "accountKey": "customer",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Generate an API token",
+      "body": "Your Sprout plan must include API access, and the user creating the token needs the API Permissions permission. Accept the API terms on the same page if asked. Create the token as a user who can reach only the profiles agents draft for.",
+      "link": {
+        "label": "Sprout Social: API authentication",
+        "href": "https://api.sproutsocial.com/docs/"
+      },
+      "click": [
+        "In Sprout, go to Settings, then Global Features, then API.",
+        "Under API Token Management, select Generate API Token, name it Agents, and copy the token."
+      ]
+    },
+    {
+      "title": "Find your customer ID",
+      "body": "Each Sprout account has a customer ID that every call names. The command below lists the ones the token can reach and changes nothing.",
+      "click": ["Run the command below with your token, and copy the customer_id for the account agents use."],
+      "copy": [
+        "curl -s -H \"Authorization: Bearer $SPROUT_TOKEN\" https://api.sproutsocial.com/v1/metadata/client"
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "customer",
+      "label": "Customer ID",
+      "help": "The customer_id from the command above.",
+      "placeholder": "687751",
+      "secret": false
+    },
+    {
+      "id": "api_token",
+      "label": "API token",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read profiles and posts",
+      "description": "List your social profiles, groups, tags and users, and read a draft post by id.",
+      "required": true,
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "sprout_list_profiles",
+        "sprout_list_groups",
+        "sprout_list_tags",
+        "sprout_list_users",
+        "sprout_get_post"
+      ]
+    },
+    {
+      "id": "draft",
+      "label": "Create draft posts",
+      "description": "Create draft posts on chosen profiles, optionally with tags. Drafts sit on the Sprout publishing calendar for someone to review, schedule and publish.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["sprout_create_draft"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "groups",
+      "label": "Groups",
+      "help": "Optional: agents draft only in these Sprout groups (their ids, shown under Groups after connecting). Leave empty for every group.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,15}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/metadata/customer",
+    "label": "Sprout profiles",
+    "show": "data[].name"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/metadata/customer/groups",
+    "label": "Groups",
+    "show": "data[].group_id",
+    "name": "data[].name"
+  },
+  "revoke": "In Sprout, go to Settings, then Global Features, then API, and delete the token under API Token Management. Agents lose access to Sprout at once.",
+  "http": {
+    "baseUrl": "https://api.sproutsocial.com/v1/{customer}",
+    "auth": { "type": "bearer", "token": "api_token" },
+    "tools": [
+      {
+        "name": "sprout_list_profiles",
+        "description": "List the social profiles (X, Facebook, Instagram, LinkedIn and others) you can draft for, with the groups each belongs to.",
+        "method": "GET",
+        "path": "/metadata/customer",
+        "result": { "items": "data", "fields": ["customer_profile_id", "network_type", "name", "native_name", "groups"] }
+      },
+      {
+        "name": "sprout_list_groups",
+        "description": "List your Sprout groups. A draft's profiles must all be in one group.",
+        "method": "GET",
+        "path": "/metadata/customer/groups",
+        "result": { "items": "data", "fields": ["group_id", "name"] }
+      },
+      {
+        "name": "sprout_list_tags",
+        "description": "List your message tags and campaign tags, with the groups each can be used in.",
+        "method": "GET",
+        "path": "/metadata/customer/tags",
+        "result": { "items": "data", "fields": ["tag_id", "text", "type", "active", "any_group", "groups"] }
+      },
+      {
+        "name": "sprout_list_users",
+        "description": "List the active users in your Sprout account.",
+        "method": "GET",
+        "path": "/metadata/customer/users",
+        "result": { "items": "data", "fields": ["id", "name", "email"] }
+      },
+      {
+        "name": "sprout_get_post",
+        "description": "Read a draft post by its publishing_post_id.",
+        "method": "GET",
+        "path": "/publishing/posts/{publishing_post_id}",
+        "params": {
+          "publishing_post_id": { "type": "string", "description": "The post's publishing_post_id", "in": "path" }
+        },
+        "answerLimits": [{ "field": "data.internal.publishing.group_id", "limit": "groups" }]
+      },
+      {
+        "name": "sprout_create_draft",
+        "description": "Create a draft post on one or more profiles in the same group. Sprout makes one draft per profile; nothing is published.",
+        "method": "POST",
+        "path": "/publishing/posts",
+        "params": {
+          "group_id": { "type": "integer", "description": "The group the profiles are in", "in": "body", "limit": "groups" },
+          "customer_profile_ids": {
+            "type": "array",
+            "items": "integer",
+            "description": "The profiles to draft for, all in that group",
+            "in": "body"
+          },
+          "text": { "type": "string", "description": "The post's text", "in": "body" },
+          "tag_ids": { "type": "array", "items": "integer", "description": "Tags to put on the post", "in": "body", "required": false },
+          "is_draft": { "type": "boolean", "description": "Always a draft", "in": "body", "enum": [true], "default": true }
+        }
+      }
+    ]
+  }
+}

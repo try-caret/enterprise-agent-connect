@@ -1,0 +1,113 @@
+{
+  "id": "synthesia",
+  "name": "Synthesia",
+  "description": "Let agents find your Synthesia videos and templates: each video's status, length, thumbnail and download link, so campaigns can point to finished videos. Read-only.",
+  "logo": "/brand/registry/synthesia.svg",
+  "identity": "A Synthesia API key. It acts as the person who created it, with their access to videos in the workspace.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create an API key",
+      "body": "Your Synthesia plan decides whether you can create API keys. The key needs the Legacy (v2) scope, which the video API asks for. Synthesia shows the key only once.",
+      "link": {
+        "label": "Synthesia: create an API key",
+        "href": "https://docs.synthesia.io/docs/developers"
+      },
+      "click": [
+        "In Synthesia, select Developers in the sidebar, then the API keys tab.",
+        "Select New API key, name it Agents, grant the Legacy (v2) scope and choose when it expires.",
+        "Select Create API key and copy the key."
+      ]
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "api_key",
+      "label": "API key",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "Read videos and templates",
+      "description": "List videos and templates, and read one video: its status, length, thumbnail, captions and download link.",
+      "required": true,
+      "note": "Reaches the videos the key's owner can see in the workspace. Read-only.",
+      "scopes": ["Legacy (v2)"],
+      "permissions": [],
+      "tools": ["synthesia_list_videos", "synthesia_get_video", "synthesia_list_templates"]
+    }
+  ],
+  "limits": [],
+  "verify": {
+    "method": "GET",
+    "path": "/videos?limit=5",
+    "label": "Synthesia videos",
+    "show": "videos[].title"
+  },
+  "revoke": "In Synthesia, select Developers, then API keys, and disable or delete the key. Agents lose access to Synthesia at once.",
+  "http": {
+    "baseUrl": "https://api.synthesia.io/v2",
+    "auth": { "type": "header", "header": "Authorization", "value": "api_key" },
+    "tools": [
+      {
+        "name": "synthesia_list_videos",
+        "description": "List videos with their status (in progress, complete) and titles.",
+        "method": "GET",
+        "path": "/videos",
+        "params": {
+          "limit": { "type": "integer", "description": "Videos per page, up to 100", "in": "query", "default": 20 },
+          "offset": { "type": "integer", "description": "Where the page starts, from the previous answer", "in": "query", "required": false },
+          "source": {
+            "type": "array",
+            "items": "string",
+            "description": "Where to look",
+            "in": "query",
+            "enum": ["workspace", "shared_with_me", "my_videos"],
+            "required": false
+          }
+        },
+        "result": {
+          "items": "videos",
+          "fields": ["id", "title", "description", "status", "duration", "visibility", "createdAt", "lastUpdatedAt", "download", "thumbnail.image"]
+        },
+        "paging": { "param": "offset", "body": "nextOffset" }
+      },
+      {
+        "name": "synthesia_get_video",
+        "description": "Read one video: status, length, thumbnail, captions and its download link.",
+        "method": "GET",
+        "path": "/videos/{video_id}",
+        "params": {
+          "video_id": { "type": "string", "description": "The video id", "in": "path" }
+        },
+        "result": {
+          "fields": ["id", "title", "description", "status", "duration", "visibility", "createdAt", "lastUpdatedAt", "download", "thumbnail", "captions"]
+        }
+      },
+      {
+        "name": "synthesia_list_templates",
+        "description": "List video templates, with the variables each one fills in.",
+        "method": "GET",
+        "path": "/templates",
+        "params": {
+          "limit": { "type": "integer", "description": "Templates per page, up to 100", "in": "query", "default": 20 },
+          "offset": { "type": "integer", "description": "Where the page starts, from the previous answer", "in": "query", "required": false },
+          "source": {
+            "type": "array",
+            "items": "string",
+            "description": "Your workspace's templates, Synthesia's, or both",
+            "in": "query",
+            "enum": ["workspace", "synthesia"],
+            "required": false
+          }
+        },
+        "result": { "items": "templates", "fields": ["id", "title", "description", "variables", "duration"] },
+        "paging": { "param": "offset", "body": "nextOffset" }
+      }
+    ]
+  }
+}

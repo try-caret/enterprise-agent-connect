@@ -62,4 +62,11 @@ export const builtinConnectors: BuiltinModule[] = [
   describedApp("drata"),
   describedApp("safebase"),
   describedApp("adobe-admin-console"),
+  describedApp("adestra"),
+  describedApp("cvent"),
+  describedApp("forsta-decipher"),
+  describedApp("intercom"),
+  describedApp("sprout-social"),
+  describedApp("synthesia"),
+  describedApp("wordpress"),
 ];

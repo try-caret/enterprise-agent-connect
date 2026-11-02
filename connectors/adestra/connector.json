@@ -1,0 +1,336 @@
+{
+  "id": "adestra",
+  "name": "Adestra",
+  "description": "Let agents draft email campaigns in Adestra: find projects and campaigns, write the subject line and content, and send the campaign to your approvers. Agents never launch a campaign to a list. For staging campaigns and invitations for people to review.",
+  "logo": "/brand/registry/adestra.svg",
+  "identity": "An Adestra API token. It acts as the Adestra user who created it, with that user's workspaces and access rights, so make a user for agents with only the workspaces they need.",
+  "accountKey": "host",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Make a user for agents",
+      "body": "An API token acts as the user who creates it. Make a separate Adestra user for agents, give it read and write API access and only the workspaces agents should draft in. Ask Adestra support to turn on API access for the user if the option is missing.",
+      "link": {
+        "label": "Adestra: API access and tokens",
+        "href": "https://app.adestra.com/doc/page/current/index/api"
+      }
+    },
+    {
+      "title": "Create an API token",
+      "body": "Sign in to Adestra as the agents' user. You can test the token with the command below: it shows the user the token belongs to and changes nothing.",
+      "click": [
+        "Select your user icon in the title bar to open your user panel.",
+        "Select Manage API tokens.",
+        "Press Create new API token, enter a name such as Agents and, if you like, a description.",
+        "Press Create and copy the new token."
+      ],
+      "copy": [
+        "curl -s -H \"Authorization: TOKEN $ADESTRA_TOKEN\" https://app.adestra.com/api/rest/1/users/self"
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [{ "id": "api_token", "label": "API token", "secret": true }],
+  "capabilities": [
+    {
+      "id": "read_campaigns",
+      "label": "Read campaigns",
+      "description": "Find projects and campaigns, and read a campaign's details, options such as the subject line and sender, and its HTML or text content.",
+      "required": true,
+      "note": "Reaches every project and campaign the agents' user can see, unless you keep a key to chosen projects under API keys. Read-only.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "adestra_list_projects",
+        "adestra_search_campaigns",
+        "adestra_get_campaign",
+        "adestra_get_campaign_options",
+        "adestra_get_message"
+      ]
+    },
+    {
+      "id": "draft_campaigns",
+      "label": "Draft campaigns",
+      "description": "Create campaigns, rename them or change their list, set options such as the subject line and sender, and write their HTML or text content.",
+      "note": "Can change any campaign the agents' user can edit, including ones people wrote. Nothing here launches a campaign.",
+      "scopes": [],
+      "permissions": [],
+      "tools": [
+        "adestra_create_campaign",
+        "adestra_update_campaign",
+        "adestra_set_campaign_option",
+        "adestra_set_message"
+      ]
+    },
+    {
+      "id": "request_approval",
+      "label": "Ask for approval",
+      "description": "Send a campaign to one of your Adestra approval groups for review.",
+      "note": "Approvers decide whether it is launched. Agents cannot ask for it to be launched once approved.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["adestra_request_approval"]
+    },
+    {
+      "id": "send_tests",
+      "label": "Send test emails",
+      "description": "Email a test of a campaign to chosen addresses.",
+      "destructive": true,
+      "note": "A test is a real email. Keep a key to your own team's addresses under API keys.",
+      "scopes": [],
+      "permissions": [],
+      "tools": ["adestra_send_test"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "projects",
+      "label": "Projects",
+      "help": "Optional: only these Adestra projects (their ids) when finding and creating campaigns and reading a campaign's details. A campaign's options and content, and changes to a campaign by its id, are not checked against this. Leave empty for every project.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^\\d{1,12}$"
+    },
+    {
+      "id": "test_addresses",
+      "label": "Test email addresses",
+      "help": "Optional: the only addresses tests may be sent to. Leave empty for any address.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[^@\\s]+@[^@\\s]+$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/users/self",
+    "label": "Adestra user",
+    "show": "email"
+  },
+  "discover": {
+    "method": "GET",
+    "path": "/projects",
+    "label": "Projects",
+    "show": "projects[].id",
+    "name": "projects[].name"
+  },
+  "revoke": "In Adestra, open the agents' user panel, select Manage API tokens and delete the token. Agents lose access to Adestra at once.",
+  "http": {
+    "baseUrl": "https://app.adestra.com/api/rest/1",
+    "auth": { "type": "header", "header": "Authorization", "prefix": "TOKEN ", "value": "api_token" },
+    "tools": [
+      {
+        "name": "adestra_list_projects",
+        "description": "List Adestra projects (which hold campaigns), or only those in one workspace or with a name.",
+        "method": "GET",
+        "path": "/projects",
+        "params": {
+          "workspace_id": {
+            "type": "integer",
+            "description": "Only projects in this workspace",
+            "in": "query",
+            "name": "search:workspace_id",
+            "required": false
+          },
+          "name": {
+            "type": "string",
+            "description": "Only projects with exactly this name",
+            "in": "query",
+            "name": "search:name",
+            "required": false
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page of results, from 1 (250 per page)",
+            "in": "query",
+            "name": "paging:page",
+            "required": false
+          }
+        },
+        "result": { "items": "projects", "fields": ["id", "name", "description", "workspace_id"] }
+      },
+      {
+        "name": "adestra_search_campaigns",
+        "description": "Find campaigns in a project, by name, or by whether they were launched.",
+        "method": "GET",
+        "path": "/campaigns",
+        "params": {
+          "project_id": {
+            "type": "integer",
+            "description": "Only campaigns in this project",
+            "in": "query",
+            "name": "search:project_id",
+            "required": false,
+            "limit": "projects"
+          },
+          "name": {
+            "type": "string",
+            "description": "Only campaigns with exactly this name",
+            "in": "query",
+            "name": "search:name",
+            "required": false
+          },
+          "launched": {
+            "type": "boolean",
+            "description": "Only launched (true) or not yet launched (false) campaigns",
+            "in": "query",
+            "name": "search:launched",
+            "required": false
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page of results, from 1",
+            "in": "query",
+            "name": "paging:page",
+            "required": false
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "Results per page, up to 250",
+            "in": "query",
+            "name": "paging:page_size",
+            "default": 50
+          }
+        },
+        "result": {
+          "items": "campaigns",
+          "fields": ["id", "name", "description", "project_id", "list_id", "subject_line", "published", "launched", "edited_date"]
+        }
+      },
+      {
+        "name": "adestra_get_campaign",
+        "description": "Read one campaign: name, project, list, subject line and whether it was published or launched.",
+        "method": "GET",
+        "path": "/campaigns/{campaign_id}",
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" }
+        },
+        "answerLimits": [{ "field": "project_id", "limit": "projects" }]
+      },
+      {
+        "name": "adestra_get_campaign_options",
+        "description": "Read a campaign's options, such as subject line, sender and reply names and addresses, and unsubscribe list.",
+        "method": "GET",
+        "path": "/campaigns/{campaign_id}/options",
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" }
+        }
+      },
+      {
+        "name": "adestra_get_message",
+        "description": "Read a campaign's HTML or text content.",
+        "method": "GET",
+        "path": "/campaigns/{campaign_id}/message/{type}",
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" },
+          "type": { "type": "string", "enum": ["html", "text"], "description": "Which part: html or text", "in": "path" }
+        }
+      },
+      {
+        "name": "adestra_create_campaign",
+        "description": "Create a campaign in a project. It is not launched; set its options and content next.",
+        "method": "POST",
+        "path": "/campaigns",
+        "params": {
+          "name": { "type": "string", "description": "Campaign name, up to 255 bytes", "in": "body" },
+          "project_id": {
+            "type": "integer",
+            "description": "The project to create it in",
+            "in": "body",
+            "limit": "projects"
+          },
+          "description": { "type": "string", "description": "What the campaign is for", "in": "body", "required": false },
+          "list_id": { "type": "integer", "description": "The list it will go to", "in": "body", "required": false },
+          "apply_user_defaults": {
+            "type": "boolean",
+            "description": "Apply the user's campaign preferences and presets",
+            "in": "query",
+            "name": "options:apply_user_defaults",
+            "default": true
+          }
+        },
+        "result": { "fields": ["id", "name", "project_id", "list_id"] }
+      },
+      {
+        "name": "adestra_update_campaign",
+        "description": "Rename a campaign, change its description or the list it will go to. Values left out stay as they are.",
+        "method": "PUT",
+        "path": "/campaigns/{campaign_id}",
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" },
+          "name": { "type": "string", "description": "New name", "in": "body", "required": false },
+          "description": { "type": "string", "description": "New description", "in": "body", "required": false },
+          "list_id": { "type": "integer", "description": "New list id", "in": "body", "required": false }
+        },
+        "result": { "fields": ["id", "name", "project_id", "list_id"] }
+      },
+      {
+        "name": "adestra_set_campaign_option",
+        "description": "Set the campaign's subject line, sender name or reply name.",
+        "method": "PUT",
+        "path": "/campaigns/{campaign_id}/options",
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" },
+          "name": {
+            "type": "string",
+            "description": "Which option",
+            "in": "body",
+            "enum": ["subject_line", "from_name", "reply_name"]
+          },
+          "value": { "type": "string", "description": "Option value", "in": "body" }
+        }
+      },
+      {
+        "name": "adestra_set_message",
+        "description": "Write a campaign's HTML or text content, replacing what is there.",
+        "method": "PUT",
+        "path": "/campaigns/{campaign_id}/message/{type}",
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" },
+          "type": { "type": "string", "enum": ["html", "text"], "description": "Which part: html or text", "in": "path" },
+          "content": { "type": "string", "description": "The HTML or text content", "in": "body" }
+        },
+        "result": { "fields": ["campaign_id", "type"] }
+      },
+      {
+        "name": "adestra_request_approval",
+        "description": "Send a campaign to an approval group for review. Approvers are told when notify_approvers is true.",
+        "method": "POST",
+        "path": "/campaigns/{campaign_id}/request_approval/{approval_group_id}",
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" },
+          "approval_group_id": { "type": "integer", "description": "The approval group's id", "in": "path" },
+          "threshold": {
+            "type": "integer",
+            "description": "Approvals needed; left out, everyone in the group must approve",
+            "in": "body",
+            "required": false
+          },
+          "notify_approvers": {
+            "type": "boolean",
+            "description": "Email the group's members about the request",
+            "in": "body",
+            "default": true
+          }
+        }
+      },
+      {
+        "name": "adestra_send_test",
+        "description": "Email a test of a campaign to one or more addresses.",
+        "method": "POST",
+        "path": "/campaigns/{campaign_id}/send_test",
+        "destructive": true,
+        "params": {
+          "campaign_id": { "type": "integer", "description": "The campaign id", "in": "path" },
+          "emails": {
+            "type": "array",
+            "items": "string",
+            "description": "Addresses to send the test to",
+            "in": "body",
+            "limit": "test_addresses"
+          }
+        }
+      }
+    ]
+  }
+}
