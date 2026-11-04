@@ -94,14 +94,17 @@ orgs/:org/teams/publish/callback` {state, nonce, params, by} (the administrator'
 orgs/:org/claude-key` (write-only, shown as its last four characters) and `GET
 orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in openapi.json):
   `GET/POST orgs/:org/event-subscriptions` (POST {app, source webhook|poll, filter, intervalSeconds,
-  register, by}: one per org and app; answers the address, the secret once, the setup steps with
-  {url} filled and, with `register`, whether the app's API took it), `POST …/:subscription/secret`
-  {by} (a new secret, once), `DELETE …/:subscription` {by}; per agent `GET …/event-triggers`,
+  register, secret, by}: one per org and app; answers the address, the secret once, the setup steps with
+  {url} filled and, with `register`, whether the app's API took it; `secret` only and always for an
+  app whose webhook is `secretFromApp`, which is then answered null), `POST …/:subscription/secret`
+  {by, secret} (a new secret, once; given for `secretFromApp`), `DELETE …/:subscription` {by}; per agent `GET …/event-triggers`,
   `PUT/DELETE …/event-triggers/:app` and `GET …/event-runs?limit`.
 - `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
-  cap, the connector's proof (HMAC-SHA256 of the raw body or a token header, constant time) checked
+  cap, the connector's proof (HMAC-SHA256 of the raw body, or of `verify.signs` filled with the
+  body and headers; or a token header; constant time) checked
   before the body is parsed (401; audited at most once a minute per subscription), then type,
-  delivery id (else the body's SHA-256) and replay window; a repeated delivery id or an
+  delivery id (else the body's SHA-256) and replay window; a signed `webhook.handshake` (Slack's
+  url_verification) is answered with its echo as text and queues nothing; a repeated delivery id or an
   undeclared type is audited and ignored. Accepted: the kept fields sealed into `app_events`,
   answered 200 at once.
 - `POST /agent-connect/teams/bots/:botAppId/messages`: public, for Teams. Every request carries
@@ -466,7 +469,9 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                        # later taking an internal app's id)
                       # events.test.ts: app events on a made-up app (signatures, replays,
                       # repeats, limits, conditions, own changes, caps, poll cursor, the signed
-                      # webhook runner end to end, admin); deliver.test.ts its pure rules
+                      # webhook runner end to end, admin) and on Slack's connector.json (v0
+                      # signing, url_verification, event_id repeats, channels, the bot's own
+                      # posts, the admin-given secret); deliver.test.ts its pure rules
                       # teams.test.ts: the Teams runtime and trigger admin with fake runners
                       # (replies while starting, sessions kept to their runner) and approval
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
@@ -1108,6 +1113,19 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   read October 27, 2026, both taking JSON or form arguments; the other methods, rate limits and
   manifests from Slack's same reference, not re-read). Tested only against a fake Slack, never a
   real workspace.
+  Events (docs/triggers.md, Set up Slack): `app_mention` from the Events API, webhook only.
+  Kept fields channel, user, text, ts, thread_ts (`event.thread_ts`, else `event.ts`: where to
+  reply), team; the `channels` limit reads `channel`; `self` is `auth.test`'s `user_id` against
+  `user`, so the bot's own posts start nothing. Proof: `X-Slack-Signature` `v0=` HMAC of
+  `v0:{X-Slack-Request-Timestamp}:{body}` (`verify.signs`) with Slack's signing secret, which
+  Slack makes (`secretFromApp`: the admin gives it as `secret` when subscribing and rotating);
+  the timestamp header within 5 minutes; delivery id `event_id` (Slack's retries, marked
+  `X-Slack-Retry-Num`, repeat it); type `event.type`. Saving the Request URL in Slack sends a
+  signed `url_verification`, answered with its `challenge` as text (`webhook.handshake`). The
+  connect manifest is unchanged: the event subscription's step adds `app_mentions:read` and
+  `event_subscriptions` once the address exists (Slack checks a manifest's request_url at once).
+  Sources: docs.slack.dev/apis/events-api, /authentication/verifying-requests-from-slack,
+  /reference/events/app_mention and /reference/events/url_verification (not re-read).
 - ServiceNow (`servicenow`): an integration user (web service access only) on
   its instance: a bare name is `<name>.service-now.com`; any other https address (a company's
   own domain, a port) is taken as the admin entered it, the admin being trusted to name their

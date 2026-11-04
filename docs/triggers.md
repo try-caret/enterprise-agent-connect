@@ -121,6 +121,47 @@ mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams). `GET …/event-trig
 agent's triggers, `DELETE …/event-triggers/jira` removes one (stopping its live runs), and `GET
 …/event-runs` shows what they started.
 
+## Set up Slack
+
+Slack starts an agent when someone @mentions the app in a channel (`app_mention`); the agent
+answers in the thread with its own Slack tools. Connect Slack first (its connect steps), give the
+agent a grant on Slack with the `post` capability and, if it should hear only some channels, its
+`channels` limit. The app hears only channels it is a member of.
+
+Slack makes the secret it signs with (the app's **signing secret**), so the admin gives it to the
+subscription instead of receiving one:
+
+1. In Slack: api.slack.com/apps > the app > Basic Information > App Credentials > Signing
+   Secret > Show, and copy it.
+2. Subscribe, with that secret:
+
+   ```http
+   POST /agent-connect/admin/v1/orgs/{org}/event-subscriptions
+   {"app": "slack", "source": "webhook", "secret": "<the signing secret>", "by": "ann@example.com"}
+   ```
+
+   The answer has the address (`subscription.url`) and the setup steps with it filled in;
+   `secret` is null (yours is not shown back). Slack's events cannot be polled.
+3. In Slack: the app > Event Subscriptions > Enable Events, Request URL: the address. Slack
+   sends a signed `url_verification` at once, which the service answers with its challenge, and
+   shows Verified. Subscribe to bot events > `app_mention`, Save Changes, and reinstall the app
+   when Slack asks (it adds the `app_mentions:read` permission). The steps also give the same as
+   lines to add to the app's manifest.
+4. The agent's trigger: `PUT …/agents/{agent}/event-triggers/slack` with `"eventTypes":
+   ["app_mention"]` and instructions such as "Answer the question you were asked in {app}:
+   reply in the thread (channel, thread_ts) with slack_post_message."
+
+When Slack's signing secret is regenerated, give the new one:
+`POST …/event-subscriptions/{id}/secret {"secret": "<new>", "by": "…"}`.
+
+Slack signs each delivery with `X-Slack-Signature: v0=<HMAC-SHA256 of
+"v0:<X-Slack-Request-Timestamp>:<body>">`, refused when the timestamp is over 5 minutes off. A
+delivery is named by its `event_id`, which Slack repeats on its retries (`X-Slack-Retry-Num`),
+so a retry starts nothing. The agent gets `channel`, `user`, `text`, `ts`, `thread_ts` (the
+thread to reply in: the mention's thread, or the mention itself when it is not in one) and
+`team`; conditions can name any of them. The app's own messages (`user` is the bot user that
+`auth.test` names) start nothing.
+
 ## How an app adds events
 
 Events are data in the app's `connector.json` (schema: `eventsSchema` in
@@ -131,19 +172,28 @@ adds them the same way. Paths are `a.b`, or `a[].b` for every item of a list.
 "events": {
   "types": [{"id": "ticket.created", "label": "Ticket created"}],
   // What agents, conditions and limits see of an event; values are text, numbers, booleans or
-  // lists of them, never objects.
-  "fields": {"id": "ticket.id", "queue": "ticket.queue", "tags": "ticket.tags[]"},
+  // lists of them, never objects. A list of paths takes the first that has a value.
+  "fields": {"id": "ticket.id", "queue": "ticket.queue", "tags": "ticket.tags[]",
+             "thread": ["ticket.thread_id", "ticket.id"]},
   // A limit of the connector → the field holding the event's value for it.
   "limits": {"queues": "queue"},
   // Optional: who the connection is, so its own changes start nothing.
   "self": {"request": {"method": "GET", "path": "/me"}, "id": "id", "fields": ["changed_by"]},
   "webhook": {
     // hmac-sha256 (hex of the body, after an optional prefix), token (the secret itself in a
-    // header), or none (only with "allowInsecure": true).
+    // header), or none (only with "allowInsecure": true). An HMAC of more than the body names
+    // it in "signs": {body} and {header:Name} in text, e.g. Slack's
+    // "v0:{header:X-Slack-Request-Timestamp}:{body}".
     "verify": {"type": "hmac-sha256", "header": "X-Signature", "prefix": "sha256="},
+    // Optional: the app makes the secret; the admin gives it as "secret" (Slack).
+    "secretFromApp": false,
     "type": {"field": "event"},             // or {"header": "X-Event"}
     "deliveryId": {"header": "X-Delivery"}, // optional: the body's SHA-256 otherwise
     "timestamp": {"at": {"field": "sent_at"}, "unit": "iso", "toleranceSeconds": 300},
+    // Optional: the app's signed check of the address, answered with the text at "echo" and
+    // starting nothing (Slack: {"at": {"field": "type"}, "equals": "url_verification",
+    // "echo": "challenge"}).
+    "handshake": {"at": {"field": "kind"}, "equals": "ping", "echo": "nonce"},
     "setup": [{"title": "…", "body": "…", "click": ["… URL: {url}"]}],
     // Optional: registering through the app's API with the connection's credentials.
     "register": {"method": "POST", "path": "/hooks", "location": "self",
@@ -185,7 +235,11 @@ by changed_at limit 100` and
   compared in constant time) before its body is parsed. A subscription id alone is not a
   credential.
 - Secrets are made by the service (32 random bytes), shown once, sealed with
-  `CONNECT_ENCRYPTION_KEY` and re-sealed during a key rotation, like other credentials.
+  `CONNECT_ENCRYPTION_KEY` and re-sealed during a key rotation, like other credentials. An app
+  that makes its own (Slack's signing secret) has it given by the admin, sealed the same way and
+  never shown back.
+- A handshake (Slack's url_verification) is answered only after the same proof, and only with
+  the one value the connector names, as text.
 - Replays: a delivery id is accepted once, and deliveries are kept longer than any app's replay
   window, so a captured signed delivery cannot start anything again.
 - An event starts only agents granted on that app, within their limits, so a trigger cannot
