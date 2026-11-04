@@ -108,7 +108,9 @@ function fakeRunner(id = "fake"): Fake {
 async function setup(
   runners: TriggerRunner[],
   limits: Record<string, unknown> = { projects: ["KAN"] },
+  connector = tracker,
 ) {
+  const appId = connector.id;
   const store = createStore(sql!, SCHEMA);
   const events = createEventsStore(sql!, SCHEMA);
   const org = randomUUID();
@@ -119,9 +121,9 @@ async function setup(
     returning id::text`;
   await sql!`insert into agent_connect.connections
                (organization_id, connector_id, credential, credential_key_id, status, capabilities)
-             values (${org}, 'tracker', ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["read"])})`;
+             values (${org}, ${appId}, ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["read"])})`;
   await sql!`insert into agent_connect.grants (agent_id, connector_id, capabilities, limits)
-             values (${agentId}, 'tracker', ${sql!.array(["read"])}, ${sql!.json(limits as never)})`;
+             values (${agentId}, ${appId}, ${sql!.array(["read"])}, ${sql!.json(limits as never)})`;
   const calls: VendorRequest[] = [];
   const answers = new Map<string, VendorResponse>([
     ["/me", { status: 200, data: { id: "svc" } }],
@@ -135,7 +137,7 @@ async function setup(
     store,
     events,
     key,
-    connectors: new Map([["tracker", tracker]]),
+    connectors: new Map([[appId, connector]]),
     appCall,
     runners: new Map(runners.map((r) => [r.id, r])),
   };
@@ -160,7 +162,7 @@ async function setup(
   }
   async function subscribe(source: "webhook" | "poll" = "webhook", extra = {}) {
     const res = await call("POST", "/event-subscriptions", {
-      app: "tracker",
+      app: appId,
       source,
       by: "ann",
       ...extra,
@@ -174,7 +176,7 @@ async function setup(
     };
   }
   async function trigger(over: Record<string, unknown> = {}) {
-    const res = await call("PUT", `/agents/${agentId}/event-triggers/tracker`, {
+    const res = await call("PUT", `/agents/${agentId}/event-triggers/${appId}`, {
       enabled: true,
       eventTypes: ["created"],
       prompt: "Triage it.",
@@ -575,5 +577,194 @@ test(
       (created.subscription as { registered?: string }).registered,
       "https://tracker.example/hooks/7",
     );
+  },
+);
+
+// Slack's Events API through the real connector.json: its request signing over the timestamp
+// header and body, the url_verification handshake, event_id as the delivery id, the channels
+// limit and the bot's own messages.
+const slack = parseConnector(
+  JSON.parse(
+    readFileSync(new URL("../../../connectors/slack/connector.json", import.meta.url), "utf8"),
+  ),
+  "slack",
+);
+const SLACK_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
+
+async function slackSetup(limits: Record<string, unknown> = { channels: ["C123"] }) {
+  const f = fakeRunner();
+  const t = await setup([f.runner], limits, slack);
+  t.answers.set("/auth.test", { status: 200, data: { ok: true, user_id: "UBOT", bot_id: "B1" } });
+  const { subscription } = await t.subscribe("webhook", { secret: SLACK_SECRET });
+  async function post(
+    body: Record<string, unknown>,
+    opts: { secret?: string; at?: number; retry?: string } = {},
+  ) {
+    const raw = JSON.stringify(body);
+    const at = String(opts.at ?? Math.floor(Date.now() / 1000));
+    const sig = createHmac("sha256", opts.secret ?? SLACK_SECRET)
+      .update(`v0:${at}:${raw}`)
+      .digest("hex");
+    const res = await t.app.fetch(
+      new Request(`http://svc/agent-connect/events/${subscription.id}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-slack-request-timestamp": at,
+          "x-slack-signature": `v0=${sig}`,
+          ...(opts.retry ? { "x-slack-retry-num": opts.retry, "x-slack-retry-reason": "x" } : {}),
+        },
+        body: raw,
+      }),
+    );
+    await t.runtime.idle();
+    return res;
+  }
+  return { f, t, post, subscription };
+}
+
+let mentions = 0;
+const mention = (event: Record<string, unknown> = {}, id = `Ev${++mentions}`) => ({
+  token: "legacy",
+  team_id: "T1",
+  api_app_id: "A1",
+  type: "event_callback",
+  event_id: id,
+  event_time: Math.floor(Date.now() / 1000),
+  event: {
+    type: "app_mention",
+    user: "U42",
+    text: "<@UBOT> what changed in the release?",
+    ts: "1730700000.000100",
+    channel: "C123",
+    event_ts: "1730700000.000100",
+    ...event,
+  },
+});
+
+test(
+  "Slack: signed mentions start the agent once with the thread to answer in",
+  { skip: !sql },
+  async () => {
+    const { f, t, post } = await slackSetup();
+    await t.trigger({ eventTypes: ["app_mention"] });
+
+    assert.equal((await post(mention({}, "EvFirst"))).status, 200);
+    assert.equal(f.started.length, 1);
+    assert.equal(f.started[0].event.type, "app_mention");
+    assert.equal(f.started[0].event.deliveryId, "EvFirst");
+    assert.deepEqual(f.started[0].event.data, {
+      channel: "C123",
+      user: "U42",
+      text: "<@UBOT> what changed in the release?",
+      ts: "1730700000.000100",
+      thread_ts: "1730700000.000100",
+      team: "T1",
+    });
+
+    // Slack's retry of the same event (same event_id, X-Slack-Retry-Num) starts nothing.
+    assert.equal((await post(mention({}, "EvFirst"), { retry: "1" })).status, 200);
+    assert.equal(f.started.length, 1);
+
+    // Inside a thread: the reply goes to the thread, not the message.
+    await post(mention({ ts: "1730700100.000200", thread_ts: "1730700000.000100" }));
+    assert.equal(f.started.length, 2);
+    assert.equal(f.started[1].event.data.thread_ts, "1730700000.000100");
+    assert.equal(f.started[1].event.data.ts, "1730700100.000200");
+
+    // Another signing secret; a stamp older than five minutes (also refused when re-signed).
+    assert.equal((await post(mention(), { secret: "x".repeat(32) })).status, 401);
+    assert.equal((await post(mention(), { at: Math.floor(Date.now() / 1000) - 600 })).status, 200);
+    assert.equal(f.started.length, 2);
+    const log = await t.audit();
+    assert.ok(log.some((l) => l.includes("signature did not match")));
+    assert.ok(log.some((l) => l.includes("Refused: sent too long ago")));
+    assert.ok(
+      log.includes("events:delivery denied Ignored: already received (a retry or a replay)"),
+    );
+  },
+);
+
+test(
+  "Slack: the url_verification handshake is answered only when signed",
+  { skip: !sql },
+  async () => {
+    const { f, t, post } = await slackSetup();
+    await t.trigger({ eventTypes: ["app_mention"] });
+    const check = {
+      token: "legacy",
+      challenge: "3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P",
+      type: "url_verification",
+    };
+
+    const ok = await post(check);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get("content-type"), "text/plain");
+    assert.equal(await ok.text(), check.challenge);
+    assert.equal((await post(check, { secret: "x".repeat(32) })).status, 401);
+    assert.equal((await post({ type: "url_verification" })).status, 400);
+    assert.equal(f.started.length, 0);
+    assert.ok((await t.audit()).some((l) => l.includes("Answered the app's check of the address")));
+  },
+);
+
+test(
+  "Slack: mentions outside the agent's channels and the bot's own messages start nothing",
+  { skip: !sql },
+  async () => {
+    const { f, t, post } = await slackSetup({ channels: ["C123"] });
+    await t.trigger({ eventTypes: ["app_mention"] });
+
+    await post(mention({ channel: "C999" }));
+    await post(mention({ user: "UBOT", bot_id: "B1" }));
+    assert.equal(f.started.length, 0);
+    await post(mention());
+    assert.equal(f.started.length, 1);
+
+    const log = await t.audit();
+    assert.ok(log.some((l) => /Out of limits: channels C999/.test(l)));
+    assert.ok(log.some((l) => /made by Slack's own connection/.test(l)));
+    assert.ok(t.calls.some((c) => c.method === "GET" && c.path === "/auth.test"));
+  },
+);
+
+test(
+  "Slack: the admin gives Slack's signing secret; the service makes others",
+  { skip: !sql },
+  async () => {
+    const t = await setup([fakeRunner().runner], { channels: [] }, slack);
+    const missing = await t.call("POST", "/event-subscriptions", {
+      app: "slack",
+      source: "webhook",
+      by: "ann",
+    });
+    assert.equal(missing.status, 400);
+    assert.match(JSON.stringify(missing.body), /makes the signing secret itself/);
+    const created = await t.subscribe("webhook", { secret: SLACK_SECRET });
+    assert.equal(created.secret, null);
+    assert.ok(created.setup[0].click.some((c) => c.includes(created.subscription.url!)));
+    const poll = await t.call("POST", "/event-subscriptions", {
+      app: "slack",
+      source: "poll",
+      by: "ann",
+    });
+    assert.equal(poll.status, 400);
+
+    const path = `/event-subscriptions/${created.subscription.id}/secret`;
+    assert.equal((await t.call("POST", path, { by: "ann" })).status, 400);
+    const rotated = await t.call("POST", path, { by: "ann", secret: "n".repeat(32) });
+    assert.equal(rotated.status, 200);
+    assert.equal(rotated.body.secret, null);
+
+    // An app whose secret the service makes refuses one given.
+    const tr = await setup([fakeRunner().runner]);
+    const given = await tr.call("POST", "/event-subscriptions", {
+      app: "tracker",
+      source: "webhook",
+      secret: SLACK_SECRET,
+      by: "ann",
+    });
+    assert.equal(given.status, 400);
+    assert.match(JSON.stringify(given.body), /made here/);
   },
 );

@@ -440,7 +440,7 @@ export function createApp(deps: {
         eventSubscriptions: async ({ params: [org] }) => ok(await ev.subscriptions(org)),
         subscribeEvents: async ({ params: [org], body }) => ok(await ev.subscribe(org, body)),
         rotateEventSecret: async ({ params: [org, id], body }) =>
-          some(await ev.rotateSecret(org, id, body.by)),
+          some(await ev.rotateSecret(org, id, body)),
         unsubscribeEvents: async ({ params: [org, id], body }) =>
           found(await ev.unsubscribe(org, id, body.by)),
         eventTriggers: async ({ params: [org, id] }) => ok(await ev.triggers(org, id)),

@@ -144,5 +144,94 @@
     "check": "channels",
     "ifEmpty": "The app is not in any channel yet, so agents will find nothing. Add it to a channel with /invite, then check again."
   },
-  "revoke": "In Slack's app settings, open {brand.microsoft.appName}, then Install App, and revoke its token, or remove the app from the workspace under Settings > Manage apps."
+  "revoke": "In Slack's app settings, open {brand.microsoft.appName}, then Install App, and revoke its token, or remove the app from the workspace under Settings > Manage apps.",
+  "events": {
+    "types": [
+      {
+        "id": "app_mention",
+        "label": "App mentioned"
+      }
+    ],
+    "fields": {
+      "channel": "event.channel",
+      "user": "event.user",
+      "text": "event.text",
+      "ts": "event.ts",
+      "thread_ts": [
+        "event.thread_ts",
+        "event.ts"
+      ],
+      "team": "team_id"
+    },
+    "limits": {
+      "channels": "channel"
+    },
+    "self": {
+      "request": {
+        "method": "GET",
+        "path": "/auth.test"
+      },
+      "id": "user_id",
+      "fields": [
+        "user"
+      ]
+    },
+    "webhook": {
+      "verify": {
+        "type": "hmac-sha256",
+        "header": "X-Slack-Signature",
+        "prefix": "v0=",
+        "signs": "v0:{header:X-Slack-Request-Timestamp}:{body}"
+      },
+      "secretFromApp": true,
+      "type": {
+        "field": "event.type"
+      },
+      "deliveryId": {
+        "field": "event_id"
+      },
+      "timestamp": {
+        "at": {
+          "header": "X-Slack-Request-Timestamp"
+        },
+        "unit": "s",
+        "toleranceSeconds": 300
+      },
+      "handshake": {
+        "at": {
+          "field": "type"
+        },
+        "equals": "url_verification",
+        "echo": "challenge"
+      },
+      "setup": [
+        {
+          "title": "Send mentions of the app to {brand.productName}",
+          "body": "In the Slack app's settings, turn on Event Subscriptions with this address and subscribe to the bot event app_mention. Slack checks the address at once, signed with the app's signing secret you gave when you added this, and shows Verified. Slack then asks you to reinstall the app, which adds the permission app_mentions:read. Agents are started only by mentions in channels the app is a member of, and only in channels within their limits.",
+          "click": [
+            "api.slack.com/apps > {brand.microsoft.appName} > Event Subscriptions > Enable Events: On",
+            "Request URL: {url}",
+            "Subscribe to bot events > Add Bot User Event > app_mention",
+            "Save Changes, then reinstall the app when Slack asks"
+          ],
+          "copy": [
+            "# Or edit the app's manifest (App Manifest) and add:",
+            "oauth_config:",
+            "  scopes:",
+            "    bot:",
+            "      - app_mentions:read",
+            "settings:",
+            "  event_subscriptions:",
+            "    request_url: {url}",
+            "    bot_events:",
+            "      - app_mention"
+          ],
+          "link": {
+            "label": "About Slack's Events API",
+            "href": "https://docs.slack.dev/apis/events-api/"
+          }
+        }
+      ]
+    }
+  }
 }
