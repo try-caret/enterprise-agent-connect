@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, Zip, UKG Pro, iCIMS, ZoomInfo, DocuSign and Axonius) once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, GitHub, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, Zip, UKG Pro, iCIMS, ZoomInfo, DocuSign and Axonius) once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -305,6 +305,9 @@ packages/connector-kit/src/ # what a connector builds on: connector.ts (connecto
                       # schemas, ConnectorModule, loading connectors/), common.ts (Toolset,
                       # audited: the audit row for every call), types.ts (Vendor, ConnectError),
                       # oauth.ts (client credentials with a cached token, vendor error text),
+                      # common.ts `binary` (a file as a tool answer: {uri, mimeType, size,
+                      # sha256} as JSON text, then the bytes as a base64 MCP embedded resource,
+                      # refused over MAX_BINARY_BYTES, 8 MB),
                       # fetch.ts (vendorFetch: every coded app's calls, redirects refused as a
                       # ConnectError, a 429 with Retry-After up to 10 s sent again twice;
                       # vendorUrl: base + path refused when it leaves base's origin; the
@@ -371,7 +374,10 @@ connectors/http/      # the generic module for a connector.json `http` block; ex
                       # one key as before; clashes, a place both list and object, and prototype
                       # keys are refused at parse, and setPath follows only own keys;
                       # `contentType` (block or tool) is application/json or +json; `readOnly`
-                      # marks a POST search read-only to clients. Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # marks a POST search read-only to clients; a param's `pattern` (a string's
+                      # regex, checked by the tool's schema); a tool's `binary` (a GET answering
+                      # a file: any type, read up to MAX_BINARY_BYTES by a second guarded fetch,
+                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
                       # connector-kit oauth.ts jwtAssertion, http blocks only);
                       # openapi.ts: draftConnector (the OpenAPI drafter the script and the
                       # admin API's internal app drafts share)
@@ -406,7 +412,7 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # private_key_jwt, a token per scope;
                       # workday: an API client for integrations' refresh token;
                       # dynamics-365: the Microsoft connection signing in to one Dataverse
-                      # environment)
+                      # environment; github: a GitHub App's installation token)
 connectors/churnzero/ # JSON only, on the odata block (v4, host from the connect form's instance
                       # field); not a built-in until address placeholders land. Its test loads it
                       # and calls a tool against a local fake
@@ -1274,8 +1280,14 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
     (`/changes` is deprecated since 15.7), notes, pipelines, jobs (`scope[]`), a job's `/trace`
     (text, over 1 MB refused) and commits; paging from `X-Next-Page`. Limit `projects` by full
     path, sent as one encoded segment (GitLab takes `group%2Fproject`). Retrying jobs is left
-    out: a retried deploy job deploys. Sources: docs.gitlab.com api/rest, merge_requests,
-    pipelines, jobs, notes, project_access_tokens.
+    out: a retried deploy job deploys. Capability `read_code` (not required, `read_api`):
+    `gitlab_resolve_ref` (`repository/commits/{ref}`, a ref with slashes as one encoded segment),
+    `gitlab_list_tree` (`repository/tree`, X-Next-Page), `gitlab_read_file`
+    (`repository/files/{path}/raw`, text only, 1 MB) and `gitlab_download_archive`
+    (`repository/archive.tar.gz?sha=`, `binary`; `sha` must match a full SHA-1 or SHA-256 commit
+    id, so a branch name is refused before any call). Sources: docs.gitlab.com api/rest,
+    merge_requests, pipelines, jobs, notes, project_access_tokens, commits, repositories,
+    repository_files.
   - Argo CD (`argo-cd`): `https://{host}`, bearer token of a local `apiKey` account bound to
     `role:readonly` (argocd-cm, argocd-rbac-cm; `argocd account generate-token`). Reads only:
     applications, one application (answer limit `spec.project`), resource tree, events and revision
@@ -1323,6 +1335,27 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
     the Link header. CQL search and writes are left out: CQL cannot be held to spaces, and page
     and comment bodies are nested objects the http block does not send. Sources: Atlassian
     create-oauth-2-0-credential-for-service-accounts, Confluence openapi-v2.v3.json.
+- GitHub (`github`, coded: connectors/github; read November 5, 2026, tested only against a fake
+  api.github.com and codeload, never a live app): a GitHub App the organization owns (fields
+  `client_id`, `installation_id`, secret `private_key`, the .pem GitHub downloads, PKCS#1 or 8,
+  line breaks restored by the kit's `rsaKey`). Chosen over a fine-grained personal access token:
+  it belongs to the organization rather than a person, tokens last an hour and reach only the
+  repositories it is installed on, and the key never leaves the service. A JWT (RS256, `iss` the
+  client ID, `iat` 60 s back, 10 minutes) reads `GET /app/installations/{id}` at connect (the
+  account login is `owner`, the `accountKey`; Contents must be read or write, else a plain
+  refusal) and mints installation tokens at `POST /app/installations/{id}/access_tokens`, kept
+  until a minute before `expires_at`, re-minted once on a 401. GitHub.com only. Capability
+  `read_code` (required): `github_resolve_ref` (`commits/{ref}` with Accept
+  `application/vnd.github.sha`, read as text), `github_list_tree` (`git/trees/{ref}?recursive=1`,
+  filtered to a folder here, at most 10,000 entries, `truncated`), `github_read_file`
+  (`contents/{path}?ref=`, base64 decoded as strict UTF-8, 1 MB; folders, symlinks and binary
+  files refused) and `github_download_archive` (a 40-hex `commit` only, checked in the tool;
+  `tarball/{sha}` answers 302 to codeload.github.com with its own token in the address, followed
+  through `guardedFetch` held to that origin, without the installation token, read up to
+  MAX_BINARY_BYTES; any other location is refused). Refs and paths go as encoded segments with
+  no empty, `.` or `..` one. Limit `repositories` (owner/name, compared ignoring case). Verify
+  lists `/installation/repositories`. Sources: docs.github.com apps (generating a JWT,
+  installation access tokens), rest/apps/apps, rest/commits, rest/git/trees, rest/repos/contents.
 - Ironclad (`ironclad`, JSON only, `describedApp`; read November 1, 2026, tested only against
   fakes): `https://{host}/public/api/v1` and token `https://{host}/oauth/token`, host held to
   `ironcladapp.com` and `*.ironcladapp.com` (US, eu1, demo); client credentials with no `scope`

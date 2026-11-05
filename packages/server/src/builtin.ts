@@ -2,6 +2,7 @@ import dellTechdirect from "../../../connectors/dell-techdirect/index.js";
 import dynamics365 from "../../../connectors/dynamics-365/index.js";
 import entra from "../../../connectors/entra/index.js";
 import fedex from "../../../connectors/fedex/index.js";
+import github from "../../../connectors/github/index.js";
 import gong from "../../../connectors/gong/index.js";
 import httpConnector from "../../../connectors/http/index.js";
 import intune from "../../../connectors/intune/index.js";
@@ -53,6 +54,7 @@ export const builtinConnectors: BuiltinModule[] = [
   netsuite,
   dynamics365,
   gong,
+  github,
   describedApp("gitlab"),
   describedApp("argo-cd"),
   describedApp("sonarqube"),

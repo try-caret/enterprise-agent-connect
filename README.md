@@ -6,7 +6,7 @@ agent's grants and written to an audit log. Agents never hold the apps' credenti
 
 - **Built-in apps:** Jira, Microsoft 365 (Outlook mail and calendar, SharePoint files and Excel,
   Teams, Entra ID, Intune, Dynamics 365), Jamf Pro, Okta, Slack, Salesforce, Gong, SAP S/4HANA,
-  Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect; and, described in JSON only,
+  Oracle NetSuite, ServiceNow, Workday, FedEx, Dell TechDirect, GitHub; and, described in JSON only,
   GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr Scale, Confluence, Lusha,
   ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia,
   WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream,
