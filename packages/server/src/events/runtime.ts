@@ -12,6 +12,7 @@ import { readCappedBytes } from "../teams/runtime.js";
 import {
   bodyHash,
   eventPrompt,
+  threadId,
   failedCondition,
   fill,
   fresh,
@@ -23,10 +24,12 @@ import {
   valueAt,
   type EventData,
 } from "./deliver.js";
+import { createGraphSource } from "./graph.js";
 import type { EventTriggerRow, EventsStore, QueuedEvent, SubscriptionRow } from "./store.js";
 
-// Events from connected apps (docs/triggers.md): deliveries at /events/<subscription id> and
-// polls, one queue, and the runs they start on the same runners as Teams (teams/runner.ts).
+// Events from connected apps (docs/triggers.md): deliveries at /events/<subscription id>, Graph
+// notifications (graph.ts) and polls, one queue, and the runs they start on the same runners
+// as Teams (teams/runner.ts).
 
 // Larger than any one event an app sends (a Jira issue with its changelog), far below a flood.
 const MAX_BODY = 1024 * 1024;
@@ -54,6 +57,8 @@ export type EventsRuntimeDeps = {
   // A call with the organization's own connection; null when the app is not connected.
   appCall(org: string, app: string, request: VendorRequest): Promise<VendorResponse | null>;
   runners: Map<string, TriggerRunner>;
+  // Where Graph sends notifications.
+  publicUrl: string | null;
 };
 
 export function createEventsRuntime(deps: EventsRuntimeDeps) {
@@ -87,6 +92,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   // ---- inbound ----
 
   const refusedAt = new Map<string, number>();
+  async function refused(sub: SubscriptionRow, reason: string) {
+    if (Date.now() - (refusedAt.get(sub.id) ?? 0) <= REFUSED_AUDIT_MS) return;
+    refusedAt.set(sub.id, Date.now());
+    await delivery(sub, "unknown", "denied", reason);
+  }
 
   /** POST /events/:subscription. The proof is checked on the raw body before anything in it
    *  is read; accepted deliveries are queued and answered at once. */
@@ -94,15 +104,14 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (req.headers.has("origin")) return reply(403);
     const sub = await events.subscription(subscriptionId);
     const connector = sub ? connectors.get(sub.connectorId) : undefined;
+    if (sub?.source === "graph" && connector?.events?.graph)
+      return graph.inbound(sub, connector, req);
     const hook = connector?.events?.webhook;
     if (!sub || sub.source !== "webhook" || !hook) return reply(404);
     const raw = await readCappedBytes(req, MAX_BODY);
     if (raw === null) return reply(413);
     if (!signed(hook.verify, openSecret(sub), raw, req.headers)) {
-      if (Date.now() - (refusedAt.get(sub.id) ?? 0) > REFUSED_AUDIT_MS) {
-        refusedAt.set(sub.id, Date.now());
-        await delivery(sub, "unknown", "denied", "Refused: the signature did not match");
-      }
+      await refused(sub, "Refused: the signature did not match");
       return reply(401);
     }
     let body: unknown;
@@ -124,7 +133,14 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       );
       return reply(200);
     }
-    await accept(sub, connector!, type, deliveryId, body, false);
+    await accept(
+      sub,
+      connector!,
+      type,
+      deliveryId,
+      pickFields(connector!.events!.fields, body),
+      false,
+    );
     return reply(200);
   }
 
@@ -135,13 +151,12 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     connector: Connector,
     type: string | null,
     deliveryId: string,
-    body: unknown,
+    data: EventData,
     quietDuplicates: boolean,
   ) {
     const target = `${type ?? "unknown"} ${deliveryId}`;
     if (!type || !connector.events!.types.some((t) => t.id === type))
       return delivery(sub, target, "denied", "Ignored: not an event type this app declares");
-    const data = pickFields(connector.events!.fields, body);
     const sealed = key.seal({ data: JSON.stringify(data) }, eventAad(sub.id, deliveryId));
     const id = await events.insertEvent({
       subscriptionId: sub.id,
@@ -158,6 +173,17 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     await delivery(sub, target, "allowed", "Received");
     queue.kick();
   }
+
+  const graph = createGraphSource({
+    events,
+    publicUrl: deps.publicUrl,
+    appCall: deps.appCall,
+    audit,
+    delivery,
+    refused,
+    accept,
+    openSecret,
+  });
 
   // ---- the queue ----
 
@@ -269,12 +295,19 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         `Capped: ${cap === "hour" ? "runs per hour" : cap === "day" ? "spending per day" : "runs at once"} reached`,
       );
 
+    const threadField = connector.events!.thread;
+    const threadValue = threadField ? data[threadField] : null;
+    const thread =
+      threadValue === null || threadValue === undefined || Array.isArray(threadValue)
+        ? null
+        : threadId(trigger.id, String(threadValue));
     const runId = await events.startRun({
       agentId: trigger.agentId,
       triggerId: trigger.id,
       eventId: event.id,
       eventType: event.eventType,
       deliveryId: event.deliveryId,
+      thread,
       runner: trigger.runner,
     });
     try {
@@ -300,7 +333,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         budgetCents: trigger.budgetCents,
         trigger,
         secret,
-        event: { app: connector.id, type: type.id, deliveryId: event.deliveryId, data },
+        event: { app: connector.id, type: type.id, deliveryId: event.deliveryId, thread, data },
       });
       await events.updateRun(runId, { state: "running", sessionId });
       await decide("allowed", `Started run ${runId}`);
@@ -390,11 +423,35 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         const deliveryId = p.deliveryId.map((path) => String(valueAt(body, path) ?? "")).join("@");
         const at = valueAt(body, p.cursor);
         if (typeof at === "string" && Date.parse(at) > Date.parse(newest)) newest = at;
-        await accept(sub, connector!, type, deliveryId, body, true);
+        await accept(
+          sub,
+          connector!,
+          type,
+          deliveryId,
+          pickFields(connector!.events!.fields, body),
+          true,
+        );
       }
       await events.polled(sub.id, newest, null);
     } catch (error) {
       console.error(`[events] poll ${sub.id}`, error);
+      await events.polled(
+        sub.id,
+        null,
+        error instanceof ConnectError ? error.message : "Internal error",
+      );
+    }
+  }
+
+  /** A Graph subscription's watches brought in line with the triggers, renewed and caught up. */
+  async function sync(sub: SubscriptionRow) {
+    const connector = connectors.get(sub.connectorId);
+    if (!connector?.events?.graph)
+      return events.polled(sub.id, null, `${sub.connectorId} sends no Graph notifications`);
+    try {
+      await graph.sync(sub, connector);
+    } catch (error) {
+      console.error(`[events] graph sync ${sub.id}`, error);
       await events.polled(
         sub.id,
         null,
@@ -408,7 +465,9 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (polling) return;
     polling = true;
     try {
-      for (const sub of await events.duePolls()) await poll(sub);
+      for (const sub of await events.duePolls())
+        if (sub.source === "graph") await sync(sub);
+        else await poll(sub);
     } finally {
       polling = false;
     }
@@ -467,6 +526,14 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     inbound,
     poll,
     pollDue,
+    /** After a trigger on the app changes: the organization's Graph subscription for it, if
+     *  any, follows at once rather than at its next interval. */
+    async syncApp(org: string, app: string) {
+      const sub = await events.subscriptionFor(org, app);
+      if (sub?.source === "graph") await sync(sub);
+    },
+    releaseAll: graph.releaseAll,
+    settle: graph.settle,
     watch,
     kick: queue.kick,
     idle: queue.idle,
@@ -491,6 +558,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     },
     async stop() {
       for (const t of timers) clearInterval(t);
+      await graph.settle();
       await queue.stop();
     },
   };

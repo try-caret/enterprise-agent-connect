@@ -150,5 +150,39 @@
       }
     },
     "missing": "The app can open this mailbox but Exchange does not let it do this yet: {missing}. Give that role (the step Limit the app to the mailboxes in that group, on the Outlook mail page) and check again. Microsoft can take up to about 2 hours to apply a change."
+  },
+  "events": {
+    "types": [{ "id": "message_received", "label": "Mail received" }],
+    "fields": {
+      "mailbox": "mailbox",
+      "message_id": "message.id",
+      "conversation_id": "message.conversationId",
+      "internet_message_id": "message.internetMessageId",
+      "from": "message.from.emailAddress.address",
+      "to": "message.toRecipients[].emailAddress.address",
+      "cc": "message.ccRecipients[].emailAddress.address",
+      "subject": "message.subject",
+      "received": "message.receivedDateTime",
+      "preview": "message.bodyPreview"
+    },
+    "limits": { "mailbox": "mailbox" },
+    "thread": "conversation_id",
+    "graph": {
+      "per": "mailbox",
+      "resource": "users/{value}/mailFolders('inbox')/messages",
+      "changeType": "created",
+      "type": "message_received",
+      "maxMinutes": 10070,
+      "read": { "method": "GET", "path": "/v1.0/users/{value}/messages/{id}?$select=id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,receivedDateTime,bodyPreview" },
+      "delta": {
+        "method": "GET",
+        "path": "/v1.0/users/{value}/mailFolders/inbox/messages/delta?changeType=created&$select=id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,receivedDateTime,bodyPreview&$filter=receivedDateTime%20ge%20{since}"
+      },
+      "wrap": "message",
+      "deliveryId": "message.id",
+      "received": "message.receivedDateTime",
+      "own": ["from"],
+      "only": { "only_mailbox": ["to", "cc"] }
+    }
   }
 }

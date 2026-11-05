@@ -208,13 +208,14 @@ export async function createAgentConnect(options: AgentConnectOptions) {
     connectors: eventApps,
     appCall: service.appCall,
     runners,
+    publicUrl,
   };
   const events = createEventsRuntime(eventDeps);
   const app = createApp({
     service,
     store,
     adminToken: options.adminToken,
-    events: { runtime: events, admin: createEventsAdmin({ ...eventDeps, publicUrl }) },
+    events: { runtime: events, admin: createEventsAdmin({ ...eventDeps, runtime: events }) },
     teams: {
       runtime,
       admin: createTeamsAdmin({

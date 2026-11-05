@@ -269,6 +269,8 @@ export function createClient(options: ClientOptions) {
       call<Answer<"rotateEventSecret">>("POST", `${org(o)}/event-subscriptions/${seg(id)}/secret`, {
         by,
       }),
+    eventWatches: (o: string, id: string) =>
+      call<Answer<"eventWatches">>("GET", `${org(o)}/event-subscriptions/${seg(id)}/watches`),
     unsubscribeEvents: (o: string, id: string, by: string) =>
       call<void>("DELETE", `${org(o)}/event-subscriptions/${seg(id)}`, { by }),
     eventTriggers: (o: string, id: string) =>

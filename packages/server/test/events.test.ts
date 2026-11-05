@@ -138,9 +138,10 @@ async function setup(
     connectors: new Map([["tracker", tracker]]),
     appCall,
     runners: new Map(runners.map((r) => [r.id, r])),
+    publicUrl: PUBLIC,
   };
   const runtime = createEventsRuntime(deps);
-  const admin = createEventsAdmin({ ...deps, publicUrl: PUBLIC });
+  const admin = createEventsAdmin({ ...deps, runtime });
   const app = createApp({
     service: {} as never,
     store,

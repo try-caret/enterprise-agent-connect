@@ -5965,7 +5965,8 @@
                     "type": "string",
                     "enum": [
                       "webhook",
-                      "poll"
+                      "poll",
+                      "graph"
                     ]
                   },
                   "filter": {
@@ -6119,6 +6120,90 @@
                     "secret"
                   ],
                   "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{org}/event-subscriptions/{subscription}/watches": {
+      "get": {
+        "operationId": "eventWatches",
+        "summary": "A Microsoft Graph subscription's watched values (each agent's mailbox): live, expiry, last notification and catch-up",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "subscription",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventWatch"
+                  }
                 }
               }
             }
@@ -10722,6 +10807,137 @@
                   "types"
                 ],
                 "additionalProperties": false
+              },
+              "graph": {
+                "type": "object",
+                "properties": {
+                  "per": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "resource": {
+                    "type": "string",
+                    "minLength": 1,
+                    "format": "includes",
+                    "pattern": "\\{value\\}"
+                  },
+                  "changeType": {
+                    "type": "string",
+                    "pattern": "^(created|updated|deleted)(,(created|updated|deleted))*$"
+                  },
+                  "type": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.:-]{1,100}$"
+                  },
+                  "maxMinutes": {
+                    "type": "integer",
+                    "minimum": 45,
+                    "maximum": 43200
+                  },
+                  "read": {
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "type": "string",
+                        "enum": [
+                          "GET",
+                          "POST",
+                          "PUT"
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "format": "starts_with",
+                        "pattern": "^\\/.*"
+                      },
+                      "body": {}
+                    },
+                    "required": [
+                      "method",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "delta": {
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "type": "string",
+                        "enum": [
+                          "GET",
+                          "POST",
+                          "PUT"
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "format": "starts_with",
+                        "pattern": "^\\/.*"
+                      },
+                      "body": {}
+                    },
+                    "required": [
+                      "method",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "wrap": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "deliveryId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                  },
+                  "received": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                  },
+                  "own": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    }
+                  },
+                  "only": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "additionalProperties": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "per",
+                  "resource",
+                  "changeType",
+                  "type",
+                  "maxMinutes",
+                  "read",
+                  "delta",
+                  "wrap",
+                  "deliveryId",
+                  "received",
+                  "own",
+                  "only"
+                ],
+                "additionalProperties": false
+              },
+              "thread": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
               }
             },
             "required": [
@@ -10802,6 +11018,12 @@
           "deliveryId": {
             "type": "string"
           },
+          "thread": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "runner": {
             "type": "string"
           },
@@ -10855,6 +11077,7 @@
           "connectorId",
           "eventType",
           "deliveryId",
+          "thread",
           "runner",
           "sessionId",
           "state",
@@ -11064,7 +11287,8 @@
             "type": "string",
             "enum": [
               "webhook",
-              "poll"
+              "poll",
+              "graph"
             ]
           },
           "filter": {
@@ -11275,6 +11499,70 @@
           "maxConcurrent",
           "updatedBy",
           "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "EventWatch": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "subscribed": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601, UTC"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastNotificationAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601, UTC"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "caughtUpAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601, UTC"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO 8601, UTC"
+          }
+        },
+        "required": [
+          "value",
+          "subscribed",
+          "expiresAt",
+          "lastNotificationAt",
+          "caughtUpAt",
+          "lastError",
+          "createdAt"
         ],
         "additionalProperties": false
       },

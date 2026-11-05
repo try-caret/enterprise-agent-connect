@@ -1098,15 +1098,63 @@ const eventsSchema = z
       })
       .strict()
       .optional(),
+    // Microsoft Graph change notifications (packages/server/src/events/graph.ts): one Graph
+    // subscription on `resource` per distinct value of the agents' `per` limit (e.g. a
+    // mailbox) among agents with an enabled trigger, renewed before `maxMinutes` runs out. A
+    // notification names only the item: `read` fetches it ({value} {id}); `delta` catches up
+    // on what notifications missed ({value}, {since}: when the watch started), deduplicated
+    // with them by `deliveryId`. Each item is kept under `wrap`, with the watched value under
+    // the `per` limit's id; it is news only when `received` is after the watch started and
+    // within 7 days. `own`: fields that, equal to the watched value, make it the watched
+    // account's own (it starts nothing); `only`: boolean fields added to the event, true when
+    // every value of the listed fields is the watched value.
+    graph: z
+      .object({
+        per: slug,
+        resource: z.string().min(1).includes("{value}"),
+        changeType: z.string().regex(/^(created|updated|deleted)(,(created|updated|deleted))*$/),
+        type: eventId,
+        maxMinutes: z.number().int().min(45).max(43200),
+        read: eventRequest,
+        delta: eventRequest,
+        wrap: slug,
+        deliveryId: eventPath,
+        received: eventPath,
+        own: z.array(slug).default([]),
+        only: z.record(slug, z.array(slug).min(1)).default({}),
+      })
+      .strict()
+      .optional(),
+    // The field naming the conversation an event belongs to (a mail thread, an issue): events
+    // of one thread carry the same `thread` id to the runner, per trigger.
+    thread: slug.optional(),
   })
   .strict()
-  .refine((e) => e.webhook || e.poll, { message: "Events come from a webhook, a poll or both" })
+  .refine((e) => e.webhook || e.poll || e.graph, {
+    message: "Events come from a webhook, a poll or Graph notifications",
+  })
   .refine(
     (e) =>
       Object.values(e.limits).every((f) => f in e.fields) &&
       (e.self?.fields ?? []).every((f) => f in e.fields) &&
-      (e.poll?.types ?? []).every((t) => e.types.some((x) => x.id === t.type)),
-    { message: "Event limits and self name fields, and a poll's types are declared types" },
+      (e.poll?.types ?? []).every((t) => e.types.some((x) => x.id === t.type)) &&
+      (e.thread === undefined || e.thread in e.fields),
+    { message: "Event limits, self and thread name fields, and a poll's types are declared types" },
+  )
+  .refine(
+    (e) =>
+      !e.graph ||
+      // Without that limit, one agent's trigger would start on another agent's mailbox.
+      (e.graph.per in e.limits &&
+        e.types.some((x) => x.id === e.graph!.type) &&
+        e.graph.own.every((f) => f in e.fields) &&
+        Object.entries(e.graph.only).every(
+          ([name, from]) => !(name in e.fields) && from.every((f) => f in e.fields),
+        )),
+    {
+      message:
+        "Graph events need an event limit on `per`, a declared type, and own and only naming fields (only's own names new)",
+    },
   );
 export type ConnectorEvents = z.infer<typeof eventsSchema>;
 
