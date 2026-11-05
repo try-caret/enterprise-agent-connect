@@ -12,11 +12,13 @@ import { InvalidInput } from "../service.js";
 import type { Store } from "../store.js";
 import { CLAUDE_RUNNER, type TriggerRunner } from "../teams/runner.js";
 import { fill, rawAt } from "./deliver.js";
-import { eventTriggerAad, subscriptionAad } from "./runtime.js";
+import { eventTriggerAad, subscriptionAad, type EventsRuntime } from "./runtime.js";
 import type { EventTriggerRow, EventsStore, SubscriptionRow } from "./store.js";
 
 // The admin side of app events: each organization's subscription per app (webhook or poll),
-// each agent's trigger per app, and the runs they started. docs/triggers.md.
+// each agent's trigger per app, and the runs they started. docs/triggers.md. A Graph
+// subscription's watches (one per agent's mailbox) follow the triggers: synced on every trigger
+// change, and on its interval for grant and agent changes.
 
 type Steps = NonNullable<NonNullable<Connector["events"]>["webhook"]>["setup"];
 
@@ -25,7 +27,7 @@ const by = z.string().trim().min(1).max(200);
 
 export const subscriptionSchema = z.object({
   app: z.string().regex(/^[a-z0-9-]+$/),
-  source: z.enum(["webhook", "poll"]),
+  source: z.enum(["webhook", "poll", "graph"]),
   // In the app's own terms, e.g. Jira JQL: what it sends, or what a poll reads.
   filter: z.string().max(2000).default(""),
   intervalSeconds: z.number().int().min(60).max(86400).default(300),
@@ -75,6 +77,7 @@ export function createEventsAdmin(deps: {
   appCall(org: string, app: string, request: VendorRequest): Promise<VendorResponse | null>;
   runners: Map<string, TriggerRunner>;
   publicUrl: string | null;
+  runtime: Pick<EventsRuntime, "syncApp" | "releaseAll">;
 }) {
   const { store, events, key } = deps;
 
@@ -98,7 +101,7 @@ export function createEventsAdmin(deps: {
   }
 
   const urlOf = (sub: SubscriptionRow) =>
-    sub.source === "webhook" && deps.publicUrl ? `${deps.publicUrl}/events/${sub.id}` : null;
+    sub.source !== "poll" && deps.publicUrl ? `${deps.publicUrl}/events/${sub.id}` : null;
 
   function publicSubscription(sub: SubscriptionRow) {
     const { secret: _s, secretKeyId: _k, organizationId: _o, ...rest } = sub;
@@ -136,12 +139,15 @@ export function createEventsAdmin(deps: {
         );
       if (input.source === "poll" && !declared.poll)
         throw new InvalidInput(`${connector.name} cannot be read on an interval; use its webhook`);
+      if (input.source === "graph" && !declared.graph)
+        throw new InvalidInput(`${connector.name} sends no Microsoft Graph notifications`);
       if (!(await store.getConnection(org, input.app)))
         throw new InvalidInput(`Connect ${connector.name} first`);
-      if (input.source === "webhook" && !deps.publicUrl)
+      if (input.source !== "poll" && !deps.publicUrl)
         throw new ConnectError("This deployment has no public address for the app to send to");
       const subId = randomUUID();
-      const secret = input.source === "webhook" ? newSecret() : null;
+      // Graph's is the clientState, which the service hands Microsoft itself: never shown.
+      const secret = input.source !== "poll" ? newSecret() : null;
       const sealed = secret ? key.seal({ secret }, subscriptionAad(org, subId)) : null;
       const sub = await events.createSubscription({
         id: subId,
@@ -183,10 +189,11 @@ export function createEventsAdmin(deps: {
           };
       }
       await log(org, input.by, input.app, "subscribe_events", `${input.source} ${sub.id}`);
+      if (input.source === "graph") await deps.runtime.syncApp(org, input.app);
       const fresh = (await events.subscription(sub.id))!;
       return {
         subscription: publicSubscription(fresh),
-        secret,
+        secret: input.source === "webhook" ? secret : null,
         setup: (input.source === "webhook" ? hook!.setup : []).map((step) =>
           fill(step, { url: url ?? "", filter: input.filter || "(none)" }),
         ) as Steps,
@@ -205,6 +212,9 @@ export function createEventsAdmin(deps: {
     },
 
     async unsubscribe(org: string, subId: string, who: string) {
+      const existing = await events.subscription(subId);
+      if (existing?.organizationId === org && existing.source === "graph")
+        await deps.runtime.releaseAll(existing);
       const sub = await events.deleteSubscription(org, subId);
       if (sub) await log(org, who, sub.connectorId, "unsubscribe_events", subId);
       return sub !== null;
@@ -225,10 +235,11 @@ export function createEventsAdmin(deps: {
       const { by: who, signingSecret, settings: rawSettings, ...rest } = input;
       const unknownType = rest.eventTypes.find((t) => !declared.types.some((x) => x.id === t));
       if (unknownType) throw new InvalidInput(`${connector.name} has no event ${unknownType}`);
-      const unknownField = rest.conditions.find((c) => !(c.field in declared.fields));
+      const fields = [...Object.keys(declared.fields), ...Object.keys(declared.graph?.only ?? {})];
+      const unknownField = rest.conditions.find((c) => !fields.includes(c.field));
       if (unknownField)
         throw new InvalidInput(
-          `${connector.name} events have no field ${unknownField.field}; they have ${Object.keys(declared.fields).join(", ")}`,
+          `${connector.name} events have no field ${unknownField.field}; they have ${fields.join(", ")}`,
         );
       const runner = deps.runners.get(rest.runner);
       if (!runner?.startEvent)
@@ -266,6 +277,7 @@ export function createEventsAdmin(deps: {
         "set_event_trigger",
         `agent ${agentId} ${rest.enabled ? "on" : "off"} ${rest.eventTypes.join(", ")} runner ${rest.runner} budget ${rest.budgetCents}c`,
       );
+      await deps.runtime.syncApp(org, app);
       return publicTrigger((await events.trigger(org, agentId, app))!);
     },
 
@@ -275,7 +287,24 @@ export function createEventsAdmin(deps: {
       await stopRuns(org, existing.id);
       if (!(await events.removeTrigger(org, agentId, app))) return false;
       await log(org, who, app, "remove_event_trigger", `agent ${agentId}`);
+      await deps.runtime.syncApp(org, app);
       return true;
+    },
+
+    // A Graph subscription's watched values and the state of each; null for another org's.
+    async watches(org: string, subId: string) {
+      const sub = await events.subscription(subId);
+      if (!sub || sub.organizationId !== org) return null;
+      return (await events.watches(subId)).map((w) => ({
+        value: w.value,
+        subscribed:
+          w.remoteId !== null && w.expiresAt !== null && Date.parse(w.expiresAt) > Date.now(),
+        expiresAt: w.expiresAt,
+        lastNotificationAt: w.lastNotificationAt,
+        caughtUpAt: w.caughtUpAt,
+        lastError: w.lastError,
+        createdAt: w.createdAt,
+      }));
     },
 
     async runs(org: string, agentId: string, limit: number) {

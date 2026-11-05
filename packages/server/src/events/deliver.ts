@@ -88,6 +88,11 @@ export function fresh(
   return Number.isFinite(at) && Math.abs(now - at) <= ts.toleranceSeconds * 1000;
 }
 
+/** One trigger's id for one thread of the app (a mail conversation, an issue): the same for
+ *  every event of that thread, and telling nothing of the thread's own id. */
+export const threadId = (triggerId: string, value: string) =>
+  createHash("sha256").update(`${triggerId}\n${value}`).digest("hex").slice(0, 32);
+
 export const bodyHash = (body: Buffer) => createHash("sha256").update(body).digest("hex");
 
 /** The fields the connector keeps: all an agent, a condition or a limit ever reads. */

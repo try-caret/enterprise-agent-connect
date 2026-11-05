@@ -836,6 +836,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orgs/{org}/event-subscriptions/{subscription}/watches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A Microsoft Graph subscription's watched values (each agent's mailbox): live, expiry, last notification and catch-up */
+        get: operations["eventWatches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/orgs/{org}/event-subscriptions/{subscription}": {
         parameters: {
             query?: never;
@@ -1799,6 +1816,38 @@ export interface components {
                         since?: string;
                     }[];
                 };
+                graph?: {
+                    per: string;
+                    /** Format: includes */
+                    resource: string;
+                    changeType: string;
+                    type: string;
+                    maxMinutes: number;
+                    read: {
+                        /** @enum {string} */
+                        method: "GET" | "POST" | "PUT";
+                        /** Format: starts_with */
+                        path: string;
+                        body?: unknown;
+                    };
+                    delta: {
+                        /** @enum {string} */
+                        method: "GET" | "POST" | "PUT";
+                        /** Format: starts_with */
+                        path: string;
+                        body?: unknown;
+                    };
+                    wrap: string;
+                    deliveryId: string;
+                    received: string;
+                    /** @default [] */
+                    own: string[];
+                    /** @default {} */
+                    only: {
+                        [key: string]: string[];
+                    };
+                };
+                thread?: string;
             };
         };
         ConnectResult: {
@@ -1815,6 +1864,7 @@ export interface components {
             connectorId: string;
             eventType: string;
             deliveryId: string;
+            thread: string | null;
             runner: string;
             sessionId: string | null;
             /** @enum {string} */
@@ -1870,7 +1920,7 @@ export interface components {
             id: string;
             connectorId: string;
             /** @enum {string} */
-            source: "webhook" | "poll";
+            source: "webhook" | "poll" | "graph";
             filter: string;
             intervalSeconds: number;
             cursor: string | null;
@@ -1911,6 +1961,16 @@ export interface components {
             updatedBy: string | null;
             /** @description ISO 8601, UTC */
             updatedAt: string;
+        };
+        EventWatch: {
+            value: string;
+            subscribed: boolean;
+            expiresAt: string | null;
+            lastNotificationAt: string | null;
+            caughtUpAt: string | null;
+            lastError: string | null;
+            /** @description ISO 8601, UTC */
+            createdAt: string;
         };
         Grant: {
             agentId: string;
@@ -6230,7 +6290,7 @@ export interface operations {
                 "application/json": {
                     app: string;
                     /** @enum {string} */
-                    source: "webhook" | "poll";
+                    source: "webhook" | "poll" | "graph";
                     /** @default  */
                     filter?: string;
                     /** @default 300 */
@@ -6317,6 +6377,65 @@ export interface operations {
                         subscription: components["schemas"]["EventSubscription"];
                         secret: string;
                     };
+                };
+            };
+            /** @description Refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    eventWatches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                subscription: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventWatch"][];
                 };
             };
             /** @description Refused */

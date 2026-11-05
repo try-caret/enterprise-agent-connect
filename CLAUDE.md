@@ -93,17 +93,28 @@ orgs/:org/teams/publish/callback` {state, nonce, params, by} (the administrator'
 …/agents/:id/teams-runs?limit`; the organization's Claude API key at `GET/PUT/DELETE
 orgs/:org/claude-key` (write-only, shown as its last four characters) and `GET
 orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in openapi.json):
-  `GET/POST orgs/:org/event-subscriptions` (POST {app, source webhook|poll, filter, intervalSeconds,
-  register, by}: one per org and app; answers the address, the secret once, the setup steps with
+  `GET/POST orgs/:org/event-subscriptions` (POST {app, source webhook|poll|graph, filter, intervalSeconds,
+  register, by}: one per org and app; answers the address, the secret once (a webhook's; Graph's
+  clientState is never shown), the setup steps with
   {url} filled and, with `register`, whether the app's API took it), `POST …/:subscription/secret`
-  {by} (a new secret, once), `DELETE …/:subscription` {by}; per agent `GET …/event-triggers`,
-  `PUT/DELETE …/event-triggers/:app` and `GET …/event-runs?limit`.
+  {by} (a new webhook secret, once), `GET …/:subscription/watches` (a Graph subscription's watched
+  values, each agent's mailbox: subscribed, expiresAt, lastNotificationAt, caughtUpAt, lastError),
+  `DELETE …/:subscription` {by} (deletes Graph's subscriptions first); per agent `GET …/event-triggers`,
+  `PUT/DELETE …/event-triggers/:app` (a Graph subscription's watches follow at once) and `GET
+  …/event-runs?limit` (each with `thread`).
 - `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
   cap, the connector's proof (HMAC-SHA256 of the raw body or a token header, constant time) checked
   before the body is parsed (401; audited at most once a minute per subscription), then type,
   delivery id (else the body's SHA-256) and replay window; a repeated delivery id or an
   undeclared type is audited and ignored. Accepted: the kept fields sealed into `app_events`,
-  answered 200 at once.
+  answered 200 at once. For a `graph` subscription (events/graph.ts): `?validationToken=` is
+  echoed as text/plain (Graph's handshake, sent before Graph has the subscription, so it proves
+  nothing and starts nothing); otherwise a `value[]` batch, each notification's `clientState`
+  compared in constant time to the subscription's sealed secret (none matching: 401; any not
+  matching audited at most once a minute), answered 202 at once and worked on after: the
+  message read with the connection (`graph.read`), or a lifecycle event
+  (`reauthorizationRequired` renews, `subscriptionRemoved` subscribes again and catches up,
+  `missed` catches up).
 - `POST /agent-connect/teams/bots/:botAppId/messages`: public, for Teams. Every request carries
   Microsoft's Bot Framework token, checked by hand (packages/server/src/teams/jwt.ts): signature from
   login.botframework.com keys, issuer, audience = this bot, 5 min skew, serviceUrl claim,
@@ -192,8 +203,13 @@ own network, so receivers check `t` freshness and dedupe on `replyToken` (`docs/
 `createAgentConnect({runners})` takes runner factories. App events use the same runners through
 the optional `startEvent` (EventRunInput: no bot or reply token; `RunInput` is unchanged for
 existing runners): only a runner with it can be chosen for an event trigger. Claude: a session
-with `source: <prefix>-events` metadata; webhook: `{type: "event", run, agent, app, event,
-deliveryId, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
+with `source: <prefix>-events` metadata (and `thread`); webhook: `{type: "event", run, agent, app, event,
+deliveryId, thread, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
+`thread` (null when the app declares no `events.thread` or the event has none): a
+32-hex id, sha256 of the trigger id and the thread field's value, the same for every event of
+one conversation on one trigger; `run` stays one per event. A host keys its session on `thread ??
+run`. Claude starts a session per event (a busy session cannot take the next, and the thread
+itself, read with the agent's tools, holds what came before), with `thread` in its metadata.
 `capReached` is the one cap rule for both (hour, then day with live budgets, then concurrency).
 
 ## Database
@@ -216,7 +232,10 @@ the org ids already in them, 0003 drops two never-used columns, 0004 gives trigg
 records each run's runner (a trigger moved to another runner stops the old runner's live
 sessions and never reuses them), 0006 makes `approvals` (Teams approval cards; the
 rollback drops it), 0007 the app event tables (rollback drops them), 0008 `internal_apps` (organizations' own
-connector definitions; rollback drops it). The adopting run then makes simple views
+connector definitions; rollback drops it), 0009 the `graph` source (its check constraints),
+`event_watches` (one per Graph subscription and watched value: Graph's subscription id, expiry,
+catch-up delta link) and `event_runs.thread` (rollback drops `event_watches` first; the rest
+goes with the 0007 tables). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -255,7 +274,7 @@ connectors/<id>/connector.json # one per app: logo (admin /brand path), setup st
                       # capabilities → tools + vendor scopes (+ token `roles` when they differ;
                       # connector-level `scopes`: needed whatever is ticked, e.g. Teams' target search)
                       # + in-app permissions + step fills, value limits, `events` (types, kept
-                      # fields, limit fields, self, webhook proof and steps, poll; docs/triggers.md), verify/discover
+                      # fields, limit fields, self, webhook proof and steps, poll, graph, thread; docs/triggers.md), verify/discover
                       # probes, optional `provider`, `siteAccess` (grant steps and a note to
                       # IT per added site). Fields may be choices (`options`, the first the
                       # default; an option's `scopes` add to the token roles expected, and the
@@ -428,7 +447,9 @@ docs/inside-your-network.md # internal certificate authorities (NODE_EXTRA_CA_CE
 docs/triggers.md      # app events that start agents: how it works, Jira webhook and poll, how a
                       # connector declares `events`, security
 packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window, paths, kept
-                      # fields, limits, conditions, request templates, the prompt), runtime.ts
+                      # fields, limits, conditions, request templates, the prompt, thread ids),
+                      # graph.ts (Microsoft Graph notifications: watches, renewal, lifecycle,
+                      # delta catch-up), runtime.ts
                       # (public inbound, queue, decisions per trigger, polls, run watcher),
                       # admin.ts (subscriptions, triggers, runs, secret re-seal), store.ts
 packages/server/src/queue.ts # the one-process queue worker Teams and app events share
@@ -467,6 +488,10 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # events.test.ts: app events on a made-up app (signatures, replays,
                       # repeats, limits, conditions, own changes, caps, poll cursor, the signed
                       # webhook runner end to end, admin); deliver.test.ts its pure rules
+                      # graph-events.test.ts: Graph notifications on a made-up mail app against
+                      # a fake Graph (handshake, clientState, batches, watches following
+                      # triggers, renewal, lifecycle events, delta catch-up deduplicated with
+                      # notifications, own and old mail, thread ids to the signed webhook)
                       # teams.test.ts: the Teams runtime and trigger admin with fake runners
                       # (replies while starting, sessions kept to their runner) and approval
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
@@ -610,7 +635,19 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   only to inbox or archive: Deleted Items and Junk Email (purged automatically) would be
   deleting, a separate capability. `mail_delete` moves the message to Deleted Items (a Graph
   DELETE skips it and lands in Recoverable Items, which only an administrator reaches). The check runs inside `audited()` so the refusal is logged;
-  refusals belong there, not in a zod enum, which the SDK rejects before any audit row. The
+  refusals belong there, not in a zod enum, which the SDK rejects before any audit row.
+  Events (`message_received`, docs/triggers.md "Set up Outlook mail"): a `graph` subscription
+  watches each mailbox (the `mailbox` limit) of agents with an enabled trigger, on
+  `users/{mailbox}/mailFolders('inbox')/messages`, changeType created, 10070 minutes (Graph's
+  maximum for messages is 10080, read November 5, 2026), renewed past half its life by the
+  scheduler (the subscription's interval, 5 minutes by default, which also follows grant and
+  agent changes); a delta on the inbox (`changeType=created`, `$filter=receivedDateTime ge`
+  the watch's start) catches up each interval and on `missed`. Mail is news only when received
+  after the watch started and within 7 days (deliveries are kept 30). Mail from the mailbox
+  itself starts nothing; `only_mailbox` is true when every To and Cc address is the mailbox;
+  `thread` is the conversation id. Needs only the Mail.Read role the read capability already
+  has; whether Exchange RBAC for Applications covers Graph subscriptions and delta is not yet
+  run against a real tenant. The
   admin app fills `{<config key>}` in steps from the provider's and app's config (e.g.
   `{clientId}`, `{servicePrincipalId}`) and `{scope}`/`{scopes}` from the chosen ceiling.
 

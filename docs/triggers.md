@@ -6,6 +6,7 @@ events start it, under which conditions, with which instructions, and how often 
 
 ```
 app ──webhook──▶ POST /agent-connect/events/<subscription id> ─┐
+Microsoft Graph ─notification─▶ (same address), item read ─────┤
 app ◀──poll─────  every interval, from a cursor ───────────────┤
                                                               ▼
                                queue (deduplicated by delivery id)
@@ -20,7 +21,8 @@ app ◀──poll─────  every interval, from a cursor ─────�
    each event to `https://<host>/agent-connect/events/<subscription id>`, signed with a secret
    made for that subscription, or a **poll**, where the service reads the app every interval
    (60 seconds to a day, 5 minutes by default) from a cursor, for apps that cannot send
-   webhooks. Both produce the same events.
+   webhooks, or **Microsoft Graph** change notifications (Outlook mail, below). All produce the
+   same events.
 2. **Delivery**: the proof is checked on the raw body before anything in it is read (bodies over
    1 MiB are refused). The service then reads the event type, the delivery id and, where the app
    stamps deliveries, the time (refused outside the app's replay window). A delivery id already
@@ -116,10 +118,80 @@ event's data never goes into the instructions; it follows them as quoted data. T
 condition can name are the app's `events.fields` (Jira: key, project, issue_type, status,
 priority, labels, summary, assignee, reporter, changed_by, changed, comment, comment_by,
 updated). With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
-each run is a signed POST of `{type: "event", run, agent, app, event, deliveryId, data, text,
-mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams). `GET …/event-triggers` lists an
+each run is a signed POST of `{type: "event", run, agent, app, event, deliveryId, thread, data,
+text, mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams). `GET …/event-triggers` lists an
 agent's triggers, `DELETE …/event-triggers/jira` removes one (stopping its live runs), and `GET
 …/event-runs` shows what they started.
+
+## Set up Outlook mail
+
+An agent with its own mailbox can be started by mail arriving in it: an assistant copied on a
+thread, answering in the thread. Microsoft tells the service of each new message in each
+agent's mailbox, the service reads the message with the Outlook mail connection, and every
+interval it also reads what changed in the inbox since its last look, so a notification Microsoft
+dropped, or one sent while the service was down, still starts the agent, and only once.
+
+1. Connect Outlook mail (its connect steps) and give the agent a grant on it with its mailbox.
+   Nothing more is needed in Microsoft 365: the events read mail with the same Exchange role
+   (`Application Mail.Read`) the read capability already has.
+2. Let Microsoft reach the service: `https://<host>/agent-connect/events/` must be public over
+   HTTPS (the chart's Ingress serves it). Microsoft checks the address when each mailbox is
+   subscribed, so a deployment that cannot be reached from the internet cannot use these events.
+3. Subscribe the organization:
+
+   ```http
+   POST /agent-connect/admin/v1/orgs/{org}/event-subscriptions
+   {"app": "outlook-mail", "source": "graph", "by": "ann@example.com"}
+   ```
+
+   There is no secret to paste anywhere: the service gives Microsoft its own check value and
+   compares it on every notification. `intervalSeconds` (5 minutes by default) is how often it
+   catches up and renews.
+4. Give the agent its trigger, as for Jira, on `message_received`:
+
+   ```http
+   PUT /agent-connect/admin/v1/orgs/{org}/agents/{agent}/event-triggers/outlook-mail
+   {
+     "enabled": true, "eventTypes": ["message_received"],
+     "conditions": [{"field": "only_mailbox", "in": ["false"]}],
+     "prompt": "You were copied on this email. Read the thread and answer in it if you can help.",
+     "runner": "webhook", "settings": {"url": "https://…"}, "signingSecret": "…",
+     "budgetCents": 50, "by": "ann@example.com"
+   }
+   ```
+
+   Its fields: `mailbox`, `message_id`, `conversation_id`, `internet_message_id`, `from`, `to`,
+   `cc`, `subject`, `received`, `preview` (the start of the text) and `only_mailbox` (true when
+   every To and Cc address is the mailbox itself).
+
+`GET …/event-subscriptions/{id}/watches` shows each watched mailbox: whether Microsoft holds a
+live subscription for it, when that expires, the last notification and the last catch-up, and
+the last error. A mailbox is watched while an active agent holding it has an enabled trigger:
+turning a trigger on or off applies at once, a grant's mailbox changing or an agent being turned
+off within an interval. Mail the mailbox sent itself starts nothing, nor does mail received
+before its watch started or more than 7 days ago. Removing the subscription deletes Microsoft's
+subscriptions first.
+
+How it works with Microsoft: one Graph subscription per mailbox on
+`users/{mailbox}/mailFolders('inbox')/messages` for created messages, lasting 10070 minutes
+(Microsoft allows under 7 days for mail) and renewed once half of that has passed. Each
+notification carries only the message's id; the service reads it. Lifecycle notifications come
+to the same address: `reauthorizationRequired` renews, `subscriptionRemoved` subscribes again
+and catches up, `missed` catches up. The catch-up is a delta query on the inbox from a stored
+delta link, so each message is read once whichever way it arrives. Not yet run against a real
+tenant: whether Exchange's application roles cover Graph subscriptions and delta queries the way
+they cover reading mail is the first thing to check.
+
+## Threads
+
+An app may name the field that holds an event's conversation (`events.thread`: Outlook mail's
+`conversation_id`, Jira's issue `key`). Every run started by an event of one conversation, on one
+trigger, then carries the same `thread`: a 32-character id made from the trigger and that value,
+which says nothing of the value itself. `run` is still one per event. A host keying its session
+on the signed webhook's `thread`, falling back to `run`, continues one conversation across
+emails; events of one thread can arrive close together, so a host should take them one at a
+time. Claude starts a new session for each event (with `thread` in its metadata): a busy session
+cannot take the next event, and the agent reads the thread itself with its own tools.
 
 ## How an app adds events
 
@@ -155,9 +227,19 @@ adds them the same way. Paths are `a.b`, or `a[].b` for every item of a list.
     "items": "tickets", "cursor": "changed_at", "deliveryId": ["id", "changed_at"],
     "types": [{"type": "ticket.created", "since": "created_at"},
               {"type": "ticket.updated"}]
-  }
+  },
+  // Optional: the field holding the event's conversation (see Threads).
+  "thread": "id"
 }
 ```
+
+A Microsoft app can use Graph change notifications instead, as Outlook mail does
+(`connectors/outlook-mail/connector.json`): `graph.per` names the limit whose value each Graph
+subscription watches (it must also be an event limit, so an agent hears only its own), `resource`
+and `changeType` are the subscription's, `read` fetches a notified item (`{value}`, `{id}`),
+`delta` reads what changed since the watch started (`{since}`), `wrap`, `deliveryId` and
+`received` place the item, `own` names fields that make an item the watched account's own, and
+`only` adds true/false fields for "every value of these fields is the watched value".
 
 A poll's request goes through the app's own client (`vendor.call`), so it reaches only the app's
 own hosts with the connection's credentials, as tools do; `{minutes}` is the time since the
@@ -182,8 +264,9 @@ by changed_at limit 100` and
 
 - The address is public (add `/agent-connect/events` to what the load balancer exposes) but
   proves nothing by itself: every delivery needs the subscription's secret (HMAC or token,
-  compared in constant time) before its body is parsed. A subscription id alone is not a
-  credential.
+  compared in constant time) before its body is parsed, and every Graph notification its
+  clientState. A subscription id alone is not a credential. Graph's validation request is
+  answered with its own token as plain text and starts nothing.
 - Secrets are made by the service (32 random bytes), shown once, sealed with
   `CONNECT_ENCRYPTION_KEY` and re-sealed during a key rotation, like other credentials.
 - Replays: a delivery id is accepted once, and deliveries are kept longer than any app's replay

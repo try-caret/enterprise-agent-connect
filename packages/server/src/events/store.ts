@@ -7,11 +7,13 @@ import type { RunCounts } from "../teams/runner.js";
 const iso = (column: string) =>
   `to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 
+export type Source = "webhook" | "poll" | "graph";
+
 export type SubscriptionRow = {
   id: string;
   organizationId: string;
   connectorId: string;
-  source: "webhook" | "poll";
+  source: Source;
   secret: Buffer | null;
   secretKeyId: string | null;
   filter: string;
@@ -57,6 +59,7 @@ export type EventRunRow = {
   connectorId: string;
   eventType: string;
   deliveryId: string;
+  thread: string | null;
   runner: string;
   sessionId: string | null;
   state: "starting" | "running" | "ended" | "failed";
@@ -75,6 +78,20 @@ export type QueuedEvent = {
   eventType: string;
   payload: Buffer | null;
   payloadKeyId: string | null;
+};
+
+// One watched value (an agent's mailbox) of a Graph subscription.
+export type WatchRow = {
+  id: string;
+  subscriptionId: string;
+  value: string;
+  remoteId: string | null;
+  expiresAt: string | null;
+  cursor: string | null;
+  lastNotificationAt: string | null;
+  caughtUpAt: string | null;
+  lastError: string | null;
+  createdAt: string;
 };
 
 // What deciding on an event needs to know about one agent and the app.
@@ -101,8 +118,13 @@ const TRIGGER = `t.id::text, t.agent_id::text as "agentId", t.connector_id as "c
 
 const RUN = `r.id::text, r.agent_id::text as "agentId", r.trigger_id::text as "triggerId",
   t.connector_id as "connectorId", r.event_type as "eventType", r.delivery_id as "deliveryId",
-  r.runner, r.session_id as "sessionId", r.state, r.error, r.cost_cents as "costCents",
+  r.thread, r.runner, r.session_id as "sessionId", r.state, r.error, r.cost_cents as "costCents",
   ${iso("r.started_at")} as "startedAt", ${iso("r.finished_at")} as "finishedAt"`;
+
+const WATCH = `id::text, subscription_id::text as "subscriptionId", value,
+  remote_id as "remoteId", ${iso("expires_at")} as "expiresAt", cursor,
+  ${iso("last_notification_at")} as "lastNotificationAt", ${iso("caught_up_at")} as "caughtUpAt",
+  last_error as "lastError", ${iso("created_at")} as "createdAt"`;
 
 export function createEventsStore(sql: Sql, schema: string) {
   const t = tables(sql, schema);
@@ -114,7 +136,7 @@ export function createEventsStore(sql: Sql, schema: string) {
       id: string;
       organizationId: string;
       connectorId: string;
-      source: "webhook" | "poll";
+      source: Source;
       secret: Buffer | null;
       secretKeyId: string | null;
       filter: string;
@@ -180,11 +202,20 @@ export function createEventsStore(sql: Sql, schema: string) {
       await sql`update ${t.event_subscriptions} set registered = ${registered} where id = ${id}`;
     },
 
-    // Polls whose interval has passed since they last ran.
+    async subscriptionFor(org: string, connectorId: string): Promise<SubscriptionRow | null> {
+      const [row] = await sql.unsafe<SubscriptionRow[]>(
+        `select ${SUBSCRIPTION} from ${t.event_subscriptions}
+          where organization_id = $1 and connector_id = $2`,
+        [org, connectorId],
+      );
+      return row ?? null;
+    },
+
+    // Polls and Graph subscriptions whose interval has passed since they last ran.
     async duePolls(): Promise<SubscriptionRow[]> {
       return sql.unsafe(
         `select ${SUBSCRIPTION} from ${t.event_subscriptions}
-          where source = 'poll'
+          where source in ('poll', 'graph')
             and (polled_at is null
                  or polled_at < now() - make_interval(secs => interval_seconds))
           order by polled_at nulls first`,
@@ -237,6 +268,75 @@ export function createEventsStore(sql: Sql, schema: string) {
         update ${t[table]} set secret = ${secret}, secret_key_id = ${keyId}
          where id = ${id} and secret = ${was} returning id`;
       return rows.length > 0;
+    },
+
+    // ---- Graph watches ----
+
+    async watches(subscriptionId: string): Promise<WatchRow[]> {
+      return sql.unsafe(
+        `select ${WATCH} from ${t.event_watches} where subscription_id = $1 order by value`,
+        [subscriptionId],
+      );
+    },
+
+    async watchByRemote(subscriptionId: string, remoteId: string): Promise<WatchRow | null> {
+      const [row] = await sql.unsafe<WatchRow[]>(
+        `select ${WATCH} from ${t.event_watches} where subscription_id = $1 and remote_id = $2`,
+        [subscriptionId, remoteId],
+      );
+      return row ?? null;
+    },
+
+    async addWatch(subscriptionId: string, value: string): Promise<void> {
+      await sql`
+        insert into ${t.event_watches} (subscription_id, value) values (${subscriptionId}, ${value})
+        on conflict (subscription_id, value) do nothing`;
+    },
+
+    async removeWatch(id: string): Promise<void> {
+      await sql`delete from ${t.event_watches} where id = ${id}`;
+    },
+
+    async watchSubscribed(
+      id: string,
+      remoteId: string | null,
+      expiresAt: string | null,
+      error: string | null,
+    ): Promise<void> {
+      await sql`
+        update ${t.event_watches}
+           set remote_id = ${remoteId}, expires_at = ${expiresAt}, last_error = ${error}
+         where id = ${id}`;
+    },
+
+    async watchFailed(id: string, error: string): Promise<void> {
+      await sql`update ${t.event_watches} set last_error = ${error} where id = ${id}`;
+    },
+
+    async watchNotified(id: string): Promise<void> {
+      await sql`update ${t.event_watches} set last_notification_at = now() where id = ${id}`;
+    },
+
+    // `cursor` null starts the next catch-up over from the watch's start (a lapsed delta link).
+    // A failure to subscribe stays shown until a subscription is made.
+    async watchCaughtUp(id: string, cursor: string | null): Promise<void> {
+      await sql`
+        update ${t.event_watches}
+           set cursor = ${cursor}, caught_up_at = now(),
+               last_error = case when remote_id is null then last_error end
+         where id = ${id}`;
+    },
+
+    // The values of an app's limit held by active agents whose trigger on the app is on, as
+    // stored (a text limit's string, a list limit's array).
+    async watchedValues(org: string, connectorId: string, limit: string): Promise<unknown[]> {
+      const rows = await sql<{ value: unknown }[]>`
+        select g.limits -> ${limit} as value
+          from ${t.event_triggers} tr join ${t.agents} a on a.id = tr.agent_id
+          join ${t.grants} g on g.agent_id = tr.agent_id and g.connector_id = tr.connector_id
+         where a.organization_id = ${org} and tr.connector_id = ${connectorId} and tr.enabled
+           and a.status = 'active'`;
+      return rows.map((r) => r.value);
     },
 
     // ---- the queue ----
@@ -410,13 +510,14 @@ export function createEventsStore(sql: Sql, schema: string) {
       eventId: string;
       eventType: string;
       deliveryId: string;
+      thread: string | null;
       runner: string;
     }): Promise<string> {
       const [row] = await sql<{ id: string }[]>`
         insert into ${t.event_runs}
-          (agent_id, trigger_id, event_id, event_type, delivery_id, runner, state)
+          (agent_id, trigger_id, event_id, event_type, delivery_id, thread, runner, state)
         values (${input.agentId}, ${input.triggerId}, ${input.eventId}, ${input.eventType},
-                ${input.deliveryId}, ${input.runner}, 'starting')
+                ${input.deliveryId}, ${input.thread}, ${input.runner}, 'starting')
         returning id::text`;
       return row.id;
     },

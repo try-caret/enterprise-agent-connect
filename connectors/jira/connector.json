@@ -172,6 +172,7 @@
       "id": "accountId",
       "fields": ["changed_by", "comment_by"]
     },
+    "thread": "key",
     "webhook": {
       "verify": {
         "type": "hmac-sha256",
