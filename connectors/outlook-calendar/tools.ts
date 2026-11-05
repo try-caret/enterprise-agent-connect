@@ -3,10 +3,12 @@ import {
   audited,
   Denied,
   json,
+  VendorFailed,
   type ToolContext,
   type Toolset,
 } from "../../packages/connector-kit/src/common.js";
-import { mailboxPath, nextPage, ok, pageParam } from "../outlook-mail/tools.js";
+import { itemBody, mailboxPath, nextPage, ok, pageParam } from "../outlook-mail/tools.js";
+import { WINDOWS_ZONES } from "./windows-zones.js";
 
 // The calendar of the mailbox in the agent's grant. No tool takes a mailbox argument, and
 // event ids are only ever looked up under that mailbox, where Exchange finds no other
@@ -22,7 +24,10 @@ const TIME_ZONE = /^[A-Za-z0-9_/+ .()-]{1,100}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const FIELDS =
   "id,subject,start,end,location,organizer,attendees,isAllDay,isCancelled,showAs,bodyPreview," +
-  "type,seriesMasterId,recurrence,isOrganizer,responseStatus";
+  "type,seriesMasterId,recurrence,isOrganizer,responseStatus,isOnlineMeeting,onlineMeeting,transactionId";
+const TRANSACTION_ID = /^[A-Za-z0-9._:-]{1,100}$/;
+// Graph's getSchedule takes at most 100 people a call.
+export const MAX_PEOPLE = 100;
 
 export const MAX_OCCURRENCES = 999;
 const DAYS = [
@@ -59,7 +64,7 @@ type Event = {
   end?: When;
   location?: { displayName?: string };
   organizer?: Address;
-  attendees?: (Address & { status?: { response?: string } })[];
+  attendees?: (Address & { type?: string; status?: { response?: string } })[];
   isAllDay?: boolean;
   isCancelled?: boolean;
   showAs?: string;
@@ -70,6 +75,9 @@ type Event = {
   recurrence?: unknown;
   isOrganizer?: boolean;
   responseStatus?: { response?: string };
+  isOnlineMeeting?: boolean;
+  onlineMeeting?: { joinUrl?: string } | null;
+  transactionId?: string;
 };
 
 function eventPath(ctx: ToolContext, id: string): string {
@@ -198,9 +206,55 @@ async function inUtc(ctx: ToolContext, mark: (s: number) => void, id: string): P
   });
 }
 
+// Microsoft documents that a create repeated with the same transactionId makes no second event,
+// not what it answers then; a refusal (409, or an error code naming the transaction) is taken as
+// "already made" only when an event carrying that id is found.
+async function createEvent(
+  ctx: ToolContext,
+  mark: (s: number) => void,
+  body: Record<string, unknown>,
+  transactionId: string | undefined,
+): Promise<{ id: string; existing: boolean }> {
+  const res = await ctx.call({ method: "POST", path: `${mailboxPath(ctx)}/events`, body });
+  mark(res.status);
+  if (res.status >= 200 && res.status < 300) return { id: (res.data as Event).id, existing: false };
+  const error = (res.data as { error?: { code?: string; message?: string } } | null)?.error;
+  if (transactionId && (res.status === 409 || /transaction/i.test(error?.code ?? ""))) {
+    const filter = `subject eq '${String(body.subject).replaceAll("'", "''")}'`;
+    const found = await ok(ctx, mark, {
+      method: "GET",
+      path: `${mailboxPath(ctx)}/events?$filter=${encodeURIComponent(filter)}&$select=id,transactionId&$top=100`,
+    });
+    const same = (found.value as Event[]).find((e) => e.transactionId === transactionId);
+    if (same) return { id: same.id, existing: true };
+  }
+  throw new VendorFailed(
+    res.status,
+    `Microsoft 365 answered ${res.status}${error?.message ? `: ${error.message}` : ""}`,
+  );
+}
+
 const address = (a?: Address) => a?.emailAddress?.address ?? null;
-const attendees = (list: string[]) =>
-  list.map((address) => ({ emailAddress: { address }, type: "required" }));
+export type AttendeeInput = string | { email: string; type: "required" | "optional" };
+const attendees = (list: AttendeeInput[]) =>
+  list.map((a) =>
+    typeof a === "string"
+      ? { emailAddress: { address: a }, type: "required" }
+      : { emailAddress: { address: a.email }, type: a.type },
+  );
+const TEAMS = { isOnlineMeeting: true, onlineMeetingProvider: "teamsForBusiness" } as const;
+
+// Microsoft accepts a Teams meeting request it cannot fulfil (a mailbox that cannot host Teams
+// meetings) and saves the event without a link. The event exists, so this is no error: a retry
+// would invite everyone again.
+function answer(e: Event, teams: boolean | undefined) {
+  if (!teams || e.onlineMeeting?.joinUrl) return json(summary(e));
+  return json({
+    ...summary(e),
+    warning:
+      "The event was saved and invitations sent, but Microsoft added no Teams meeting link: this mailbox may not be able to host Teams meetings. Do not create the event again.",
+  });
+}
 
 function summary(e: Event) {
   return {
@@ -215,8 +269,12 @@ function summary(e: Event) {
     organizer: address(e.organizer),
     attendees: (e.attendees ?? []).map((a) => ({
       email: address(a),
+      type: a.type ?? null,
       response: a.status?.response ?? null,
     })),
+    online_meeting: e.isOnlineMeeting ?? false,
+    join_url: e.onlineMeeting?.joinUrl ?? null,
+    transaction_id: e.transactionId ?? null,
     preview: e.bodyPreview ?? "",
     // singleInstance, occurrence, exception (a changed occurrence) or seriesMaster.
     type: e.type ?? null,
@@ -224,6 +282,59 @@ function summary(e: Event) {
     recurrence: e.recurrence ?? null,
     is_organizer: e.isOrganizer ?? null,
     my_response: e.responseStatus?.response ?? null,
+  };
+}
+
+type ScheduleItem = { status?: string; start?: When; end?: When };
+type Schedule = {
+  scheduleId?: string;
+  availabilityView?: string;
+  scheduleItems?: ScheduleItem[];
+  workingHours?: {
+    daysOfWeek?: string[];
+    startTime?: string;
+    endTime?: string;
+    timeZone?: { name?: string };
+  };
+  error?: { message?: string; responseCode?: string };
+};
+
+// Asked for in UTC (Prefer: outlook.timezone), so a time in any other zone is Microsoft not
+// doing what was asked, never read as UTC.
+function utc(w: When | undefined): string {
+  if (w?.timeZone !== "UTC" || !w.dateTime || !Number.isFinite(Date.parse(`${w.dateTime}Z`)))
+    throw new Error(`Microsoft answered a free/busy time not in UTC: ${JSON.stringify(w)}`);
+  return new Date(Date.parse(`${w.dateTime}Z`)).toISOString();
+}
+
+function ianaZone(name: string | undefined): string | null {
+  if (!name) return null;
+  if (WINDOWS_ZONES[name]) return WINDOWS_ZONES[name];
+  return Intl.supportedValuesOf("timeZone").includes(name) || name === "UTC" ? name : null;
+}
+
+// Only when someone is busy and their working hours: never what their meetings are, though
+// Microsoft may include subjects and locations the mailbox is allowed to see.
+export function availability(s: Schedule) {
+  const hours = s.workingHours;
+  return {
+    email: s.scheduleId ?? null,
+    error: s.error ? (s.error.message ?? s.error.responseCode ?? "unreadable") : null,
+    busy: s.error
+      ? null
+      : (s.scheduleItems ?? [])
+          .filter((i) => i.status !== "free")
+          .map((i) => ({ start: utc(i.start), end: utc(i.end), status: i.status ?? null })),
+    slots: s.error ? null : (s.availabilityView ?? null),
+    working_hours: hours
+      ? {
+          days: hours.daysOfWeek ?? [],
+          start: hours.startTime?.slice(0, 5) ?? null,
+          end: hours.endTime?.slice(0, 5) ?? null,
+          time_zone: hours.timeZone?.name ?? null,
+          time_zone_iana: ianaZone(hours.timeZone?.name),
+        }
+      : null,
   };
 }
 
@@ -235,13 +346,33 @@ export const calendarTools: Toolset = {
     "calendar_update_event",
     "calendar_delete_event",
     "calendar_respond_to_event",
+    "calendar_get_availability",
   ],
 
   register(server, ctx, allowed) {
     const readOnly = { readOnlyHint: true, openWorldHint: true } as const;
     const writes = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
     const eventId = z.string().max(1100).describe("Id from calendar_list_events.");
-    const emails = z.array(z.email()).max(50);
+    const people = z
+      .array(
+        z.union([
+          z.email(),
+          z.object({
+            email: z.email(),
+            type: z.enum(["required", "optional"]).default("required"),
+          }),
+        ]),
+      )
+      .max(50)
+      .describe('Each an address (required) or {"email", "type": "required" | "optional"}.');
+    const html = z
+      .string()
+      .min(1)
+      .max(100000)
+      .optional()
+      .describe(
+        "Description as HTML instead of body. Kept: text formatting, lists, tables, https links and https images; scripts, forms and other active content are removed.",
+      );
     const timeZone = z
       .string()
       .max(100)
@@ -358,32 +489,64 @@ export const calendarTools: Toolset = {
             time_zone: timeZone.default("UTC"),
             location: z.string().max(255).optional(),
             body: z.string().max(100000).optional(),
-            attendees: emails.default([]),
+            body_html: html,
+            attendees: people.default([]),
             recurrence: repeat.optional(),
+            online_meeting: z
+              .boolean()
+              .default(false)
+              .describe("true to add a Teams meeting; its link comes back as join_url."),
+            transaction_id: z
+              .string()
+              .max(100)
+              .optional()
+              .describe(
+                "Your own id for this event (letters, digits, . _ : -, up to 100). Calling again with the same id and subject makes no second event and answers the first, with existing: true.",
+              ),
           }),
           annotations: writes,
         },
-        ({ subject, start, end, time_zone, location, body, attendees: invited, recurrence: r }) =>
+        ({
+          subject,
+          start,
+          end,
+          time_zone,
+          location,
+          body,
+          body_html,
+          attendees: invited,
+          recurrence: r,
+          online_meeting,
+          transaction_id,
+        }) =>
           audited(ctx, "calendar_create_event", subject, async (mark, retarget) => {
             const from = when(start, time_zone);
             const to = when(end, time_zone);
             checkOrder(from, to);
+            if (transaction_id !== undefined && !TRANSACTION_ID.test(transaction_id))
+              throw new Denied("transaction_id may hold letters, digits, . _ : and -, up to 100");
+            const description = itemBody(body || undefined, body_html);
             const repeats = r ? { recurrence: recurrence(r, start.slice(0, 10), time_zone) } : {};
-            const created: Event = await ok(ctx, mark, {
-              method: "POST",
-              path: `${mailboxPath(ctx)}/events`,
-              body: {
+            const created = await createEvent(
+              ctx,
+              mark,
+              {
                 subject,
                 start: from,
                 end: to,
                 ...(location ? { location: { displayName: location } } : {}),
-                ...(body ? { body: { contentType: "Text", content: body } } : {}),
+                ...(description ? { body: description } : {}),
                 attendees: attendees(invited),
+                ...(online_meeting ? TEAMS : {}),
+                ...(transaction_id !== undefined ? { transactionId: transaction_id } : {}),
                 ...repeats,
               },
-            });
+              transaction_id,
+            );
             retarget(created.id);
-            return json(summary(await inUtc(ctx, mark, created.id)));
+            const e = await inUtc(ctx, mark, created.id);
+            if (!created.existing) return answer(e, online_meeting);
+            return json({ ...summary(e), existing: true });
           }),
       );
 
@@ -392,7 +555,7 @@ export const calendarTools: Toolset = {
         "calendar_update_event",
         {
           description:
-            "Change an event in this agent's calendar. Only the fields given change; attendees, when given, replace the list and are sent an update. An occurrence's id changes that occurrence only; pass series: true to change the whole series.",
+            "Change an event in this agent's calendar; it keeps its id. Only the fields given change; attendees, when given, replace the list and are sent an update. An occurrence's id changes that occurrence only; pass series: true to change the whole series.",
           inputSchema: z.object({
             event_id: eventId,
             subject: z.string().min(1).max(255).optional(),
@@ -405,7 +568,12 @@ export const calendarTools: Toolset = {
               ),
             location: z.string().max(255).optional(),
             body: z.string().max(100000).optional(),
-            attendees: emails.optional(),
+            body_html: html,
+            attendees: people.optional(),
+            online_meeting: z
+              .boolean()
+              .optional()
+              .describe("true to add a Teams meeting. Once added, Microsoft keeps it."),
             series,
             recurrence: repeat
               .optional()
@@ -421,7 +589,9 @@ export const calendarTools: Toolset = {
           time_zone,
           location,
           body,
+          body_html,
           attendees: invited,
+          online_meeting,
           series: whole,
           recurrence: r,
         }) =>
@@ -435,13 +605,19 @@ export const calendarTools: Toolset = {
             const from = start === undefined ? undefined : when(start, time_zone!);
             const to = end === undefined ? undefined : when(end, time_zone!);
             if (from && to) checkOrder(from, to);
+            if (online_meeting === false)
+              throw new Denied(
+                "Microsoft keeps a Teams meeting once it is added; leave online_meeting out",
+              );
+            const description = itemBody(body, body_html);
             const patch: Record<string, unknown> = {
               ...(subject !== undefined ? { subject } : {}),
               ...(from ? { start: from } : {}),
               ...(to ? { end: to } : {}),
               ...(location !== undefined ? { location: { displayName: location } } : {}),
-              ...(body !== undefined ? { body: { contentType: "Text", content: body } } : {}),
+              ...(description ? { body: description } : {}),
               ...(invited !== undefined ? { attendees: attendees(invited) } : {}),
+              ...(online_meeting ? TEAMS : {}),
             };
             if (Object.keys(patch).length === 0 && !r)
               throw new Denied("Give at least one field to change");
@@ -456,7 +632,7 @@ export const calendarTools: Toolset = {
               patch.recurrence = recurrence(r, startDate, zone);
             }
             await ok(ctx, mark, { method: "PATCH", path: eventPath(ctx, t.id), body: patch });
-            return json(summary(await inUtc(ctx, mark, t.id)));
+            return answer(await inUtc(ctx, mark, t.id), online_meeting);
           }),
       );
 
@@ -504,6 +680,48 @@ export const calendarTools: Toolset = {
             });
             return json({ response, sent: send_response });
           }),
+      );
+
+    if (allowed.has("calendar_get_availability"))
+      server.registerTool(
+        "calendar_get_availability",
+        {
+          description: `When people are busy between two date-times (at most ${MAX_RANGE_DAYS} days apart), and their working hours, as their organization shares free/busy: never what their meetings are. Busy times come back in UTC with a status (tentative, busy, oof, workingElsewhere); \`slots\` has one digit per interval (0 free, 1 tentative, 2 busy, 3 away, 4 working elsewhere). Working hours are wall-clock times in time_zone (Microsoft's name) and time_zone_iana (null for a custom zone). Someone whose calendar could not be read has \`error\` set and busy null: never treat them as free.`,
+          inputSchema: z.object({
+            people: z.array(z.email()).min(1).max(MAX_PEOPLE).describe("Email addresses."),
+            start: z.string().max(40).describe("e.g. 2026-10-21T00:00:00Z"),
+            end: z.string().max(40).describe("e.g. 2026-10-28T00:00:00Z"),
+            interval_minutes: z
+              .number()
+              .int()
+              .min(5)
+              .max(1440)
+              .default(30)
+              .describe("Length of each digit in slots."),
+          }),
+          annotations: readOnly,
+        },
+        ({ people: who, start, end, interval_minutes }) =>
+          audited(
+            ctx,
+            "calendar_get_availability",
+            `${who.join(", ")}: ${start} → ${end}`,
+            async (mark) => {
+              const window = eventWindow(start, end);
+              const data = await ok(ctx, mark, {
+                method: "POST",
+                path: `${mailboxPath(ctx)}/calendar/getSchedule`,
+                headers: { prefer: 'outlook.timezone="UTC"' },
+                body: {
+                  schedules: who,
+                  startTime: { dateTime: window.start.slice(0, 19), timeZone: "UTC" },
+                  endTime: { dateTime: window.end.slice(0, 19), timeZone: "UTC" },
+                  availabilityViewInterval: interval_minutes,
+                },
+              });
+              return json({ people: (data.value as Schedule[]).map(availability) });
+            },
+          ),
       );
   },
 };

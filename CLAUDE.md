@@ -613,6 +613,21 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   refusals belong there, not in a zod enum, which the SDK rejects before any audit row. The
   admin app fills `{<config key>}` in steps from the provider's and app's config (e.g.
   `{clientId}`, `{servicePrincipalId}`) and `{scope}`/`{scopes}` from the chosen ceiling.
+  `mail_send` and `mail_reply` take `body` (plain text) or `body_html`, never both;
+  `body_html` goes through `connectors/outlook-mail/html.ts` `sanitizeHtml` (the one sanitizer,
+  also for event descriptions): rebuilt from an allowlist of tags (text formatting, lists,
+  tables, links, images), attributes and layout/colour style properties, values decoded before
+  they are checked and escaped again; `href` and `src` only `https://` (an image without one is
+  dropped); script, style, frames, forms, svg and the like go with their content. `mail_reply`
+  with `reply_all` posts `replyAll`; both send the text as Graph's `comment`, which Microsoft reads
+  as HTML and puts above the quoted message in the same conversation (a `message.body` would drop
+  the quote), so plain text is HTML-escaped with newlines as `<br>`. Messages (list and get) carry
+  `to`, `cc`, `conversation`, `internet_message_id` and `only_to_me` (no recipient but this
+  mailbox, compared without case); `mail_get_message` adds `new_text`, Graph's `uniqueBody` (the
+  message without the earlier ones it quotes), as text. `mail_list_messages` takes `conversation`
+  (`$filter=conversationId eq`, with unread_only joined by `and`; not with search). Tests:
+  `connectors/outlook-mail/*.test.ts`, fake Graph only. Sources: learn.microsoft.com/graph/api/
+  message-reply, message-replyall, resources/message (uniqueBody, internetMessageId).
 
 - Salesforce: client credentials against the customer's My Domain (an External Client App
   running as an integration user). The token response gives `instance_url` (must be an
@@ -811,9 +826,36 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   look the id up first: an occurrence's id changes that occurrence only, `series: true` sends
   the change to its series master, and a master's own id is refused without `series: true`,
   so a whole series is never changed or deleted by accident (deleting stays the delete
-  capability). Sources: learn.microsoft.com/graph/api/event-accept, event-tentativelyaccept,
-  event-decline, event-update, event-delete, resources/event and
-  learn.microsoft.com/graph/outlook-schedule-recurring-events.
+  capability). Attendees are addresses (required) or `{email, type: required | optional}`, and
+  events carry each attendee's `type`. Create and update take `body_html` (the mail sanitizer)
+  instead of `body`, and `online_meeting: true` (`isOnlineMeeting` with provider
+  `teamsForBusiness`; the link comes back as `join_url`). Microsoft cannot turn a Teams meeting
+  off, so update refuses `false`. Microsoft saves the event without a link when the mailbox
+  cannot host Teams meetings (no error); the tool then answers the event with a `warning` not to
+  create it again, never an error an agent would retry into a second invitation. Create takes
+  `transaction_id` (Graph's `transactionId`, letters, digits and `._:-` up to 100). Microsoft
+  documents that a retried create with the same id makes no second event but not what it answers;
+  on a 409 or an error code naming the transaction, the tool lists the mailbox's events with the
+  same subject (`$filter=subject eq`, `$top=100`) and answers the one carrying that id with
+  `existing: true`, else the refusal. Not yet seen against a real tenant.
+  Capability `availability` (`calendar_get_availability`, role `Application Calendars.Read`
+  like read, since Exchange's RBAC for Applications has no Calendars.ReadBasic role; Graph's
+  least permission for getSchedule is Calendars.ReadBasic) posts `getSchedule` as the agent's
+  own mailbox, so the RBAC scope only needs that mailbox and the people's own free/busy sharing
+  decides what it sees (not yet confirmed against a real tenant). Up to 100 people
+  (`MAX_PEOPLE`) and the 62-day window of `calendar_list_events`, asked for and checked in UTC (a
+  time in another zone fails the call). Per person: `busy` (every item but `free`: start, end,
+  status), `slots` (Graph's availabilityView digits at `interval_minutes`), `working_hours`
+  (days, HH:MM start and end, Microsoft's zone name and `time_zone_iana` from
+  `connectors/outlook-calendar/windows-zones.ts`, CLDR's windowsZones territory 001 rows; an IANA
+  name passes as is; a custom zone gives null), or `error` (Graph's per-person error message) with
+  busy and slots null, never read as free. Subjects, locations and privacy flags Graph may send are
+  never returned (`availability()`). Tests: `connectors/outlook-calendar/tools.test.ts`, fake
+  Graph only. Sources: learn.microsoft.com/graph/api/event-accept, event-tentativelyaccept,
+  event-decline, event-update, event-delete, calendar-getschedule, resources/event (transactionId,
+  isOnlineMeeting, onlineMeeting) and learn.microsoft.com/graph/outlook-schedule-recurring-events;
+  learn.microsoft.com/exchange/permissions-exo/application-rbac (supported application roles),
+  read November 5, 2026.
 - SharePoint spreadsheets (excel_* tools, `read_sheets` / `write_sheets`): the files tools'
   site and folder limits apply. Every workbook tool reads the item back with the files tools'
   site, library and folder checks, and only opens `.xlsx` files.

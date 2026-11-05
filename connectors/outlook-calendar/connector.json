@@ -74,9 +74,19 @@
       "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
     },
     {
+      "id": "availability",
+      "label": "See when people are free",
+      "description": "Check when people in your organization are free or busy, and their working hours, to find a meeting time. The agent sees only busy times, never what the meetings are, and only as much as your organization's calendar sharing settings show any colleague.",
+      "scopes": ["Application Calendars.Read"],
+      "roles": [],
+      "permissions": [],
+      "tools": ["calendar_get_availability"],
+      "forbidden": "Microsoft refused this. The app needs the Exchange role {scopes} on the {brand.microsoft.mailboxGroup} scope, and this mailbox must be in that group. A role added in the last hour may not apply yet."
+    },
+    {
       "id": "write",
       "label": "Create, update and answer events, and send invitations",
-      "description": "Add events to the agent's own calendar, including repeating ones, and change them. Accept, tentatively accept or decline invitations, which can email the organizer. Attendees get an invitation email from the agent's mailbox, and they can be any address.",
+      "description": "Add events to the agent's own calendar, including repeating ones and Teams meetings, and change them. Accept, tentatively accept or decline invitations, which can email the organizer. Attendees get an invitation email from the agent's mailbox, and they can be any address.",
       "scopes": ["Application Calendars.ReadWrite"],
       "roles": [],
       "permissions": [],
