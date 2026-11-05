@@ -9051,6 +9051,9 @@
                           "field": {
                             "type": "string",
                             "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "pattern": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -9182,6 +9185,10 @@
                     "readOnly": {
                       "default": false,
                       "type": "boolean"
+                    },
+                    "binary": {
+                      "default": false,
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -9193,7 +9200,8 @@
                     "destructive",
                     "answerLimits",
                     "nestedBody",
-                    "readOnly"
+                    "readOnly",
+                    "binary"
                   ],
                   "additionalProperties": false
                 }

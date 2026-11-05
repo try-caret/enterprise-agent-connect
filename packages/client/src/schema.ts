@@ -1404,6 +1404,7 @@ export interface components {
                             join?: string;
                             limit?: string;
                             field?: string;
+                            pattern?: string;
                         };
                     };
                     /** @default false */
@@ -1436,6 +1437,8 @@ export interface components {
                     nestedBody: boolean;
                     /** @default false */
                     readOnly: boolean;
+                    /** @default false */
+                    binary: boolean;
                 }[];
                 /** @default false */
                 allowInsecureHttp: boolean;

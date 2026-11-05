@@ -2,7 +2,9 @@
 
 export {
   audited,
+  binary,
   Denied,
+  MAX_BINARY_BYTES,
   json,
   listLimit,
   mapLimit,

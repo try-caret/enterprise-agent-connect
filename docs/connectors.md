@@ -35,7 +35,10 @@ delete), write a `ConnectorModule` next to the JSON:
   (it refuses a path that leaves the app's address); `clientCredentials` does both. Return the
   answer's headers in `VendorResponse.headers`.
 - `tools.ts`: the MCP tools, each wrapped in `audited(...)` from `connector-kit/src/common.ts`,
-  enforcing the grant's limits with `listLimit`, `mapLimit` and friends.
+  enforcing the grant's limits with `listLimit`, `mapLimit` and friends. A tool answering a file (an
+  archive, a document) returns `binary(bytes, mimeType, uri)`: its size and SHA-256 as JSON text
+  and the bytes as a base64 MCP embedded resource, refused over `MAX_BINARY_BYTES` (8 MB). Read
+  the download with a cap of that size rather than whole.
 - `index.ts`: `export default { id, create }`. `create` gets a `ConnectorContext`, `{ connector }`
   (its connector.json, parsed), and returns `{ vendor, toolset }`. The built-in Microsoft apps get
   the deployment's Microsoft client too (`BuiltinContext`); a connector of your own does not need it.
