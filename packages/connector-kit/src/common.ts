@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server";
 import { ConnectError, type Limits, type VendorRequest, type VendorResponse } from "./types.js";
 
@@ -79,6 +80,25 @@ export const argumentsTarget = (args: unknown): string | null =>
 export const json = (data: unknown): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
 });
+
+// The largest file a tool hands back in its answer (a repository archive, say). The answer
+// holds it base64-encoded, a third larger, and the whole of it sits in memory while it is sent.
+export const MAX_BINARY_BYTES = 8 * 1024 * 1024;
+
+/** A file as a tool answer: its details as JSON text ({uri, mimeType, size, sha256}), then its
+ *  bytes as an MCP embedded resource with a base64 `blob`. */
+export function binary(data: Uint8Array, mimeType: string, uri: string): CallToolResult {
+  if (data.byteLength > MAX_BINARY_BYTES)
+    throw new Denied(`The file is larger than ${MAX_BINARY_BYTES / 1024 / 1024} MB, the most a tool hands back`);
+  const bytes = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  return {
+    content: [
+      { type: "text", text: JSON.stringify({ uri, mimeType, size: bytes.byteLength, sha256 }) },
+      { type: "resource", resource: { uri, mimeType, blob: bytes.toString("base64") } },
+    ],
+  };
+}
 
 // Runs one tool call and writes its audit row whatever the outcome. `retarget` replaces the
 // audited target with what was actually sent, e.g. the project-scoped JQL.

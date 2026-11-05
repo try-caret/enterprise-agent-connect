@@ -370,6 +370,15 @@ const fitsType = (type: string, v: unknown) =>
       ? typeof v === type
       : false;
 
+const validRegex = (r: string) => {
+  try {
+    new RegExp(r);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const httpParamSchema = z
   .object({
     type: z.enum(["string", "number", "integer", "boolean", "array"]),
@@ -396,8 +405,17 @@ const httpParamSchema = z
     // Filled from this plain connect form field, not by the agent, e.g. the company's own
     // address an app wants in every request.
     field: slug.optional(),
+    // A string's value (each item's, for an array of strings) must match this regular
+    // expression, e.g. a full commit SHA.
+    pattern: z
+      .string()
+      .refine(validRegex, "A pattern is a valid regular expression")
+      .optional(),
   })
   .strict()
+  .refine((p) => !p.pattern || ((p.items ?? p.type) === "string" && !p.enum), {
+    message: "A pattern is for string params without an enum",
+  })
   .refine((p) => (p.type === "array") === Boolean(p.items), {
     message: "An array param names its item type (items), and only an array param",
   })
@@ -522,8 +540,15 @@ const httpToolSchema = z
     nestedBody: z.boolean().default(false),
     // A read sent as POST (a search with a body): told to clients as read-only.
     readOnly: z.boolean().default(false),
+    // The answer is a file (e.g. an archive), handed back whole as kit `binary`: any content
+    // type, up to MAX_BINARY_BYTES, never parsed.
+    binary: z.boolean().default(false),
   })
   .strict()
+  .refine(
+    (t) => !t.binary || (t.method === "GET" && !t.result && !t.paging && !t.answerLimits.length),
+    { message: "A binary tool is a GET with no result, paging or answerLimits" },
+  )
   .refine(
     (t) => {
       const inPath = [...t.path.matchAll(/\{([a-z][a-z0-9_]*)\}/g)].map((m) => m[1]);

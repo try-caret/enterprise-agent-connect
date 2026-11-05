@@ -104,6 +104,13 @@ const calls: Record<string, { conn: VendorConnection; request: VendorRequest }> 
     },
     request: { method: "GET", path: "/api/data/v9.2/WhoAmI" },
   },
+  github: {
+    conn: {
+      config: { client_id: "Iv23liAbc", installation_id: "1", owner: "acme" },
+      secret: { private_key: okta },
+    },
+    request: { method: "GET", path: "/installation/repositories" },
+  },
   gitlab: {
     conn: { config: { host: "gitlab.example.com" }, secret: { token: "t" } },
     request: { method: "GET", path: "/user" },
@@ -253,6 +260,9 @@ const TOKEN = {
   expires_in: 3600,
   instance_url: "https://acme.my.salesforce.com",
   id: "https://login.salesforce.com/id/00D/005000000000001AAA",
+  // GitHub's installation token.
+  token: "t",
+  expires_at: new Date(Date.now() + 3600_000).toISOString(),
 };
 
 // Token requests are answered; every other call is redirected to another host.

@@ -111,8 +111,7 @@ export function soapVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
     undefined,
     null,
     fetchImpl,
-    XML_TYPES,
-    "XML, JSON or text",
+    { types: XML_TYPES, passed: "XML, JSON or text" },
   );
   const ns = Object.entries(soap.namespaces)
     .map(([prefix, uri]) => ` xmlns:${prefix}="${escapeXml(uri)}"`)

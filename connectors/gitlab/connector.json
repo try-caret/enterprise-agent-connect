@@ -1,7 +1,7 @@
 {
   "id": "gitlab",
   "name": "GitLab",
-  "description": "Let agents read merge requests, pipelines, job logs and commits in the GitLab projects you choose, and comment on merge requests. For review prep, failed pipeline triage, release checks and status reports.",
+  "description": "Let agents read merge requests, pipelines, job logs, commits and code in the GitLab projects you choose, and comment on merge requests. For review prep, failed pipeline triage, release checks, status reports and building from a project's code.",
   "logo": "/brand/registry/gitlab.svg",
   "identity": "A GitLab project or group access token. It acts as a bot member of that project or group, with the role you give it, and reaches nothing outside it.",
   "accountKey": "host",
@@ -63,6 +63,15 @@
         "gitlab_get_job_log",
         "gitlab_list_commits"
       ]
+    },
+    {
+      "id": "read_code",
+      "label": "Read code",
+      "description": "Find the commit a branch or tag points to, list a project's files, read a file, and download the code of one commit as an archive.",
+      "note": "Read-only. Anyone holding the key can read the whole code of each project it may reach, so keep it to the projects it needs.",
+      "scopes": ["read_api"],
+      "permissions": [],
+      "tools": ["gitlab_resolve_ref", "gitlab_list_tree", "gitlab_read_file", "gitlab_download_archive"]
     },
     {
       "id": "comment",
@@ -244,6 +253,60 @@
         },
         "paging": { "param": "page", "header": "X-Next-Page" },
         "result": { "fields": ["short_id", "title", "author_name", "author_email", "committed_date", "web_url"] }
+      },
+      {
+        "name": "gitlab_resolve_ref",
+        "description": "Find the commit a branch, tag or commit SHA points to. Its id is the full commit SHA that gitlab_download_archive takes.",
+        "method": "GET",
+        "path": "/projects/{project}/repository/commits/{ref}",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "ref": { "type": "string", "description": "A branch or tag name, or a commit SHA", "in": "path" }
+        },
+        "result": { "fields": ["id", "short_id", "title", "author_name", "committed_date", "web_url"] }
+      },
+      {
+        "name": "gitlab_list_tree",
+        "description": "List the files and folders in a project at a branch, tag or commit, in one folder or, with recursive, everything under it. Pass next from the answer as page for the next page.",
+        "method": "GET",
+        "path": "/projects/{project}/repository/tree",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "ref": { "type": "string", "description": "A branch or tag name, or a commit SHA", "in": "query" },
+          "path": { "type": "string", "description": "The folder, such as src/lib; the top folder when left out", "in": "query", "required": false },
+          "recursive": { "type": "boolean", "description": "Also list everything inside each folder", "in": "query", "default": false },
+          "per_page": { "type": "integer", "description": "How many per page, at most 100", "in": "query", "default": 100 },
+          "page": { "type": "integer", "description": "The next value of the previous answer", "in": "query", "required": false }
+        },
+        "paging": { "param": "page", "header": "X-Next-Page" },
+        "result": { "fields": ["path", "type", "id", "mode"] }
+      },
+      {
+        "name": "gitlab_read_file",
+        "description": "Read one file's content as text, at a branch, tag or commit. Files larger than 1 MB, and files that are not text, cannot be read here.",
+        "method": "GET",
+        "path": "/projects/{project}/repository/files/{file_path}/raw",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "file_path": { "type": "string", "description": "The file's path in the project, such as src/index.ts", "in": "path" },
+          "ref": { "type": "string", "description": "A branch or tag name, or a commit SHA", "in": "query" }
+        }
+      },
+      {
+        "name": "gitlab_download_archive",
+        "description": "Download the code of one commit as a .tar.gz archive, for a program to unpack, not for reading. Takes the full commit SHA only (gitlab_resolve_ref finds it for a branch or tag), so the same call always gives the same code. Archives larger than 8 MB are refused.",
+        "method": "GET",
+        "path": "/projects/{project}/repository/archive.tar.gz",
+        "params": {
+          "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
+          "sha": {
+            "type": "string",
+            "description": "The full commit SHA, 40 lower-case hex characters (64 in a SHA-256 project)",
+            "in": "query",
+            "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+          }
+        },
+        "binary": true
       },
       {
         "name": "gitlab_add_merge_request_comment",

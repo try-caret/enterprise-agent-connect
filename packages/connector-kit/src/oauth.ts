@@ -42,7 +42,7 @@ const ASSERTION_SECONDS = 3600;
 const MIN_RSA_BITS = 2048;
 
 // A pasted PEM can lose its line breaks in a form field; they are put back before parsing.
-function rsaKey(pem: string) {
+export function rsaKey(pem: string) {
   const m = /-----BEGIN ([A-Z ]+)-----([\s\S]+?)-----END \1-----/.exec(pem.trim());
   if (!m) throw new ConnectError("Paste the whole private key, from -----BEGIN to -----END");
   const body = m[2].replace(/\s+/g, "").match(/.{1,64}/g)?.join("\n") ?? "";

@@ -1,0 +1,110 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "description": "Let agents read the code in the GitHub repositories you choose: find the commit a branch points to, list and read files, and download the code of one commit. For building and reviewing from your own code.",
+  "logo": "/brand/registry/github.svg",
+  "identity": "A GitHub App your organization owns, named \"{brand.microsoft.appName}\". It reaches only the repositories you install it on, with only the permissions you give it, and signs in with a key pair rather than a person's account.",
+  "accountKey": "owner",
+  "connectionKind": "guided",
+  "setup": [
+    {
+      "title": "Create a GitHub App",
+      "body": "Create the app in your organization's settings, so it belongs to the organization rather than to a person. It needs no webhook and only the permissions below. Metadata (Read-only) is added by GitHub on its own.",
+      "permissions": true,
+      "link": {
+        "label": "GitHub: registering a GitHub App",
+        "href": "https://docs.github.com/apps/creating-github-apps/registering-a-github-app/registering-a-github-app"
+      },
+      "click": [
+        "In GitHub, open your organization, then select Settings > Developer settings > GitHub Apps > New GitHub App.",
+        "GitHub App name: {brand.microsoft.appName}. Homepage URL: your company's website.",
+        "Under Webhook, clear Active.",
+        "Under Permissions > Repository permissions, set Contents to Read-only. Leave every other permission at No access.",
+        "Under Where can this GitHub App be installed?, choose Only on this account, then select Create GitHub App.",
+        "On the app's General page, copy the Client ID."
+      ]
+    },
+    {
+      "title": "Generate a private key",
+      "body": "The app signs in with a private key instead of a password. GitHub downloads it as a .pem file once; paste the whole file into the form below. Keep no other copy.",
+      "link": {
+        "label": "GitHub: managing private keys for GitHub Apps",
+        "href": "https://docs.github.com/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps"
+      },
+      "click": [
+        "On the app's General page, under Private keys, select Generate a private key.",
+        "Open the downloaded .pem file and copy all of it, from -----BEGIN to -----END."
+      ]
+    },
+    {
+      "title": "Install the app on your repositories",
+      "body": "Install the app on your organization and choose the repositories agents may read. Agents can never reach a repository the app is not installed on, and you can change the list at any time from the installation's page. The installation ID is the number at the end of that page's address.",
+      "link": {
+        "label": "GitHub: installing your own GitHub App",
+        "href": "https://docs.github.com/apps/using-github-apps/installing-your-own-github-app"
+      },
+      "click": [
+        "On the app's page, select Install App, then Install next to your organization.",
+        "Choose Only select repositories, pick the repositories, and select Install.",
+        "Copy the number at the end of the address you land on, such as github.com/organizations/acme/settings/installations/12345678: that is the installation ID."
+      ],
+      "copy": [
+        "ORG=your-organization",
+        "gh api \"/orgs/$ORG/installations\" --jq '.installations[] | \"\\(.app_slug) \\(.id)\"'"
+      ],
+      "shell": "bash"
+    }
+  ],
+  "afterConnect": [],
+  "fields": [
+    {
+      "id": "client_id",
+      "label": "Client ID",
+      "help": "On the app's General page, such as Iv23liAbCdEfGh123456.",
+      "secret": false
+    },
+    {
+      "id": "installation_id",
+      "label": "Installation ID",
+      "help": "The number at the end of the installation's address.",
+      "placeholder": "12345678",
+      "secret": false
+    },
+    {
+      "id": "private_key",
+      "label": "Private key",
+      "help": "The whole .pem file GitHub downloaded, from -----BEGIN to -----END.",
+      "secret": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read_code",
+      "label": "Read code",
+      "description": "Find the commit a branch or tag points to, list a repository's files, read a file, and download the code of one commit as an archive.",
+      "required": true,
+      "note": "Read-only. Reaches every repository the app is installed on unless you keep a key to chosen repositories.",
+      "scopes": [],
+      "permissions": ["Contents: Read-only"],
+      "tools": ["github_resolve_ref", "github_list_tree", "github_read_file", "github_download_archive"]
+    }
+  ],
+  "limits": [
+    {
+      "id": "repositories",
+      "label": "Repositories",
+      "help": "Optional: only these repositories, as owner/name, such as acme/payments-api. Leave empty for every repository the app is installed on.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$"
+    }
+  ],
+  "verify": {
+    "method": "GET",
+    "path": "/installation/repositories?per_page=100",
+    "label": "Repositories the app can read",
+    "show": "repositories[].full_name",
+    "ifEmpty": "The app is installed on no repository yet, so agents will find no code. Open the installation's page in GitHub and choose the repositories."
+  },
+  "revoke": "In GitHub, open your organization's Settings > GitHub Apps, select Configure next to the app and choose Uninstall. Agents lose access to GitHub at once."
+}

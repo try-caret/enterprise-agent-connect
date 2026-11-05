@@ -17,7 +17,7 @@
   projects, Jamf Pro sites, Okta groups, Slack channels, Salesforce objects, Gong workspaces,
   customer email domains and CRM accounts, SAP S/4HANA company codes, sales and purchasing organizations and plants, NetSuite subsidiaries, locations and
   saved searches, ServiceNow assignment groups and companies, Workday organizations and reports,
-  FedEx account numbers, or any list an `http`, `soap`, `odata` or `sql` connector declares.
+  FedEx account numbers, GitHub repositories, or any list an `http`, `soap`, `odata` or `sql` connector declares.
   They are checked on every call, including against ids the agent passes in and, for those
   connectors, against fields of the answer (an OData update reads the record first and an SQL
   write is rolled back unless every row it changed is inside the agent's values).
@@ -40,9 +40,9 @@
 
 - Each built-in connector reaches only its vendor's addresses, and no connector follows a
   redirect: a redirect is refused as an error, so a token or request body is never sent on to
-  another host. The one exception is a SharePoint file's content, which Microsoft Graph serves
-  from a SharePoint download address; that address is called without the token, and only when
-  it is on SharePoint. An `http` connector reaches only its `baseUrl` (https unless
+  another host. The exceptions are a SharePoint file's content, which Microsoft Graph serves
+  from a SharePoint download address, and a GitHub repository archive, which GitHub serves from
+  codeload.github.com; each is called without the token, and only on that host. An `http` connector reaches only its `baseUrl` (https unless
   `allowInsecureHttp` is set) and its token URL, a `soap` connector only its endpoint, an `odata`
   connector only its service root and token URL. Request and answer sizes and call time are
   capped.
