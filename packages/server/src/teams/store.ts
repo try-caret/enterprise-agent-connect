@@ -665,6 +665,21 @@ export function createTeamsStore(sql: Sql, schema: string) {
       return rows.length > 0;
     },
 
+    // The files of the run's latest message, sealed (runtime.ts); null clears them.
+    async setRunFiles(id: string, sealed: { ciphertext: Buffer; keyId: string } | null) {
+      await sql`
+        update ${t.teams_runs}
+           set files = ${sealed?.ciphertext ?? null}, files_key_id = ${sealed?.keyId ?? null}
+         where id = ${id}`;
+    },
+
+    async runFiles(agentId: string, runId: string) {
+      const [row] = await sql<{ files: Buffer | null; keyId: string | null }[]>`
+        select files, files_key_id as "keyId" from ${t.teams_runs}
+         where agent_id = ${agentId} and id = ${runId}`;
+      return row?.files && row.keyId ? { ciphertext: row.files, keyId: row.keyId } : null;
+    },
+
     // Gives back a reply whose post failed.
     async releaseReply(runId: string): Promise<void> {
       await sql`

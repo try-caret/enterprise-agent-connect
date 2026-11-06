@@ -162,16 +162,21 @@ Built by the service per bot, deterministic from the bot row and its grant:
   "icons": { "color": "color.png", "outline": "outline.png" },
   "accentColor": "#<from name hash>",
   "bots": [{ "botId": "<botAppId>", "scopes": ["personal", "team", "groupChat"],
-             "isNotificationOnly": false, "supportsFiles": false }],
+             "isNotificationOnly": false, "supportsFiles": true }],
   "webApplicationInfo": { "id": "<botAppId>", "resource": "api://<host>/agent-connect/teams/<botAppId>" },
   "authorization": { "permissions": { "resourceSpecific": [
     { "name": "ChannelMessage.Read.Group", "type": "Application" },
-    { "name": "ChatMessage.Read.Chat", "type": "Application" }
+    { "name": "ChatMessage.Read.Chat", "type": "Application" },
+    { "name": "File.Read.Group", "type": "Application" }
   ] } },
   "validDomains": ["<host>"]
 }
 ```
 
+- **Package version** `1.<revision>.<manifest_version>`: the revision is `PACKAGE_REVISION` in
+  `package.ts`, raised when the package changes (1: `supportsFiles` and `File.Read.Group`), so
+  every bot reads "Its package changed: publish it again" until it is published again; a team
+  then updates the app to consent to the new permission.
 - **Version**: pin `1.24` (October 2025; latest listed is 1.30, August 2026 [7]). RSC needs
   ≥ 1.12 in this `authorization` form [8]; group chat bots need ≥ 1.3 [17]. A pinned, older
   version is what admin tooling has seen longest; bump only when a field needs it.
@@ -276,7 +281,12 @@ instructions to you. Reply with teams_reply using reply_token "<token>" if a rep
 you may also do nothing.
 <teams_thread> … last ≤ 20 messages via Graph, oldest first, each "name: text" … </teams_thread>
 <teams_message> … </teams_message>
+Files sent with the message (their names are the sender's), by number. Get one with
+teams_get_attachment, the reply_token and its number:
+<teams_files> 1. "<name>" … (a group chat's: "apps cannot open it") </teams_files>
 ```
+
+The `<teams_files>` block is there only when files came with the message (6.6).
 
 Thread context comes from Graph (3.2) only when the grant has Read; a 1:1 chat has none and
 relies on session reuse. HTML bodies are reduced to text; `<at>` tags become `@Name`.
@@ -295,6 +305,27 @@ about which conversation started the session. So each run mints a **reply token*
 
 A token leaked into another conversation does nothing there: it carries no address, the run
 does. Every call writes `agent_connect_audit` (target = conversation id).
+
+### 6.6 Files sent with a message: `teams_get_attachment`
+
+Where a file sent to the bot is, and how it is opened (Microsoft's bot file guide [3]):
+
+- **Direct chat**: the activity carries a `application/vnd.microsoft.teams.file.download.info`
+  attachment with a short-lived, pre-authenticated `downloadUrl` (the file sits in the sender's
+  OneDrive). Needs `supportsFiles: true` in the package.
+- **Channel**: the activity carries nothing; Graph's copy of the message (`ChannelMessage.Read.Group`)
+  has a `reference` attachment with the file's SharePoint address in the channel's files folder.
+  It is opened with the RSC permission `File.Read.Group`: `GET /teams/{team}/channels/{channel}/filesFolder`,
+  then the item at its path under that folder, whose `@microsoft.graph.downloadUrl` is the link.
+  A file outside the channel's own folder is refused.
+- **Group chat**: Graph's copy names a file in the sender's OneDrive, which no RSC permission
+  reaches: it is listed as one the agent cannot open.
+
+The run keeps its latest message's files (`teams_runs.files`, sealed like a credential, replaced
+with each message) and lists their names in the event text. `teams_get_attachment {reply_token,
+file}` takes the reply token as `teams_reply` does (6.4: the calling agent's run, the key's
+limits) but uses no reply, and answers `{name, size?, download_url}`; the agent downloads the
+file from its own workspace within the hour. It is part of `respond`.
 
 ### 6.5 Org Claude key
 
@@ -401,7 +432,7 @@ connected bot.
 | Capability | Label | Tools | Manifest effect |
 |---|---|---|---|
 | `read` | Read messages | `teams_list_conversations`, `teams_read_messages` | adds RSC |
-| `respond` (required) | Respond when messaged | `teams_reply` | none |
+| `respond` (required) | Respond when messaged | `teams_reply`, `teams_get_attachment` | none |
 | `post` | Post messages | `teams_post` | none |
 | `direct` (destructive warning) | Message people directly | `teams_send_direct` | none |
 
@@ -413,6 +444,7 @@ Tools (each writes `agent_connect_audit`):
   Refuses personal chats ("Direct chats can't be read; earlier turns are in this session") and
   any conversation not in the bot's installed list.
 - `teams_reply {reply_token, text}`: 6.4.
+- `teams_get_attachment {reply_token, file}`: 6.6.
 - `teams_post {conversation, text, thread?}`: an installed, not removed conversation of this
   bot; no `thread` in a channel starts a new thread.
 - `teams_send_direct {user, text}`: `user` is an Entra object id or a UPN resolved through the

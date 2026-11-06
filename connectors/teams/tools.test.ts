@@ -258,3 +258,106 @@ test("teams_get_approval refuses an id that is not one", async () => {
     /No approval of this agent/,
   );
 });
+
+const TOKEN = `arb_reply_${"a".repeat(43)}`;
+const FOLDER = "https://contoso.sharepoint.com/sites/Ops/Shared%20Documents/General";
+const run = {
+  id: "run-1",
+  conversationId: teamPlace.conversationId,
+  threadId: `${CHANNEL};messageid=100`,
+  triggerActivityId: "101",
+} as never;
+const files = [
+  { name: "a b.xlsx", source: "channel", url: `${FOLDER}/Q3/a%20b.xlsx` },
+  {
+    name: "secret.docx",
+    source: "channel",
+    url: "https://contoso.sharepoint.com/sites/HR/Shared%20Documents/secret.docx",
+  },
+  { name: "up.docx", source: "channel", url: `${FOLDER}/../Private/up.docx` },
+  {
+    name: "dm.pdf",
+    source: "chat",
+    url: "https://contoso-my.sharepoint.com/download?tempauth=x",
+  },
+] as const;
+
+function attachmentTools(folderStatus = 200) {
+  const asked: string[] = [];
+  const { call } = tools({
+    runForReply: async () => run,
+    files: async () => [...files],
+    graph: async (path: string) => {
+      asked.push(path);
+      if (path.endsWith("/filesFolder"))
+        return folderStatus === 200
+          ? {
+              status: 200,
+              data: {
+                id: "folder-id",
+                webUrl: FOLDER,
+                parentReference: { driveId: "drive-1" },
+              },
+            }
+          : { status: folderStatus, data: { error: { message: "Forbidden" } } };
+      return {
+        status: 200,
+        data: {
+          name: "a b.xlsx",
+          size: 12,
+          "@microsoft.graph.downloadUrl": "https://dl.example/x",
+        },
+      };
+    },
+  });
+  return { call, asked };
+}
+
+test("teams_get_attachment gets a channel file from the channel's own folder only", async () => {
+  const { call, asked } = attachmentTools();
+  const got = await call("teams_get_attachment", {
+    reply_token: TOKEN,
+    file: 1,
+  });
+  assert.equal(got.isError, false, got.text);
+  assert.deepEqual(JSON.parse(got.text), {
+    name: "a b.xlsx",
+    size: 12,
+    download_url: "https://dl.example/x",
+  });
+  assert.equal(asked.at(-1), "/v1.0/drives/drive-1/items/folder-id:/Q3/a%20b.xlsx");
+  for (const file of [2, 3]) {
+    const refused = await call("teams_get_attachment", {
+      reply_token: TOKEN,
+      file,
+    });
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /not in this channel's files/);
+  }
+  assert.match(
+    (await call("teams_get_attachment", { reply_token: TOKEN, file: 9 })).text,
+    /no file 9/,
+  );
+});
+
+test("teams_get_attachment hands a direct chat's link as it came, and says when files are not allowed", async () => {
+  const dm = await attachmentTools().call("teams_get_attachment", {
+    reply_token: TOKEN,
+    file: 4,
+  });
+  assert.deepEqual(JSON.parse(dm.text), {
+    name: "dm.pdf",
+    download_url: files[3].url,
+  });
+  const blocked = await attachmentTools(403).call("teams_get_attachment", {
+    reply_token: TOKEN,
+    file: 1,
+  });
+  assert.equal(blocked.isError, true);
+  assert.match(blocked.text, /publish its Teams app again/);
+  const { call } = tools({ runForReply: async () => null });
+  assert.match(
+    (await call("teams_get_attachment", { reply_token: TOKEN, file: 1 })).text,
+    /not valid/,
+  );
+});

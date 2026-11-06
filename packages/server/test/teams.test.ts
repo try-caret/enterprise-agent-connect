@@ -136,7 +136,7 @@ async function setup(runners: TriggerRunner[]) {
     });
   let n = 0;
   // A direct message from PERSON, through the bot's inbound route; `message` also waits for it.
-  async function send(text: string) {
+  async function send(text: string, extra: Record<string, unknown> = {}) {
     const activity = {
       type: "message",
       id: `act-${++n}`,
@@ -147,6 +147,7 @@ async function setup(runners: TriggerRunner[]) {
       conversation: { id: "a:chat", conversationType: "personal" },
       channelData: { tenant: { id: TENANT } },
       text,
+      ...extra,
     };
     const res = await runtime.inbound(
       botAppId,
@@ -158,8 +159,8 @@ async function setup(runners: TriggerRunner[]) {
     );
     assert.equal(res.status, 200);
   }
-  async function message(text: string) {
-    await send(text);
+  async function message(text: string, extra: Record<string, unknown> = {}) {
+    await send(text, extra);
     await runtime.idle();
   }
   const runs = async () => teams.recentRuns(org, agentId, 10);
@@ -212,6 +213,39 @@ test(
     assert.equal(run.sessionId, `fake-hook:${run.id}`);
     await t.runtime.watch();
     assert.equal((await t.runs())[0].state, "idle");
+  },
+);
+
+test(
+  "a file sent in a direct chat is listed for the agent and handed over only through its run",
+  { skip: !sql },
+  async () => {
+    const link = "https://contoso-my.sharepoint.com/personal/ann/download.aspx?tempauth=secret";
+    let prompt = "";
+    let files: unknown[] = [];
+    let onStart: (input: RunInput) => Promise<void> = async () => {};
+    const { runner } = fakeRunner("fake-files", (input) => onStart(input));
+    const t = await setup([runner]);
+    const access = t.runtime.access((await t.teams.botById(t.botId))!);
+    onStart = async (input) => {
+      prompt = input.text;
+      files = await access.files((await access.runForReply(hashReplyToken(input.replyToken)))!);
+    };
+    await t.setRunner("fake-files");
+    await t.message("please check", {
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.teams.file.download.info",
+          name: "q3.xlsx",
+          content: { downloadUrl: link, fileType: "xlsx" },
+        },
+      ],
+    });
+    assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"\n<\/teams_files>/);
+    assert.doesNotMatch(prompt, /tempauth/);
+    assert.deepEqual(files, [{ name: "q3.xlsx", source: "chat", url: link }]);
+    const [row] = await sql!`select files from agent_connect.teams_runs where agent_id = ${t.agentId}`;
+    assert.ok(row.files && !Buffer.from(row.files).toString("latin1").includes("tempauth"));
   },
 );
 

@@ -7,8 +7,19 @@ import { brand, teamsDeveloper } from "../../../connector-kit/src/branding.js";
 
 export const MANIFEST_VERSION = "1.24";
 // Teams delivers every message where the bot is installed, not just @mentions, and the bot can
-// read those conversations through Graph. Only where it was added; consented at install.
-export const RSC_PERMISSIONS = ["ChannelMessage.Read.Group", "ChatMessage.Read.Chat"];
+// read those conversations through Graph, and the files of a team's channels (one sent in a
+// channel). Only where it was added; consented at install.
+export const RSC_PERMISSIONS = [
+  "ChannelMessage.Read.Group",
+  "ChatMessage.Read.Chat",
+  "File.Read.Group",
+];
+
+// The middle number is the package's own revision, raised whenever the package changes (its
+// permissions, what the bot supports), so every bot shows "publish it again". 1: files.
+const PACKAGE_REVISION = 1;
+export const packageVersion = (manifestVersion: number) =>
+  `1.${PACKAGE_REVISION}.${manifestVersion}`;
 
 export type PackageInput = {
   displayName: string;
@@ -27,7 +38,7 @@ export function manifest(input: PackageInput) {
   return {
     $schema: `https://developer.microsoft.com/json-schemas/teams/v${MANIFEST_VERSION}/MicrosoftTeams.schema.json`,
     manifestVersion: MANIFEST_VERSION,
-    version: `1.0.${input.manifestVersion}`,
+    version: packageVersion(input.manifestVersion),
     id: input.teamsAppId,
     // The app's developer, from the branding.
     developer: teamsDeveloper(),
@@ -40,7 +51,8 @@ export function manifest(input: PackageInput) {
         botId: input.botAppId,
         scopes: ["personal", "team", "groupChat"],
         isNotificationOnly: false,
-        supportsFiles: false,
+        // People can send it files in a direct chat (teams_get_attachment).
+        supportsFiles: true,
       },
     ],
     webApplicationInfo: {
