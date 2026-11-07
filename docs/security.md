@@ -14,7 +14,7 @@
 - **Limits** narrow a capability to values: the mailbox of Outlook mail and calendar, SharePoint
   sites and a folder per site, Teams teams and channels, Entra ID groups and administrative
   units, Intune groups, Dynamics 365 business units, owning teams and other tables, Jira
-  projects, Jamf Pro sites, Okta groups, Slack channels, Salesforce objects, Gong workspaces,
+  projects and Assets object schemas, Jamf Pro sites, Okta groups, Slack channels, Salesforce objects, Gong workspaces,
   customer email domains and CRM accounts, SAP S/4HANA company codes, sales and purchasing organizations and plants, NetSuite subsidiaries, locations and
   saved searches, ServiceNow assignment groups and companies, Workday organizations and reports,
   FedEx account numbers, GitHub repositories, or any list an `http`, `soap`, `odata` or `sql` connector declares.

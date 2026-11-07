@@ -440,6 +440,8 @@ scripts/wsdl-to-connector.ts, scripts/odata-to-connector.ts # draft a soap / oda
                       # from a WSDL or $metadata (tested in connectors/soap and connectors/odata)
 examples/legacy-apps/ # hr-soap and sap-sales-orders, JSON-only; the soap and odata tests' fixtures
 connectors/jira/jql.ts # confines agent JQL to granted projects
+connectors/jira/aql.ts # confines agent AQL (Jira Assets) to granted object schemas
+connectors/jira/assets.ts # the Jira Assets tools (joined to the issue tools with `toolsets`)
 connectors/salesforce/soql.ts # finds the one object a SOQL query reads; refuses anything reaching another
 connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account client credentials;
                       # microsoft/client.ts: the Microsoft connection (certificate, client secret or
@@ -626,6 +628,44 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   UserDetails, ProjectDetails, issue comment GET/POST, issue changelog GET) and
   developer.atlassian.com/cloud/jira/service-desk/swagger.v3.json (Create request comment,
   CommentCreateDTO, CommentDTO, DateDTO), read October 25, 2026.
+  Jira Assets (Jira Service Management's CMDB), capabilities `assets_read`
+  (`jira_assets_search`, `jira_assets_get_object`, `jira_assets_list_attributes`) and
+  `assets_update` (`jira_assets_update_object`), neither required, so issue-only keys are
+  unchanged. Generic: no object type, attribute or status is known here. Calls go through the
+  same gateway, `api.atlassian.com/ex/jira/{cloudId}/jsm/assets/workspace/{workspaceId}/v1/`:
+  tools send `ASSETS_PATH` with the literal `{workspaceId}` and the vendor fills it from
+  `GET /rest/servicedeskapi/assets/workspace` (the first `values[].workspaceId`, letters,
+  digits and dashes only: Atlassian's own example id is not hex), kept per cloudId in the vendor
+  for the process; a refused discovery is passed back as the tool's answer, no workspace is a 404.
+  Search is `POST object/aql?startAt&maxResults&includeAttributes=true` {qlQuery}; its values
+  carry only `objectTypeAttributeId`, named from the answer's `objectTypeAttributes`. Values are
+  shown as stored (ISO dates), a reference, status, user or group by its name. Limit
+  `asset_schemas` (object schema ids, empty = every schema the account sees): AQL becomes
+  `objectSchemaId = N AND (<agent's AQL>) [ORDER BY ...]` (`in (...)` for several; only double
+  quotes are strings, AQL has no single-quoted ones, so their parentheses count), and every
+  object answered, read or changed is checked on `objectType.objectSchemaId`; an object type's
+  attributes are refused when any names another schema. Update reads the object (schema check),
+  its type's attributes (`GET objecttype/{id}/attributes`), maps names case-insensitively,
+  refuses unknown, `system` or non-`editable` ones and several values for a single-value one,
+  resolves a Status (type 7) by name or id from `GET config/statustype?objectSchemaId=` within
+  the attribute's `typeValueMulti`, then `PUT object/{id}` {objectTypeId, attributes: only the
+  named ones} and reads the object back. No create or delete. Scopes per capability (each lists
+  its own reads, since neither is required): read `read:servicedesk-request` (workspace
+  discovery), `read:cmdb-object:jira`, `read:cmdb-attribute:jira`; update those plus
+  `read:cmdb-config:jira` (statuses) and `write:cmdb-object:jira`. The service account also
+  needs a role on each object schema (Object viewer to read, Object schema users to change).
+  Unconfirmed: that service-account OAuth 2.0 credentials can be given these scopes at all
+  (Atlassian's service account page says scopes can be selected for Jira, Confluence, Goals and
+  Projects, and names neither JSM nor Assets), that a service account without a Service
+  Management agent seat may call the servicedeskapi workspace endpoint, and that a PUT naming
+  some attributes leaves the others as they are (the OpenAPI does not say; the tool assumes it).
+  Not yet run against a real site. Sources: developer.atlassian.com/cloud/assets/swagger.v3.json
+  (servers, object/aql, object/{id}, objecttype/{id}/attributes, config/statustype,
+  ObjectIn, ObjectAttributeValueIn, ObjectTypeAttribute.type), the Jira Service Management
+  swagger.v3.json (Get assets workspaces, `read:servicedesk-request`),
+  developer.atlassian.com/cloud/assets/scopes-for-oauth-2-3LO-and-forge-apps, support.atlassian.com
+  use-assets-query-language-aql and what-are-roles, read November 7, 2026. Tests:
+  `connectors/jira/assets.test.ts`, against a fake Assets.
 - Microsoft connection (provider `microsoft`, table `providers`, one per org):
   the apps with `"provider": "microsoft"` sign in through it, so its credentials are entered
   once; each app row keeps its own ceiling and settings (`provider_id`, no credential of its

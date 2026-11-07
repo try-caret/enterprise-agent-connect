@@ -132,8 +132,10 @@ test("ticked capabilities are checked, ordered and always include the required o
 });
 
 test("connector capabilities are validated", () => {
+  // Steps shown only with some capabilities (Assets) are left out: these lists drop them.
+  const setup = jira.setup.filter((s) => !s.capabilities);
   const bad = (capabilities: unknown) =>
-    connectorSchema.safeParse({ ...jira, capabilities }).success;
+    connectorSchema.safeParse({ ...jira, setup, capabilities }).success;
   assert.equal(bad(jira.capabilities), true);
   // A tool in two capabilities, a required destructive one.
   assert.equal(bad([...jira.capabilities, { ...jira.capabilities[1], id: "again" }]), false);

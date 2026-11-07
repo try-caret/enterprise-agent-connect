@@ -8,14 +8,22 @@ export class JqlRejected extends Error {}
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,254}$/;
 // After strings are blanked to "": fields (cf[10010], "Story Points") with optional direction.
 const SORT_FIELD = String.raw`(?:""|[A-Za-z_][\w.]*(?:\[\d+\])?)(?:\s+(?:asc|desc))?`;
-const ORDER_BY = new RegExp(String.raw`^order\s+by\s+${SORT_FIELD}(?:\s*,\s*${SORT_FIELD})*$`, "i");
+export const ORDER_BY = new RegExp(
+  String.raw`^order\s+by\s+${SORT_FIELD}(?:\s*,\s*${SORT_FIELD})*$`,
+  "i",
+);
 
 export function isProjectKey(key: string): boolean {
   return PROJECT_KEY.test(key);
 }
 
-// Splits at a top-level ORDER BY (outside strings and parentheses).
-function splitOrderBy(jql: string): { where: string; orderBy: string | null } {
+// Splits at a top-level ORDER BY (outside strings and parentheses). `quotes`: the characters
+// that open a string (JQL takes both; AQL documents only double quotes, so a single quote there
+// is not a string and its parentheses count).
+export function splitOrderBy(
+  jql: string,
+  quotes = `"'`,
+): { where: string; orderBy: string | null } {
   let depth = 0;
   let quote: string | null = null;
   let orderAt = -1;
@@ -26,7 +34,7 @@ function splitOrderBy(jql: string): { where: string; orderBy: string | null } {
       else if (c === quote) quote = null;
       continue;
     }
-    if (c === '"' || c === "'") quote = c;
+    if (quotes.includes(c)) quote = c;
     else if (c === "(") depth++;
     else if (c === ")") {
       depth--;

@@ -1,7 +1,7 @@
 {
   "id": "jira",
   "name": "Jira",
-  "description": "Let agents search, read and work on issues in the Jira projects you choose.",
+  "description": "Let agents search, read and work on issues in the Jira projects you choose, and find and update Jira Assets objects in the object schemas you choose.",
   "logo": "/brand/jira.svg",
   "identity": "An Atlassian service account named \"{brand.microsoft.appName}\". It uses no Jira seat.",
   "accountKey": "cloudId",
@@ -30,8 +30,19 @@
       "permissions": true
     },
     {
+      "title": "Give it a role on the Assets object schemas",
+      "body": "Assets keeps its own access, per object schema: without a role there, Assets searches find nothing and reads and changes are refused. Give the service account Object viewer to let agents read, or Object schema users to let them change objects. If Atlassian Administration lists Assets as an app of its own, also set Assets to User in the service account's app roles. You can narrow each agent to specific object schemas here later.",
+      "capabilities": ["assets_read", "assets_update"],
+      "click": [
+        "Atlassian Administration > Directory > Service accounts > {brand.microsoft.appName} > app roles: Assets > User (only if Assets is listed as its own app)",
+        "Jira > Assets > the object schema > Configure > Roles",
+        "Object viewer (read) or Object schema users (change objects) > add {brand.microsoft.appName} > Save"
+      ],
+      "confirm": "jira-assets-schema-roles"
+    },
+    {
       "title": "Create OAuth 2.0 credentials",
-      "body": "On the service account, select Create credentials, then OAuth 2.0, and select exactly these scopes. Copy the client ID and secret: Atlassian shows the secret only once.",
+      "body": "On the service account, select Create credentials, then OAuth 2.0, and select exactly these scopes. Copy the client ID and secret: Atlassian shows the secret only once. Turning on an Assets capability later needs its scopes too: create new credentials with the full list and reconnect with them.",
       "copy": ["{scopes}"]
     }
   ],
@@ -97,6 +108,34 @@
       "scopes": ["write:jira-work"],
       "permissions": ["Delete issues"],
       "tools": ["jira_delete_issue"]
+    },
+    {
+      "id": "assets_read",
+      "label": "Read assets",
+      "description": "Find Jira Assets objects with AQL (Assets Query Language), read one object and list an object type's attributes, in the allowed object schemas.",
+      "scopes": [
+        "read:servicedesk-request",
+        "read:cmdb-object:jira",
+        "read:cmdb-attribute:jira"
+      ],
+      "permissions": [],
+      "forbidden": "Give the service account a role on the object schema (Assets > the schema > Configure > Roles) and the Assets scopes listed in the setup steps.",
+      "tools": ["jira_assets_search", "jira_assets_get_object", "jira_assets_list_attributes"]
+    },
+    {
+      "id": "assets_update",
+      "label": "Update assets",
+      "description": "Change named attributes of existing Jira Assets objects in the allowed object schemas, such as an asset's status or who has it. It never creates or deletes objects.",
+      "scopes": [
+        "read:servicedesk-request",
+        "read:cmdb-object:jira",
+        "read:cmdb-attribute:jira",
+        "read:cmdb-config:jira",
+        "write:cmdb-object:jira"
+      ],
+      "permissions": [],
+      "forbidden": "Give the service account the Object schema users role on the object schema (Assets > the schema > Configure > Roles) and the Assets scopes listed in the setup steps.",
+      "tools": ["jira_assets_update_object"]
     }
   ],
   "limits": [
@@ -107,6 +146,14 @@
       "kind": "list",
       "required": false,
       "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    {
+      "id": "asset_schemas",
+      "label": "Assets object schemas",
+      "help": "Object schema ids (the number in the schema's address in Assets). Leave empty to allow every object schema the service account can see.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[1-9][0-9]{0,17}$"
     }
   ],
   "verify": {

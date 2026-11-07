@@ -17,6 +17,16 @@ const API = "https://api.atlassian.com";
 // Jira writes errors in the account's language otherwise; agents and admins read English.
 const JSON_EN = { accept: "application/json", "accept-language": "en" };
 const CLOUD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Jira Assets: tools send paths under ASSETS_PATH with the literal {workspaceId}, filled here.
+// The site's Assets workspace id comes from GET /rest/servicedeskapi/assets/workspace (Jira
+// Service Management's "Get assets workspaces", scope read:servicedesk-request) and is kept per
+// cloudId: a site has one workspace and its id does not change. Assets is reached through the
+// same gateway as Jira (api.atlassian.com/ex/jira/{cloudId}/jsm/assets/workspace/{id}/v1,
+// the server of Atlassian's Assets OpenAPI, developer.atlassian.com/cloud/assets/swagger.v3.json).
+export const ASSETS_PATH = "/jsm/assets/workspace/{workspaceId}/v1/";
+// Atlassian's own example ids are not hex ("1060ba0e-178b-4e0e-g0h1-jedb02cccb5f"), so only the
+// characters, never the UUID shape, are checked: enough to keep it one path segment.
+const WORKSPACE_ID = /^[A-Za-z0-9-]{1,64}$/;
 
 export function normalizeSite(input: string): string {
   const host = input
@@ -33,6 +43,7 @@ export function normalizeSite(input: string): string {
 export function jiraVendor(unguarded: Fetch = fetch): Vendor {
   const fetchImpl = vendorFetch("Jira", unguarded);
   const tokens = new TokenCache();
+  const workspaces = new Map<string, string>();
 
   const token = (clientId: string, clientSecret: string) =>
     tokens.get(
@@ -90,21 +101,41 @@ export function jiraVendor(unguarded: Fetch = fetch): Vendor {
       const { cloudId } = connection.config;
       if (!CLOUD_ID.test(cloudId ?? "")) throw new Error("Jira connection has no cloudId");
       const access = await token(connection.secret.client_id, connection.secret.client_secret);
-      const res = await fetchImpl(`${API}/ex/jira/${cloudId}${request.path}`, {
-        method: request.method,
-        headers: {
-          authorization: `Bearer ${access}`,
-          ...JSON_EN,
-          ...(request.body === undefined ? {} : { "content-type": "application/json" }),
-        },
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
-      });
-      const raw = await res.text();
-      return {
-        status: res.status,
-        data: raw ? safeJson(raw) : null,
-        headers: Object.fromEntries(res.headers),
+      const send = async (method: VendorRequest["method"], path: string, body?: unknown) => {
+        const res = await fetchImpl(`${API}/ex/jira/${cloudId}${path}`, {
+          method,
+          headers: {
+            authorization: `Bearer ${access}`,
+            ...JSON_EN,
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const raw = await res.text();
+        return {
+          status: res.status,
+          data: raw ? safeJson(raw) : null,
+          headers: Object.fromEntries(res.headers),
+        };
       };
+      if (!request.path.startsWith(ASSETS_PATH))
+        return send(request.method, request.path, request.body);
+      let workspace = workspaces.get(cloudId);
+      if (!workspace) {
+        const found = await send("GET", "/rest/servicedeskapi/assets/workspace");
+        if (found.status < 200 || found.status >= 300) return found;
+        const id = (found.data as { values?: { workspaceId?: unknown }[] } | null)?.values?.[0]
+          ?.workspaceId;
+        if (typeof id !== "string" || !WORKSPACE_ID.test(id))
+          return {
+            status: 404,
+            data: { errorMessages: ["This Jira site has no Assets workspace"] },
+            headers: {},
+          };
+        workspaces.set(cloudId, id);
+        workspace = id;
+      }
+      return send(request.method, request.path.replace("{workspaceId}", workspace), request.body);
     },
   };
 }

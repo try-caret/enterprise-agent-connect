@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { assetsTools } from "./assets.js";
 import { isProjectKey, JqlRejected, scopeJql } from "./jql.js";
 import {
   audited,
   Denied,
   json,
   listLimit,
+  toolsets,
   VendorFailed,
   type ToolContext,
   type Toolset,
@@ -208,7 +210,7 @@ async function labelsAddedBy(
   );
 }
 
-export const jiraTools: Toolset = {
+const issueTools: Toolset = {
   names: [
     "jira_search_issues",
     "jira_get_issue",
@@ -590,3 +592,5 @@ export const jiraTools: Toolset = {
       );
   },
 };
+
+export const jiraTools: Toolset = toolsets(issueTools, assetsTools);
