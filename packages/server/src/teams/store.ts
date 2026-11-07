@@ -77,6 +77,15 @@ export type TriggerRow = {
   updatedAt: string;
 };
 
+export type FileOfferRow = {
+  id: string;
+  name: string;
+  size: number;
+  content: Buffer;
+  contentKeyId: string;
+  serviceUrl: string;
+};
+
 export type RunRow = {
   id: string;
   agentId: string;
@@ -788,6 +797,50 @@ export function createTeamsStore(sql: Sql, schema: string) {
           returning ${APPROVAL}`,
         [botId, id, decision.status, decision.byAadId, decision.byName, comment, conversationId],
       );
+      return row ?? null;
+    },
+
+    // ---- files offered in a direct chat (offer.ts) ----
+
+    async createFileOffer(input: {
+      id: string;
+      botId: string;
+      conversationId: string;
+      serviceUrl: string;
+      recipientAadId: string;
+      name: string;
+      size: number;
+      sealed: { ciphertext: Buffer; keyId: string };
+      hours: number;
+    }): Promise<void> {
+      await sql`delete from ${t.teams_file_offers} where expires_at <= now()`;
+      await sql`
+        insert into ${t.teams_file_offers}
+          (id, bot_id, conversation_id, service_url, recipient_aad_id, name, size, content,
+           content_key_id, expires_at)
+        values (${input.id}, ${input.botId}, ${input.conversationId}, ${input.serviceUrl},
+                ${input.recipientAadId}, ${input.name}, ${input.size}, ${input.sealed.ciphertext},
+                ${input.sealed.keyId}, now() + make_interval(hours => ${input.hours}))`;
+    },
+
+    // An offer whose card could not be posted.
+    async discardFileOffer(id: string): Promise<void> {
+      await sql`delete from ${t.teams_file_offers} where id = ${id}`;
+    },
+
+    // Answers an offer once: only through its bot, in its chat, by its recipient, unexpired.
+    async takeFileOffer(
+      botId: string,
+      id: string,
+      conversationId: string,
+      aadId: string,
+    ): Promise<FileOfferRow | null> {
+      const [row] = await sql<FileOfferRow[]>`
+        delete from ${t.teams_file_offers}
+         where bot_id = ${botId} and id = ${id} and conversation_id = ${conversationId}
+           and recipient_aad_id = ${aadId} and expires_at > now()
+        returning id::text as id, name, size, content, content_key_id as "contentKeyId",
+                  service_url as "serviceUrl"`;
       return row ?? null;
     },
 

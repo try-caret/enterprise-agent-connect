@@ -7,6 +7,7 @@ import {
   promptText,
   type Activity,
 } from "../src/teams/activity.ts";
+import { fileStorageUrl, offerName } from "../src/teams/offer.ts";
 
 // Files sent with a Teams message: what is kept of them and how the agent is told.
 
@@ -98,4 +99,23 @@ test("the agent is told each file by number, its name quoted, and which it canno
   assert.match(text, /2\. "b\.docx" \(in a group chat: apps cannot open it/);
   assert.doesNotMatch(text, /https:\/\/x/);
   assert.equal(text.split("</teams_files>").length, 2);
+});
+
+test("files are fetched from and saved to SharePoint and OneDrive only", () => {
+  assert.ok(fileStorageUrl("https://contoso.sharepoint.com/sites/T/d.aspx?tempauth=x"));
+  assert.ok(fileStorageUrl("https://contoso-my.sharepoint.com/personal/a/upload?s=1"));
+  for (const bad of [
+    "http://contoso.sharepoint.com/x",
+    "https://contoso.sharepoint.com.attacker.example/x",
+    "https://sharepoint.com/x",
+    "https://a.b.sharepoint.com/x",
+    "https://user:pw@contoso.sharepoint.com/x",
+    "https://contoso.sharepoint.com:8443/x",
+    "https://169.254.169.254/latest",
+    "not a url",
+    42,
+  ])
+    assert.equal(fileStorageUrl(bad), null, String(bad));
+  assert.equal(offerName("../a/b:c?.xlsx"), ".._a_b_c_.xlsx");
+  assert.equal(offerName("  "), "file");
 });
