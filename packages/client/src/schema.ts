@@ -828,7 +828,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** A new secret for a webhook, shown once; the old one stops working at once */
+        /** A new secret for a webhook, shown once; the old one stops working at once. For an app that makes its own signing secret (Slack), give the new one as secret; null is answered */
         post: operations["rotateEventSecret"];
         delete?: never;
         options?: never;
@@ -1703,7 +1703,7 @@ export interface components {
                     label: string;
                 }[];
                 fields: {
-                    [key: string]: string;
+                    [key: string]: string | string[];
                 };
                 /** @default {} */
                 limits: {
@@ -1716,6 +1716,8 @@ export interface components {
                         header: string;
                         /** @default  */
                         prefix: string;
+                        /** Format: includes */
+                        signs?: string & (unknown & unknown);
                     } | {
                         /** @constant */
                         type: "token";
@@ -1726,6 +1728,8 @@ export interface components {
                     };
                     /** @default false */
                     allowInsecure: boolean;
+                    /** @default false */
+                    secretFromApp: boolean;
                     type: {
                         field: string;
                     } | {
@@ -1746,6 +1750,15 @@ export interface components {
                         unit: "s" | "ms" | "iso";
                         /** @default 300 */
                         toleranceSeconds: number;
+                    };
+                    handshake?: {
+                        at: {
+                            field: string;
+                        } | {
+                            header: string;
+                        };
+                        equals: string;
+                        echo: string;
                     };
                     setup: {
                         title: string;
@@ -6300,6 +6313,7 @@ export interface operations {
                     intervalSeconds?: number;
                     /** @default false */
                     register?: boolean;
+                    secret?: string;
                     by: string;
                 };
             };
@@ -6365,6 +6379,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    secret?: string;
                     by: string;
                 };
             };
@@ -6378,7 +6393,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         subscription: components["schemas"]["EventSubscription"];
-                        secret: string;
+                        secret: string | null;
                     };
                 };
             };

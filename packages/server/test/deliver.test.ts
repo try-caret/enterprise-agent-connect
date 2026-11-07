@@ -134,3 +134,49 @@ test("caps: hourly runs, then daily spend with live budgets, then runs at once",
   assert.equal(capReached({ active: 1, lastHour: 1, spentToday: 120 }, caps), "day");
   assert.equal(capReached({ active: 2, lastHour: 2, spentToday: 0 }, caps), "concurrent");
 });
+
+test("an HMAC over a template signs the header and body together (Slack's v0 scheme)", () => {
+  const v = {
+    type: "hmac-sha256" as const,
+    header: "X-Slack-Signature",
+    prefix: "v0=",
+    signs: "v0:{header:X-Slack-Request-Timestamp}:{body}",
+  };
+  const sig = (ts: string, s = SECRET) =>
+    `v0=${createHmac("sha256", s).update(`v0:${ts}:${body.toString()}`).digest("hex")}`;
+  const ok = h({
+    "x-slack-request-timestamp": "1730700000",
+    "x-slack-signature": sig("1730700000"),
+  });
+  assert.ok(signed(v, SECRET, body, ok));
+  // The stamp is signed: changing it breaks the signature.
+  assert.ok(
+    !signed(
+      v,
+      SECRET,
+      body,
+      h({ "x-slack-request-timestamp": "1730700999", "x-slack-signature": sig("1730700000") }),
+    ),
+  );
+  // Without the header there is nothing to check.
+  assert.ok(!signed(v, SECRET, body, h({ "x-slack-signature": sig("") })));
+  // The body alone is not what is signed.
+  assert.ok(
+    !signed(
+      v,
+      SECRET,
+      body,
+      h({ "x-slack-request-timestamp": "1", "x-slack-signature": `v0=${hmac(body)}` }),
+    ),
+  );
+});
+
+test("a field with several paths takes the first that has a value", () => {
+  const fields = { thread_ts: ["event.thread_ts", "event.ts"], ts: "event.ts" };
+  assert.deepEqual(pickFields(fields, { event: { ts: "1.2" } }), { thread_ts: "1.2", ts: "1.2" });
+  assert.deepEqual(pickFields(fields, { event: { ts: "1.2", thread_ts: "0.9" } }), {
+    thread_ts: "0.9",
+    ts: "1.2",
+  });
+  assert.deepEqual(pickFields(fields, {}), { thread_ts: null, ts: null });
+});

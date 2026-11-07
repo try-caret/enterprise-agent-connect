@@ -1018,8 +1018,9 @@ const eventRequest = z
 const eventsSchema = z
   .object({
     types: z.array(z.object({ id: eventId, label: text }).strict()).min(1),
-    // What an agent is given of each event, and what conditions and limits read: name → path.
-    fields: z.record(slug, eventPath),
+    // What an agent is given of each event, and what conditions and limits read: name → path,
+    // or a list of paths whose first with a value is taken (Slack: thread_ts, else ts).
+    fields: z.record(slug, z.union([eventPath, z.array(eventPath).min(2).max(5)])),
     // A limit's id → the field holding the event's value for it. An agent with that limit set
     // is started only by events whose value is within it.
     limits: z.record(slug, slug).default({}),
@@ -1027,19 +1028,30 @@ const eventsSchema = z
       .object({
         // How a delivery proves it came from the app, with the subscription's secret: an
         // HMAC-SHA256 of the body (hex, after `prefix`), the secret itself in a header, or
-        // nothing at all, only with allowInsecure.
+        // nothing at all, only with allowInsecure. `signs`: what the HMAC is of when not the
+        // body alone, {body} and {header:Name} written into text (Slack:
+        // "v0:{header:X-Slack-Request-Timestamp}:{body}").
         verify: z.discriminatedUnion("type", [
           z
             .object({
               type: z.literal("hmac-sha256"),
               header: headerName,
               prefix: z.string().max(20).default(""),
+              signs: z
+                .string()
+                .max(200)
+                .regex(/^(?:[^{}]|\{body\}|\{header:[A-Za-z0-9-]+\})*$/)
+                .includes("{body}")
+                .optional(),
             })
             .strict(),
           z.object({ type: z.literal("token"), header: headerName }).strict(),
           z.object({ type: z.literal("none") }).strict(),
         ]),
         allowInsecure: z.boolean().default(false),
+        // The app makes the secret (Slack's signing secret), so the admin gives it when
+        // subscribing and when it changes; otherwise the service makes it.
+        secretFromApp: z.boolean().default(false),
         type: locator,
         // Same for every retry of one delivery; without one, the body's hash is used.
         deliveryId: locator.optional(),
@@ -1055,6 +1067,13 @@ const eventsSchema = z
               .max(7 * 86400)
               .default(300),
           })
+          .strict()
+          .optional(),
+        // A signed check of the address the app sends when it is saved there (Slack's
+        // url_verification): a delivery whose `at` is `equals` is answered with the text at
+        // `echo` and starts nothing.
+        handshake: z
+          .object({ at: locator, equals: z.string().min(1).max(100), echo: eventPath })
           .strict()
           .optional(),
         // Where the admin pastes the address ({url}) and the secret.
@@ -1090,11 +1109,7 @@ const eventsSchema = z
         wrap: slug.optional(),
         cursor: eventPath,
         deliveryId: z.array(eventPath).min(1),
-        types: z
-          .array(
-            z.object({ type: eventId, since: eventPath.optional() }).strict(),
-          )
-          .min(1),
+        types: z.array(z.object({ type: eventId, since: eventPath.optional() }).strict()).min(1),
       })
       .strict()
       .optional(),

@@ -5984,6 +5984,11 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "secret": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 256
+                  },
                   "by": {
                     "type": "string",
                     "minLength": 1,
@@ -6056,7 +6061,7 @@
     "/orgs/{org}/event-subscriptions/{subscription}/secret": {
       "post": {
         "operationId": "rotateEventSecret",
-        "summary": "A new secret for a webhook, shown once; the old one stops working at once",
+        "summary": "A new secret for a webhook, shown once; the old one stops working at once. For an app that makes its own signing secret (Slack), give the new one as secret; null is answered",
         "tags": [
           "events"
         ],
@@ -6087,6 +6092,11 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "secret": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 256
+                  },
                   "by": {
                     "type": "string",
                     "minLength": 1,
@@ -6112,7 +6122,10 @@
                       "$ref": "#/components/schemas/EventSubscription"
                     },
                     "secret": {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -10300,8 +10313,21 @@
                   "pattern": "^[a-z][a-z0-9_]*$"
                 },
                 "additionalProperties": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                    },
+                    {
+                      "minItems": 2,
+                      "maxItems": 5,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                      }
+                    }
+                  ]
                 }
               },
               "limits": {
@@ -10336,6 +10362,19 @@
                             "default": "",
                             "type": "string",
                             "maxLength": 20
+                          },
+                          "signs": {
+                            "type": "string",
+                            "maxLength": 200,
+                            "format": "includes",
+                            "allOf": [
+                              {
+                                "pattern": "^(?:[^{}]|\\{body\\}|\\{header:[A-Za-z0-9-]+\\})*$"
+                              },
+                              {
+                                "pattern": "\\{body\\}"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -10379,6 +10418,10 @@
                     ]
                   },
                   "allowInsecure": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "secretFromApp": {
                     "default": false,
                     "type": "boolean"
                   },
@@ -10494,6 +10537,56 @@
                       "at",
                       "unit",
                       "toleranceSeconds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "handshake": {
+                    "type": "object",
+                    "properties": {
+                      "at": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                              }
+                            },
+                            "required": [
+                              "field"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "header": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9-]+$"
+                              }
+                            },
+                            "required": [
+                              "header"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "equals": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "echo": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                      }
+                    },
+                    "required": [
+                      "at",
+                      "equals",
+                      "echo"
                     ],
                     "additionalProperties": false
                   },
@@ -10673,6 +10766,7 @@
                 "required": [
                   "verify",
                   "allowInsecure",
+                  "secretFromApp",
                   "type",
                   "setup"
                 ],
