@@ -37,6 +37,7 @@ const TABLES = [
   "teams_runs",
   "teams_spend",
   "approvals",
+  "teams_file_offers",
   "event_subscriptions",
   "app_events",
   "event_triggers",

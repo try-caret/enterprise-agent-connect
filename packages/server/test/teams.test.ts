@@ -78,7 +78,7 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
   return { runner, calls };
 }
 
-async function setup(runners: TriggerRunner[]) {
+async function setup(runners: TriggerRunner[], opts: { fetch?: typeof fetch } = {}) {
   const sent: Sent[] = [];
   const bots = fakeBots(sent);
   const store = createStore(sql!, SCHEMA);
@@ -113,6 +113,7 @@ async function setup(runners: TriggerRunner[]) {
     runners: byId,
     connector: teamsConnector,
     publicUrl,
+    fetch: opts.fetch,
   });
   const admin = createTeamsAdmin({
     store,
@@ -798,5 +799,231 @@ test(
     const edit = t.sent.find((s) => s.method === "PUT")!;
     assert.equal(edit.path, `/v3/conversations/${encodeURIComponent(CHAT)}/activities/900`);
     assert.match(cardText(edit.body), /Approved by Ann Example/);
+  },
+);
+
+// ---- files sent with teams_reply in a direct chat ----
+
+const DIRECT = "a:chat";
+const REPORT = "https://contoso.sharepoint.com/sites/T/_layouts/15/download.aspx?tempauth=t1";
+const UPLOAD = "https://contoso-my.sharepoint.com/personal/ann/_api/upload?session=s1";
+
+async function fileReplies(opts: { body?: string; length?: number } = {}) {
+  const bytes = opts.body ?? "quarterly numbers";
+  const puts: { url: string; headers: Headers; body: Buffer }[] = [];
+  const gets: string[] = [];
+  const fakeFetch = (async (url: string, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "GET") {
+      gets.push(url);
+      return new Response(bytes, {
+        status: 200,
+        headers: opts.length ? { "content-length": String(opts.length) } : {},
+      });
+    }
+    puts.push({
+      url,
+      headers: new Headers(init!.headers),
+      body: Buffer.from(init!.body as Uint8Array),
+    });
+    return new Response("{}", { status: 201 });
+  }) as unknown as typeof fetch;
+  let replyToken = "";
+  const { runner } = fakeRunner("fake-file-reply", async (input) => {
+    replyToken = input.replyToken;
+  });
+  const t = await setup([runner], { fetch: fakeFetch });
+  await t.teams.upsertConversation({
+    botId: t.botId,
+    conversationId: DIRECT,
+    kind: "personal",
+    serviceUrl: SERVICE_URL,
+    teamId: null,
+    teamGroupId: null,
+    name: null,
+    userAadId: PERSON,
+  });
+  await t.setRunner("fake-file-reply");
+  await t.message("send me the report");
+  const handlers = new Map<string, (input: unknown) => Promise<any>>();
+  const ctx: TeamsToolContext = {
+    limits: {},
+    config: {},
+    call: async () => ({ status: 404, data: null }),
+    teams: t.runtime.access((await t.teams.botById(t.botId))!),
+    audit: (entry) =>
+      t.store.audit({
+        organizationId: t.org,
+        agentId: t.agentId,
+        agentName: "Triage",
+        connectorId: "teams",
+        ...entry,
+      }),
+  };
+  teamsTools.register(
+    { registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h) } as never,
+    ctx,
+    new Set(teamsTools.names),
+  );
+  async function reply(files: { name: string; download_url: string }[]) {
+    const r = await handlers.get("teams_reply")!({ reply_token: replyToken, text: "Here it is", files });
+    return { isError: Boolean(r.isError), text: r.content[0].text as string };
+  }
+  let n = 0;
+  // Accept or Decline on a consent card, as Teams sends it to the bot's address.
+  async function answer(
+    offer: string,
+    opts: { action?: string; from?: string; uploadUrl?: string } = {},
+  ) {
+    const activity = {
+      type: "invoke",
+      name: "fileConsent/invoke",
+      id: `fc-${++n}`,
+      serviceUrl: SERVICE_URL,
+      channelId: "msteams",
+      recipient: { id: `28:${t.botAppId}` },
+      from: { id: "29:person", aadObjectId: opts.from ?? PERSON, name: "Ann" },
+      conversation: { id: DIRECT, conversationType: "personal" },
+      channelData: { tenant: { id: TENANT } },
+      replyToId: "900",
+      value: {
+        type: "fileUpload",
+        action: opts.action ?? "accept",
+        context: { offer },
+        uploadInfo: {
+          name: "report.xlsx",
+          uploadUrl: opts.uploadUrl ?? UPLOAD,
+          contentUrl: "https://contoso-my.sharepoint.com/personal/ann/Documents/report.xlsx",
+          uniqueId: "1150D938-8870-4044-9F2C-5BBDEBA70C8C",
+          fileType: "xlsx",
+        },
+      },
+    };
+    const res = await t.runtime.inbound(
+      t.botAppId,
+      new Request(`https://svc.example/agent-connect/teams/bots/${t.botAppId}/messages`, {
+        method: "POST",
+        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        body: JSON.stringify(activity),
+      }),
+    );
+    assert.equal(res.status, 200);
+    await t.runtime.idle();
+  }
+  const offers = async () =>
+    (await sql!`select id::text, name, size, content from agent_connect.teams_file_offers
+                 where bot_id = ${t.botId}`) as unknown as {
+      id: string;
+      name: string;
+      size: number;
+      content: Buffer;
+    }[];
+  const fileAudits = async () =>
+    (await sql!`select decision, reason from agent_connect.audit
+                 where agent_id = ${t.agentId} and tool = 'teams:file' order by id`) as unknown as {
+      decision: string;
+      reason: string;
+    }[];
+  return { t, reply, answer, offers, fileAudits, puts, gets, bytes };
+}
+
+test(
+  "a file sent with a reply is offered, and the person's accept saves it to their OneDrive",
+  { skip: !sql },
+  async () => {
+    const f = await fileReplies();
+    const r = await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    assert.equal(r.isError, false, r.text);
+    assert.deepEqual(JSON.parse(r.text), { replied: true, files_offered: 1 });
+    assert.deepEqual(f.gets, [REPORT]);
+    const posts = f.t.sent.filter((s) => s.method === "POST");
+    assert.equal(posts.at(-2)!.body.text, "Here it is");
+    const consent = posts.at(-1)!;
+    assert.equal(consent.path, `/v3/conversations/${encodeURIComponent(DIRECT)}/activities`);
+    const [card] = consent.body.attachments;
+    assert.equal(card.contentType, "application/vnd.microsoft.teams.card.file.consent");
+    assert.equal(card.name, "report.xlsx");
+    assert.equal(card.content.sizeInBytes, f.bytes.length);
+    const [offer] = await f.offers();
+    assert.deepEqual(card.content.acceptContext, { offer: offer.id });
+    // The file waits sealed.
+    assert.ok(!Buffer.from(offer.content).toString("latin1").includes(f.bytes));
+
+    await f.answer(offer.id);
+    assert.equal(f.puts.length, 1);
+    assert.equal(f.puts[0].url, UPLOAD);
+    assert.equal(f.puts[0].body.toString(), f.bytes);
+    assert.equal(
+      f.puts[0].headers.get("content-range"),
+      `bytes 0-${f.bytes.length - 1}/${f.bytes.length}`,
+    );
+    const info = f.t.sent.filter((s) => s.method === "POST").at(-1)!.body.attachments[0];
+    assert.equal(info.contentType, "application/vnd.microsoft.teams.card.file.info");
+    assert.equal(info.content.uniqueId, "1150D938-8870-4044-9F2C-5BBDEBA70C8C");
+    assert.equal(info.content.fileType, "xlsx");
+    // The consent card goes once answered.
+    const drop = f.t.sent.find((s) => s.method === "DELETE")!;
+    assert.equal(drop.path, `/v3/conversations/${encodeURIComponent(DIRECT)}/activities/900`);
+    assert.equal((await f.offers()).length, 0);
+
+    // A second accept finds nothing to send.
+    await f.answer(offer.id);
+    assert.equal(f.puts.length, 1);
+    assert.deepEqual(
+      (await f.fileAudits()).map((a) => a.decision),
+      ["allowed", "denied"],
+    );
+  },
+);
+
+test(
+  "only the person in the chat answers a file offer, and declining drops it",
+  { skip: !sql },
+  async () => {
+    const f = await fileReplies();
+    await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    const [offer] = await f.offers();
+    await f.answer(offer.id, { from: OTHER });
+    assert.equal(f.puts.length, 0);
+    assert.equal((await f.offers()).length, 1);
+    // An upload address outside SharePoint and OneDrive is never written to.
+    await f.answer(offer.id, { uploadUrl: "https://attacker.example/upload" });
+    assert.equal(f.puts.length, 0);
+    assert.equal((await f.offers()).length, 1);
+    const f2 = await fileReplies();
+    await f2.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    const [offer2] = await f2.offers();
+    await f2.answer(offer2.id, { action: "decline" });
+    assert.equal(f2.puts.length, 0);
+    assert.equal((await f2.offers()).length, 0);
+    assert.ok(f2.t.sent.some((s) => s.method === "DELETE"));
+    assert.deepEqual(
+      (await f2.fileAudits()).map((a) => [a.decision, a.reason]),
+      [["allowed", "report.xlsx declined"]],
+    );
+  },
+);
+
+test(
+  "a file the reply cannot fetch posts nothing and leaves the reply unused",
+  { skip: !sql },
+  async () => {
+    const f = await fileReplies();
+    const before = f.t.sent.length;
+    const outside = await f.reply([{ name: "x.xlsx", download_url: "https://files.example/x" }]);
+    assert.equal(outside.isError, true);
+    assert.match(outside.text, /SharePoint or OneDrive/);
+    assert.deepEqual(f.gets, []);
+    assert.equal(f.t.sent.length, before);
+    assert.equal((await f.t.runs())[0].replyCount, 0);
+
+    const big = await fileReplies({ length: 26 * 1024 * 1024 });
+    const tooBig = await big.reply([{ name: "big.xlsx", download_url: REPORT }]);
+    assert.equal(tooBig.isError, true);
+    assert.match(tooBig.text, /at most 25 MB/);
+    assert.equal((await big.offers()).length, 0);
+
+    // The reply is still there for a good file.
+    const good = await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    assert.equal(good.isError, false, good.text);
   },
 );

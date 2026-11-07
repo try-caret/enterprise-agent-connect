@@ -327,6 +327,26 @@ file}` takes the reply token as `teams_reply` does (6.4: the calling agent's run
 limits) but uses no reply, and answers `{name, size?, download_url}`; the agent downloads the
 file from its own workspace within the hour. It is part of `respond`.
 
+### 6.7 Files sent with a reply: `teams_reply {files}`
+
+Teams lets a bot hand someone a file only in a direct chat, by file consent (Microsoft's bot file
+guide [3]); channels and group chats have no bot route, and no RSC permission writes a team's
+files, so `files` there is refused with a note to share a link instead.
+
+- `teams_reply {reply_token, text, files: [{name, download_url}]}`: up to 10 files, 25 MB
+  together. Each `download_url` must be an `https://<tenant>(-my).sharepoint.com` download link
+  (`graph_get_download_link`, `teams_get_attachment`); nothing else is fetched, redirects are
+  refused. Every file is fetched before anything is posted, so a bad link leaves the reply unused.
+- After the text, one consent card (`application/vnd.microsoft.teams.card.file.consent`) per
+  file. The file waits sealed in `teams_file_offers` (one row per file, the chat's person as
+  recipient, gone after 24 h).
+- Accept or Decline arrives as a `fileConsent/invoke`, after the same request checks as a card
+  click (6.1). It counts once, only from the recipient, in that chat, unexpired (one `delete …
+  returning`). On accept the bytes go by one `PUT` to `uploadInfo.uploadUrl` (their OneDrive,
+  which must also be a SharePoint address), then a file card
+  (`application/vnd.microsoft.teams.card.file.info`) is posted and the consent card is removed.
+  The upload runs after the invoke is answered. Every answer is audited (`teams:file`).
+
 ### 6.5 Org Claude key
 
 Triggers spend the customer's Claude API usage, so each organization sets its own Claude API

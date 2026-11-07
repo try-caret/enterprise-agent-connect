@@ -12,6 +12,8 @@ drop view if exists public.agent_connect_agents, public.agent_connect_providers,
   public.agent_connect_teams_conversations, public.agent_connect_teams_events,
   public.agent_connect_teams_triggers, public.agent_connect_teams_runs,
   public.agent_connect_teams_spend;
+-- 0011: files offered in direct chats, waiting for an answer.
+drop table agent_connect.teams_file_offers;
 -- 0010: the files of each run's latest message.
 alter table agent_connect.teams_runs drop column files, drop column files_key_id;
 -- 0009: Graph notification watches (the rest of 0009 goes with the 0007 tables).
