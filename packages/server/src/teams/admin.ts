@@ -10,7 +10,7 @@ import { SHARED_APP_AUTH, type MicrosoftClient } from "../../../../connectors/mi
 import { ConnectError, type Fetch } from "../../../connector-kit/src/types.js";
 import type { BotClient } from "./bot.js";
 import { agentMcpUrl, type ClaudeFactory } from "./claude.js";
-import { packageZip, removalScript, setupScript } from "./package.js";
+import { packageVersion, packageZip, removalScript, setupScript } from "./package.js";
 import {
   CATALOG_SCOPE,
   LIVE_CHECKS,
@@ -96,7 +96,7 @@ function publicTrigger(row: TriggerRow) {
   return { ...rest, hasSigningSecret: secret !== null };
 }
 
-const packageVersion = (bot: BotRow) => `1.0.${bot.manifestVersion}`;
+const versionOf = (bot: BotRow) => packageVersion(bot.manifestVersion);
 
 function publicBot(bot: BotRow) {
   const { credential: _c, credentialKeyId: _k, config, ...rest } = bot;
@@ -108,7 +108,7 @@ function publicBot(bot: BotRow) {
     madeByService: Boolean(config.appObjectId),
     // The package version in the Teams app catalog, once published from here.
     publishedVersion: config.publishedVersion ?? null,
-    packageVersion: packageVersion(bot),
+    packageVersion: versionOf(bot),
   };
 }
 
@@ -645,7 +645,7 @@ export function createTeamsAdmin(deps: {
       });
       if (!b.botAppId || b.tenantId !== config.tenantId)
         throw new ConnectError("This bot is not set up in this Microsoft organization");
-      const version = packageVersion(b);
+      const version = versionOf(b);
       const published = await publishPackage(
         {
           token: accessToken,

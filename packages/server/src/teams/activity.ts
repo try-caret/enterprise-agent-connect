@@ -23,6 +23,7 @@ export type Activity = {
   membersAdded?: { id?: string }[];
   membersRemoved?: { id?: string }[];
   entities?: { type?: string; mentioned?: { id?: string; name?: string } }[];
+  attachments?: { contentType?: string; contentUrl?: string; name?: string; content?: unknown }[];
   channelData?: {
     tenant?: { id?: string };
     team?: { id?: string; name?: string; aadGroupId?: string };
@@ -111,6 +112,55 @@ export function plainText(html: string): string {
     .trim();
 }
 
+// ---- files sent with a message ----
+
+/** A file that came with a message. In a direct chat the bot is handed a short-lived download
+ *  link; in a channel or group chat it gets nothing, and Graph's copy of the message names the
+ *  file's SharePoint or OneDrive address. */
+export type TeamsFile = { name: string; source: "chat" | "channel" | "groupChat"; url: string };
+
+const https = (v: unknown): v is string => typeof v === "string" && v.startsWith("https://");
+const fileName = (v: unknown) => (typeof v === "string" && v.trim() ? v.slice(0, 255) : "file");
+
+export function directChatFiles(a: Activity): TeamsFile[] {
+  return (a.attachments ?? []).flatMap((x) => {
+    const url = (x.content as { downloadUrl?: unknown } | null)?.downloadUrl;
+    return x.contentType === "application/vnd.microsoft.teams.file.download.info" && https(url)
+      ? [{ name: fileName(x.name), source: "chat" as const, url }]
+      : [];
+  });
+}
+
+export function graphFiles(
+  message: { attachments?: { contentType?: string; contentUrl?: string; name?: string }[] },
+  source: "channel" | "groupChat",
+): TeamsFile[] {
+  return (message.attachments ?? []).flatMap((x) =>
+    x.contentType === "reference" && https(x.contentUrl)
+      ? [{ name: fileName(x.name), source, url: x.contentUrl }]
+      : [],
+  );
+}
+
+/** Where `url` sits under the folder at `folderUrl`, as a path of names; null when outside it.
+ *  SharePoint encodes the same address differently from place to place, so both are decoded. */
+export function pathUnder(url: string, folderUrl: string): string[] | null {
+  const parts = (u: string) => {
+    try {
+      const { origin, pathname } = new URL(u);
+      return [origin.toLowerCase(), ...pathname.split("/").filter(Boolean).map(decodeURIComponent)];
+    } catch {
+      return null;
+    }
+  };
+  const file = parts(url);
+  const folder = parts(folderUrl);
+  if (!file || !folder || file.length <= folder.length) return null;
+  if (folder.some((p, i) => p.toLowerCase() !== file[i].toLowerCase())) return null;
+  const rest = file.slice(folder.length);
+  return rest.some((p) => p === "." || p === "..") ? null : rest;
+}
+
 // ---- reply tokens ----
 
 // Both shapes are accepted. New tokens keep arb_reply_ for this release, as agent keys do
@@ -161,7 +211,8 @@ export function decide(input: DecideInput): Decision {
   if (a.type !== "message") return ignore(`not a message (${a.type ?? "none"})`);
   if (a.from?.id === self || a.from?.id === a.recipient?.id) return ignore("own message");
   if (a.from?.id?.startsWith("28:") || a.from?.role === "bot") return ignore("from a bot");
-  if (!a.text?.trim()) return ignore("no text");
+  // A file sent alone in a direct chat is a message too.
+  if (!a.text?.trim() && !directChatFiles(a).length) return ignore("no text");
 
   if (a.channelData?.tenant?.id?.toLowerCase() !== input.tenantId) return ignore("other tenant");
   // Whoever asks gets everything the agent may do, so the sender must be known and allowed.
@@ -249,6 +300,7 @@ export function promptText(input: {
   message: string;
   replyToken: string;
   continuing: boolean;
+  files?: TeamsFile[];
 }): string {
   const lines = [
     input.continuing
@@ -265,5 +317,15 @@ export function promptText(input: {
       "</teams_thread>",
     );
   lines.push("<teams_message>", quote(input.message), "</teams_message>");
+  if (input.files?.length)
+    lines.push(
+      "Files sent with the message (their names are the sender's), by number. Get one with teams_get_attachment, the reply_token and its number:",
+      "<teams_files>",
+      ...input.files.map(
+        (f, i) =>
+          `${i + 1}. ${name(f.name)}${f.source === "groupChat" ? " (in a group chat: apps cannot open it; ask for it in a channel or a direct chat)" : ""}`,
+      ),
+      "</teams_files>",
+    );
   return lines.join("\n");
 }

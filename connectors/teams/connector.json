@@ -264,11 +264,11 @@
     {
       "id": "respond",
       "label": "React in real time",
-      "description": "Answer when someone messages the agent in Teams. Each answer uses your organization's Claude API key.",
+      "description": "Answer when someone messages the agent in Teams, and open the files they send with the message. Each answer uses your organization's Claude API key.",
       "scopes": [],
       "roles": [],
       "permissions": [],
-      "tools": ["teams_reply"],
+      "tools": ["teams_reply", "teams_get_attachment"],
       "claudeKey": true
     }
   ],

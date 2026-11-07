@@ -4,6 +4,8 @@ import type { Store } from "../store.js";
 import { ConnectError, type VendorResponse } from "../../../connector-kit/src/types.js";
 import {
   decide,
+  directChatFiles,
+  graphFiles,
   guid,
   installChange,
   placeOf,
@@ -13,6 +15,7 @@ import {
   hashReplyToken,
   type Activity,
   type Place,
+  type TeamsFile,
   type ThreadMessage,
 } from "./activity.js";
 import {
@@ -78,6 +81,7 @@ export async function readCappedBytes(req: Request, max: number): Promise<Buffer
 export const botAad = (org: string, botId: string) => credentialAad(org, `teams-bot:${botId}`);
 const eventAad = (botId: string, activityId: string) =>
   `agent-connect:teams-event:${botId}:${activityId}`;
+const runFilesAad = (runId: string) => `agent-connect:teams-run-files:${runId}`;
 
 /** The bot's sign-in: its app id, tenant, certificate and private key. */
 export function botCredential(key: CredentialKey, bot: BotRow): BotCredential {
@@ -452,6 +456,11 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       const channelName = a.channelData?.channel?.name ?? null;
       const context = reusable ? null : await threadContext(bot, place, a.id!);
       if (context?.note) await teams.updateRun(run.id, { note: context.note });
+      const files = await messageFiles(bot, place, a);
+      await teams.setRunFiles(
+        run.id,
+        files.length ? key.seal({ files: JSON.stringify(files) }, runFilesAad(run.id)) : null,
+      );
       const text = promptText({
         botName: bot.displayName,
         sender: { name: a.from?.name ?? "Someone", aadObjectId: decision.sender },
@@ -461,6 +470,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         message: plainText(a.text ?? ""),
         replyToken: token,
         continuing: Boolean(reusable),
+        files,
       });
       const input = {
         org: bot.organizationId,
@@ -611,6 +621,22 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     if (res.status !== 200) return blocked(res.status);
     const list = ((res.data as { value?: GraphMessage[] }).value ?? []).reverse();
     return { messages: simplify(list.filter((m) => m.id !== activityId)).slice(-THREAD_CONTEXT) };
+  }
+
+  // The files sent with a message. A direct chat's come with the activity; a channel's or group
+  // chat's only with Graph's copy of it, read with the bot's own token. Unreadable: none listed.
+  async function messageFiles(bot: BotRow, place: Place, a: Activity): Promise<TeamsFile[]> {
+    if (place.kind === "personal") return directChatFiles(a);
+    let path = `/v1.0/chats/${encodeURIComponent(place.conversationId)}/messages/${a.id}`;
+    if (place.kind === "team") {
+      if (!place.teamGroupId || !place.channelId) return [];
+      const root = /;messageid=(\d+)/.exec(place.threadId)?.[1];
+      const base = `/v1.0/teams/${place.teamGroupId}/channels/${encodeURIComponent(place.channelId)}/messages`;
+      path = root && root !== a.id ? `${base}/${root}/replies/${a.id}` : `${base}/${a.id}`;
+    }
+    const res = await bots.graph(botCredential(key, bot), path);
+    if (res.status !== 200) return [];
+    return graphFiles(res.data as GraphMessage, place.kind === "team" ? "channel" : "groupChat");
   }
 
   // ---- watching the sessions ----
@@ -770,6 +796,11 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         discardApproval: (id) => teams.discardApproval(id),
         approval: (tokenHash) => teams.approvalForAgent(bot.agentId, tokenHash),
         runForReply: (tokenHash) => teams.runForReply(bot.agentId, tokenHash),
+        files: async (run) => {
+          const sealed = await teams.runFiles(bot.agentId, run.id);
+          if (!sealed) return [];
+          return JSON.parse(key.open(sealed, runFilesAad(run.id)).files) as TeamsFile[];
+        },
         claimReply: (runId) => teams.claimReply(bot.agentId, runId),
         releaseReply: (runId) => teams.releaseReply(runId),
       };
@@ -791,6 +822,7 @@ export type GraphMessage = {
   } | null;
   body?: { content?: string; contentType?: string };
   replyToId?: string | null;
+  attachments?: { contentType?: string; contentUrl?: string; name?: string }[];
 };
 
 export function simplify(list: GraphMessage[]): ThreadMessage[] {
@@ -841,6 +873,8 @@ export type TeamsAccess = {
   discardApproval(id: string): Promise<void>;
   approval(tokenHash: string): Promise<ApprovalRow | null>;
   runForReply(tokenHash: string): Promise<RunRow | null>;
+  // The files sent with the run's latest message.
+  files(run: RunRow): Promise<TeamsFile[]>;
   claimReply(runId: string): Promise<boolean>;
   releaseReply(runId: string): Promise<void>;
 };
