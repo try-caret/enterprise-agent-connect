@@ -211,7 +211,8 @@ export function decide(input: DecideInput): Decision {
   if (a.type !== "message") return ignore(`not a message (${a.type ?? "none"})`);
   if (a.from?.id === self || a.from?.id === a.recipient?.id) return ignore("own message");
   if (a.from?.id?.startsWith("28:") || a.from?.role === "bot") return ignore("from a bot");
-  if (!a.text?.trim()) return ignore("no text");
+  // A file sent alone in a direct chat is a message too.
+  if (!a.text?.trim() && !directChatFiles(a).length) return ignore("no text");
 
   if (a.channelData?.tenant?.id?.toLowerCase() !== input.tenantId) return ignore("other tenant");
   // Whoever asks gets everything the agent may do, so the sender must be known and allowed.

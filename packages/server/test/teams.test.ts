@@ -249,6 +249,28 @@ test(
   },
 );
 
+test("a file sent with no text in a direct chat still starts a run", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-file-only", async (input) => {
+    prompt = input.text;
+  });
+  const t = await setup([runner]);
+  await t.setRunner("fake-file-only");
+  await t.message("", {
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.teams.file.download.info",
+        name: "q3.xlsx",
+        content: { downloadUrl: "https://contoso-my.sharepoint.com/d?tempauth=x" },
+      },
+    ],
+  });
+  assert.equal((await t.runs()).length, 1);
+  assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"/);
+  await t.message("");
+  assert.equal((await t.runs()).length, 1);
+});
+
 test(
   "a session stays with the runner that started it when the trigger changes runner",
   { skip: !sql },
