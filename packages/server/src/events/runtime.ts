@@ -702,10 +702,14 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     const stale = await events.failStaleStarts();
     if (stale) console.error(`[events] ${stale} run(s) failed after not starting`);
     for (const run of await events.runningRuns()) {
+      // Passes can overlap (one whose lease another process took over): what one read is
+      // written only if the run is still running.
+      const finish = (patch: Parameters<typeof events.updateRun>[1]) =>
+        events.updateRun(run.id, patch, "running");
       try {
         const runner = deps.runners.get(run.runner);
         if (!runner) {
-          await events.updateRun(run.id, {
+          await finish({
             state: "failed",
             error: `Runner ${run.runner} is not offered by this deployment`,
           });
@@ -716,23 +720,19 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
           run.organizationId,
         );
         if ("gone" in s) {
-          await events.updateRun(run.id, { state: "failed", error: s.gone });
+          await finish({ state: "failed", error: s.gone });
           continue;
         }
         const costCents = s.costCents ?? undefined;
         if (s.status === "idle" && s.atBudget)
-          await events.updateRun(run.id, {
-            state: "failed",
-            error: "Stopped at its spending limit",
-            costCents,
-          });
+          await finish({ state: "failed", error: "Stopped at its spending limit", costCents });
         else if (s.status === "idle" || s.status === "terminated")
-          await events.updateRun(run.id, { state: "ended", costCents });
+          await finish({ state: "ended", costCents });
         else if (Date.now() - Date.parse(run.startedAt) > STUCK_MS) {
           await runner
             .stop(run.sessionId!, run.organizationId)
             .catch((e) => console.error(`[events] stopping run ${run.id}`, e));
-          await events.updateRun(run.id, {
+          await finish({
             state: "failed",
             error: "Stopped after 30 minutes without finishing",
             costCents,

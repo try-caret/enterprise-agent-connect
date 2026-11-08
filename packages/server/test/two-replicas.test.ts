@@ -474,6 +474,31 @@ test("one process makes each pass over an app's running runs", { skip: !sql }, a
 });
 
 test(
+  "overlapping passes over an app's runs leave a finished run as the first recorded it",
+  { skip: !sql },
+  async () => {
+    let reads = 0;
+    const t = await eventsSetup("poll", {
+      // The second pass read the run before the first recorded it, and finds the session gone.
+      state: async () =>
+        ++reads === 1
+          ? { status: "idle", costCents: 30, atBudget: false }
+          : (await sleep(50), { gone: "The session is gone" }),
+    });
+    t.items.push(item("i1"));
+    const [a, b] = [t.pod(), t.pod()];
+    await a.poll(t.sub);
+    await a.idle();
+    await Promise.all([a.watch(), b.watch()]);
+    const [run] = await sql!`
+      select r.state, r.error, r.cost_cents from ${name("event_runs")} r
+        join ${name("agents")} a on a.id = r.agent_id
+       where a.organization_id = ${t.org}`;
+    assert.deepEqual({ ...run }, { state: "ended", error: null, cost_cents: 30 });
+  },
+);
+
+test(
   "a pass over an app's runs keeps the watch while it lasts, from every process",
   { skip: !sql },
   async (ctx) => {

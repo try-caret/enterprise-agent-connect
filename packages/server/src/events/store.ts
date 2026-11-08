@@ -558,10 +558,12 @@ export function createEventsStore(sql: Sql, schema: string) {
         error?: string;
         costCents?: number;
       },
-    ): Promise<void> {
+      // Only while the run is in this state: false, and nothing written, otherwise.
+      from?: EventRunRow["state"],
+    ): Promise<boolean> {
       const finished = patch.state === "ended" || patch.state === "failed";
       const delivered = Boolean(patch.state && patch.state !== "starting");
-      await sql`
+      const rows = await sql`
         update ${t.event_runs}
            set state = coalesce(${patch.state ?? null}, state),
                session_id = coalesce(${patch.sessionId ?? null}, session_id),
@@ -574,7 +576,9 @@ export function createEventsStore(sql: Sql, schema: string) {
                next_attempt_at = case when ${delivered} then null else next_attempt_at end,
                delivery = case when ${delivered} then null else delivery end,
                delivery_key_id = case when ${delivered} then null else delivery_key_id end
-         where id = ${id}`;
+         where id = ${id} and (${from ?? null}::text is null or state = ${from ?? null})
+        returning id`;
+      return rows.length > 0;
     },
 
     // Runs left starting (the process stopped mid-start) hold a concurrency slot forever.
