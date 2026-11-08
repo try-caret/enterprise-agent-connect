@@ -648,8 +648,9 @@ export function createTeamsStore(sql: Sql, schema: string) {
         note?: string;
         costCents?: number;
       },
-      // Only while the run is in this state: false, and nothing written, otherwise.
-      from?: RunRow["state"],
+      // Only while the run is as read, in this state and turn: false, and nothing written,
+      // otherwise.
+      from?: Pick<RunRow, "state" | "turns">,
     ): Promise<boolean> {
       const finished = patch.state && patch.state !== "running" && patch.state !== "starting";
       // A run that started or ended has nothing left to hand over.
@@ -675,7 +676,9 @@ export function createTeamsStore(sql: Sql, schema: string) {
                  next_attempt_at = case when ${delivered} then null else next_attempt_at end,
                  delivery = case when ${delivered} then null else delivery end,
                  delivery_key_id = case when ${delivered} then null else delivery_key_id end
-           where id = ${id} and (${from ?? null}::text is null or state = ${from ?? null})
+           where id = ${id}
+             and (${from?.state ?? null}::text is null
+                  or (state = ${from?.state ?? null} and turns = ${from?.turns ?? null}))
           returning agent_id, cost_cents
         ), spent as (
           insert into ${t.teams_spend} (agent_id, run_id, cents)

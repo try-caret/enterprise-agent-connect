@@ -994,10 +994,10 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     const stale = await teams.failStaleStarts();
     if (stale) console.error(`[teams] ${stale} run(s) failed after not starting`);
     for (const run of await teams.runningRuns()) {
-      // Passes can overlap (one that outlasts the tick, on either process): what one read is
-      // written, and told, only if the run is still as it read it.
+      // Passes can overlap (one whose lease another process took over): what one read is
+      // written, and told, only if the run is still as it read it, the same turn running.
       const finish = (patch: Parameters<typeof teams.updateRun>[1]) =>
-        teams.updateRun(run.id, patch, "running");
+        teams.updateRun(run.id, patch, run);
       try {
         const bot = await teams.botById(run.botId);
         if (!bot) continue;

@@ -806,3 +806,31 @@ test(
     assert.equal(reads, 2, "the next one, once it is done");
   },
 );
+
+test(
+  "a pass that read a turn writes nothing once the session moved to its next",
+  { skip: !sql },
+  async () => {
+    const reading = gate();
+    const t = await teamsSetup({
+      state: async () => {
+        await reading.pass();
+        return { status: "idle", costCents: 10, atBudget: false };
+      },
+    });
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const pass = a.watch();
+    await reading.entered;
+    // Meanwhile another pass recorded the turn idle, and the next message is running.
+    await sql!`update ${name("teams_runs")} set turns = turns + 1, reply_token_at = now()
+                where agent_id = ${t.agentId}`;
+    reading.open();
+    await pass;
+    const [run] = await sql!`
+      select state, turns from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+    assert.deepEqual({ ...run }, { state: "running", turns: 2 });
+    assert.deepEqual(t.told(), [], "no notice for a turn it did not watch");
+  },
+);
