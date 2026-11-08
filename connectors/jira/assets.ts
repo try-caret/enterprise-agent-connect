@@ -25,15 +25,24 @@ type Obj = Record<string, any>;
 const path = (rest: string) => `${ASSETS_PATH}${rest}`;
 // An object type attribute's `type` (ObjectTypeAttribute in the OpenAPI): 0 is a plain value
 // whose kind is `defaultType.name` (Text, Date, Select...).
-const ATTRIBUTE_TYPES: Record<number, string> = {
-  1: "Object reference",
-  2: "User",
-  4: "Group",
-  7: "Status",
-};
 const REFERENCE = 1;
+const USER = 2;
+const GROUP = 4;
 const STATUS = 7;
 const SELECT = 10; // defaultType.id of a plain Select value
+const ATTRIBUTE_TYPES: Record<number, string> = {
+  [REFERENCE]: "Object reference",
+  [USER]: "User",
+  [GROUP]: "Group",
+  [STATUS]: "Status",
+};
+
+// `type` is optional in the OpenAPI (its own example leaves it out and gives a reference
+// attribute only referenceObjectTypeId), so a reference is known by any of the three.
+const isReference = (def: Obj | undefined) =>
+  def?.type === REFERENCE || def?.referenceObjectTypeId != null || def?.referenceType != null;
+
+const attributeId = (a: Obj) => String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "");
 
 const ok = answerOf("Jira Assets");
 
@@ -54,7 +63,12 @@ function shownValue(v: Obj, schemas: string[] | null, reference: boolean): unkno
     return v.displayValue ?? v.referencedObject?.label ?? null;
   }
   if (v?.status) return v.status.name ?? v.displayValue ?? null;
-  if (v?.user) return v.user.displayName ?? v.displayValue ?? null;
+  // The account id too: update takes a User by it, and display names are not unique.
+  if (v?.user)
+    return {
+      name: v.user.displayName ?? v.displayValue ?? null,
+      account_id: v.user.key ?? v.value ?? null,
+    };
   if (v?.group) return v.group.name ?? v.displayValue ?? null;
   return v?.value ?? v?.displayValue ?? null;
 }
@@ -64,10 +78,10 @@ function shownValue(v: Obj, schemas: string[] | null, reference: boolean): unkno
 function shownObject(o: Obj, schemas: string[] | null, defs: Map<string, Obj> = new Map()) {
   const attributes: Record<string, unknown> = {};
   for (const a of (o.attributes ?? []) as Obj[]) {
-    const id = String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "");
+    const id = attributeId(a);
     const def = a.objectTypeAttribute ?? defs.get(id);
     const name = def?.name ?? `attribute ${id}`;
-    const reference = def?.type === REFERENCE;
+    const reference = isReference(def);
     const values = ((a.objectAttributeValues ?? []) as Obj[]).map((v) =>
       shownValue(v, schemas, reference),
     );
@@ -86,11 +100,28 @@ function shownObject(o: Obj, schemas: string[] | null, defs: Map<string, Obj> = 
   };
 }
 
+// Under a schema limit a missing id gets the same refusal as one in another schema, so ids
+// (sequential in Assets) cannot be walked to count what other schemas hold.
+async function limitedGet(ctx: ToolContext, mark: Mark, rest: string, refusal: string) {
+  try {
+    return await ok(ctx, mark, { method: "GET", path: path(rest) });
+  } catch (error) {
+    if (
+      error instanceof VendorFailed &&
+      error.status === 404 &&
+      listLimit(ctx.limits, "asset_schemas") !== null
+    )
+      throw new Denied(refusal);
+    throw error;
+  }
+}
+
 async function fetchObject(ctx: ToolContext, mark: Mark, id: string): Promise<Obj> {
   if (!isAssetsId(id)) throw new Denied("Give an Assets object id, a number such as 88");
-  const object = await ok(ctx, mark, { method: "GET", path: path(`object/${id}`) });
+  const refusal = `Assets object ${id} is not in an object schema this agent may use`;
+  const object = await limitedGet(ctx, mark, `object/${id}`, refusal);
   if (!allowedSchema(listLimit(ctx.limits, "asset_schemas"), object?.objectType?.objectSchemaId))
-    throw new Denied(`Assets object ${id} is in an object schema this agent is not allowed to use`);
+    throw new Denied(refusal);
   return object;
 }
 
@@ -104,19 +135,15 @@ async function typeAttributes(
   checked = false,
 ): Promise<Obj[]> {
   if (!isAssetsId(typeId)) throw new Denied("Give an object type id, a number such as 23");
-  const attrs = (await ok(ctx, mark, {
-    method: "GET",
-    path: path(`objecttype/${typeId}/attributes`),
-  })) as Obj[];
+  const refusal = `Object type ${typeId} is not in an object schema this agent may use`;
+  const attrs = (await limitedGet(ctx, mark, `objecttype/${typeId}/attributes`, refusal)) as Obj[];
   const schemas = listLimit(ctx.limits, "asset_schemas");
   if (
     !checked &&
     schemas !== null &&
     attrs.some((a) => !allowedSchema(schemas, a.objectType?.objectSchemaId))
   )
-    throw new Denied(
-      `Object type ${typeId} is in an object schema this agent is not allowed to use`,
-    );
+    throw new Denied(refusal);
   return attrs;
 }
 
@@ -137,6 +164,30 @@ async function statusId(
   if (isAssetsId(want) && allowed.includes(want)) return want;
   if (/["\\]/.test(want) || /["\\]/.test(String(def.name)))
     throw new Denied(`${def.name}'s status ${value} cannot be looked up by name`);
+  const found = await statusByName(ctx, mark, schemaId, typeId, def, want);
+  if (found) {
+    if (allowed.length && !allowed.includes(found))
+      throw new Denied(`${def.name} does not allow status ${value}`);
+    return found;
+  }
+  // No allowed list is declared, so digits no name matched are taken as an id.
+  if (isAssetsId(want) && !allowed.length) return want;
+  throw new Denied(
+    `${def.name} has no status ${value} on any object of this type, so it cannot be looked up ` +
+      "(Atlassian does not let a service account read the status list). Ask a person to set " +
+      "it in Assets, or for its status id.",
+  );
+}
+
+// The id of a status named `want` on one object of the type that holds it, or null.
+async function statusByName(
+  ctx: ToolContext,
+  mark: Mark,
+  schemaId: string,
+  typeId: string,
+  def: Obj,
+  want: string,
+): Promise<string | null> {
   const data = await ok(ctx, mark, {
     method: "POST",
     path: path("object/aql?startAt=0&maxResults=1&includeAttributes=true"),
@@ -148,22 +199,14 @@ async function statusId(
   });
   for (const o of (data?.values ?? []) as Obj[])
     for (const a of (o.attributes ?? []) as Obj[])
-      if (String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "") === String(def.id))
-        for (const v of (a.objectAttributeValues ?? []) as Obj[]) {
-          const id = v?.status?.id === undefined ? null : String(v.status.id);
-          if (id && String(v.status.name ?? "").toLowerCase() === want.toLowerCase()) {
-            if (allowed.length && !allowed.includes(id))
-              throw new Denied(`${def.name} does not allow status ${value}`);
-            return id;
-          }
-        }
-  // With no allowed list, digits no name matched are an id, as before.
-  if (isAssetsId(want) && !allowed.length) return want;
-  throw new Denied(
-    `${def.name} has no status ${value} on any object of this type, so it cannot be looked up ` +
-      "(Atlassian does not let a service account read the status list). Ask a person to set " +
-      "it in Assets, or for its status id.",
-  );
+      if (attributeId(a) === String(def.id))
+        for (const v of (a.objectAttributeValues ?? []) as Obj[])
+          if (
+            v?.status?.id !== undefined &&
+            String(v.status.name ?? "").toLowerCase() === want.toLowerCase()
+          )
+            return String(v.status.id);
+  return null;
 }
 
 // A vendor's or a refusal's message is written for people; anything else stays in the log.
@@ -184,9 +227,11 @@ function selectOption(def: Obj, value: string): string | null {
 }
 
 const attributeKind = (a: Obj) =>
-  a.type === 0 || a.type === undefined
-    ? (a.defaultType?.name ?? "Text")
-    : (ATTRIBUTE_TYPES[a.type] ?? `type ${a.type}`);
+  isReference(a)
+    ? ATTRIBUTE_TYPES[REFERENCE]
+    : a.type === 0 || a.type === undefined
+      ? (a.defaultType?.name ?? "Text")
+      : (ATTRIBUTE_TYPES[a.type] ?? `type ${a.type}`);
 
 export const assetsTools: Toolset = {
   names: [
@@ -207,9 +252,12 @@ export const assetsTools: Toolset = {
           description:
             "Find Jira Assets objects with AQL, e.g. " +
             '`objectType = Laptop AND Status = "In stock" ORDER BY "Date Received" ASC`. ' +
-            "Attribute names with spaces go in double quotes; ORDER BY takes one attribute. " +
+            "Attribute names with spaces go in double quotes; ORDER BY goes at the end. " +
             "Each object comes with its attributes by name. Results are limited to the object " +
-            "schemas this agent may use. Find attribute names with jira_assets_list_attributes.",
+            "schemas this agent may use. An agent held to schemas or projects may not use " +
+            "HAVING, inboundReferences, outboundReferences, connectedTickets, dot notation " +
+            '(Owner.Name), single quotes, or a backslash except before ". ' +
+            "Find attribute names with jira_assets_list_attributes.",
           inputSchema: z.object({
             aql: z.string().min(1).max(4000).describe("AQL query. ORDER BY is allowed at the end."),
             max_results: z.number().int().min(1).max(50).default(20),
@@ -259,7 +307,8 @@ export const assetsTools: Toolset = {
         {
           description:
             "Read one Jira Assets object by id: its key, label, object type, schema and every " +
-            "attribute by name (a referenced object, status, user or group by its name).",
+            "attribute by name (a referenced object, status or group by its name, a user as " +
+            "{name, account_id}).",
           inputSchema: z.object({ object_id: objectId }),
           annotations: readOnly,
         },
@@ -311,11 +360,13 @@ export const assetsTools: Toolset = {
         "jira_assets_update_object",
         {
           description:
-            "Change named attributes of one existing Jira Assets object; every other attribute " +
-            "is left as it is. Values are text: dates as YYYY-MM-DD, a Select its option, a " +
-            "Status its name or id, a User the Atlassian account id. A list sets several " +
-            "values; null clears the attribute. " +
-            "Answers with the object read back after the change.",
+            "Change named attributes (at most 20) of one existing Jira Assets object; every " +
+            "other attribute is left as it is, and the old values are not kept. Values are " +
+            "text: a Date as YYYY-MM-DD, a DateTime as ISO 8601 with a time, a Select its " +
+            "option, a User the Atlassian account id, a Status its id or its name (a name only " +
+            "when some object of the type already has that status). A list sets several " +
+            "values; only null clears. Object reference and read-only attributes are refused. " +
+            "Answers with the object as saved.",
           inputSchema: z.object({
             object_id: objectId,
             attributes: z
@@ -360,7 +411,7 @@ export const assetsTools: Toolset = {
                 named.add(String(def.id));
                 if (!canEdit(def))
                   throw new Denied(`${def.name} cannot be edited`);
-                if (def.type === REFERENCE)
+                if (isReference(def))
                   throw new Denied(
                     `${def.name} links to other objects, which this tool does not change`,
                   );
@@ -389,12 +440,20 @@ export const assetsTools: Toolset = {
                   objectAttributeValues: values.map((v) => ({ value: v })),
                 });
               }
-              await ok(ctx, mark, {
+              const saved = await ok(ctx, mark, {
                 method: "PUT",
                 path: path(`object/${object_id}`),
                 body: { objectTypeId: typeId, attributes: body },
               });
               const updated = changes.map(([name]) => byName.get(name.trim().toLowerCase())!.name);
+              const schemas = listLimit(ctx.limits, "asset_schemas");
+              // The PUT answers the updated object (OpenAPI); read again only when it does not.
+              if (
+                String(saved?.id ?? "") === object_id &&
+                saved?.objectType?.objectSchemaId !== undefined &&
+                allowedSchema(schemas, saved.objectType.objectSchemaId)
+              )
+                return json({ updated, object: shownObject(saved, schemas) });
               // The change is made: a failed read-back must not tell the agent it failed (it
               // would retry), so it is reported beside the result and the row stays the write's.
               try {
