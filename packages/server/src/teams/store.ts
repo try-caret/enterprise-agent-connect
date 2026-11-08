@@ -539,7 +539,8 @@ export function createTeamsStore(sql: Sql, schema: string) {
 
     // Sessions running now; messages answered or tried in the last hour (each turn counts, so
     // does a start that failed, and so does one another process is handing over now, its run
-    // made and its message not yet finished); what this agent's turns cost in the last 24 hours.
+    // made and its message not yet finished: found through the thread's one active run, an
+    // index lookup); what this agent's turns cost in the last 24 hours.
     async runCounts(
       agentId: string,
       botId: string,
@@ -553,7 +554,8 @@ export function createTeamsStore(sql: Sql, schema: string) {
                    and (e.state in ('run', 'failed')
                         or (e.state = 'processing' and exists (
                               select 1 from ${t.teams_runs} r
-                               where r.bot_id = e.bot_id
+                               where r.bot_id = e.bot_id and r.thread_id = e.thread_id
+                                 and r.state in ('starting', 'running')
                                  and r.trigger_activity_id = e.activity_id))))::int as "lastHour",
                (select coalesce(sum(cents), 0) from ${t.teams_spend}
                  where agent_id = ${agentId}
