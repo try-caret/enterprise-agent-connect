@@ -629,7 +629,8 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   developer.atlassian.com/cloud/jira/service-desk/swagger.v3.json (Create request comment,
   CommentCreateDTO, CommentDTO, DateDTO), read October 25, 2026.
   Jira Assets (connectors/jira/assets.ts), capabilities `assets_read` (search, get object, list
-  attributes) and `assets_update` (update object), neither required. Same gateway, under
+  attributes) and `assets_update` (update object, destructive: it overwrites or clears values it does
+  not keep), neither required. Same gateway, under
   `jsm/assets/workspace/{workspaceId}/v1/`; the vendor finds the workspace id once per cloudId
   (`GET /rest/servicedeskapi/assets/workspace`). Limit `asset_schemas`: AQL becomes
   `objectSchemaId = N AND (<agent's AQL>)`, AQL that could look through references (`HAVING`,

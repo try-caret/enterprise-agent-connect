@@ -318,7 +318,7 @@ export const assetsTools: Toolset = {
               .refine((a) => Object.keys(a).length <= 20, "Change at most 20 attributes at a time")
               .describe('Attribute name to new value, e.g. {"Status": "In use"}.'),
           }),
-          annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+          annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
         },
         ({ object_id, attributes }) =>
           audited(
