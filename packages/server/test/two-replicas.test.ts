@@ -42,6 +42,15 @@ const SECRET = "s".repeat(40);
 const name = (table: string) => sql!(`${SCHEMA}.${table}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const lapseLeases = () => sql!`update ${name("leases")} set expires_at = now() - interval '1 second'`;
+// Until `lease` is held again (its holder renewed it), for a second at most.
+async function renewed(lease: string) {
+  for (let i = 0; i < 100; i++) {
+    const [held] = await sql!`
+      select 1 from ${name("leases")} where name = ${lease} and expires_at > now()`;
+    if (held) return;
+    await sleep(10);
+  }
+}
 
 // Holds whoever calls `pass` until `open`; `entered` says one has arrived.
 function gate() {
@@ -464,6 +473,41 @@ test("one process makes each pass over an app's running runs", { skip: !sql }, a
   assert.equal(reads, 2, "the next tick's pass, by the other process");
 });
 
+test(
+  "a pass over an app's runs keeps the watch while it lasts, from every process",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const reading = gate();
+    let reads = 0;
+    const t = await eventsSetup("poll", {
+      state: async () => {
+        if (++reads === 1) await reading.pass();
+        return running;
+      },
+    });
+    t.items.push(item("i1"));
+    const [a, b] = [t.pod(), t.pod()];
+    await a.poll(t.sub);
+    await a.idle();
+    const pass = a.watchTurn();
+    await reading.entered;
+    // Past the lease's term, which the pass renews.
+    await lapseLeases();
+    ctx.mock.timers.tick(5_000);
+    await renewed("events-watch");
+    await b.watchTurn();
+    assert.equal(reads, 1, "not while the other process's pass lasts");
+    await lapseLeases();
+    await a.watchTurn();
+    assert.equal(reads, 1, "nor a second one of its own");
+    reading.open();
+    await pass;
+    await b.watchTurn();
+    assert.equal(reads, 2, "the next one, once it is done");
+  },
+);
+
 // ---- Teams ----
 
 const TENANT = "33333333-3333-3333-3333-333333333333";
@@ -703,3 +747,37 @@ test("one process makes each pass over the running sessions", { skip: !sql }, as
   await b.watchTurn();
   assert.equal(reads, 2, "the next tick's pass, by the other process");
 });
+
+test(
+  "a pass over the sessions keeps the watch while it lasts, from every process",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const reading = gate();
+    let reads = 0;
+    const t = await teamsSetup({
+      state: async () => {
+        if (++reads === 1) await reading.pass();
+        return running;
+      },
+    });
+    const [a, b] = [t.pod(), t.pod()];
+    await t.send(a, "hello");
+    await a.idle();
+    const pass = a.watchTurn();
+    await reading.entered;
+    // Past the lease's term, which the pass renews.
+    await lapseLeases();
+    ctx.mock.timers.tick(5_000);
+    await renewed("teams-watch");
+    await b.watchTurn();
+    assert.equal(reads, 1, "not while the other process's pass lasts");
+    await lapseLeases();
+    await a.watchTurn();
+    assert.equal(reads, 1, "nor a second one of its own");
+    reading.open();
+    await pass;
+    await b.watchTurn();
+    assert.equal(reads, 2, "the next one, once it is done");
+  },
+);

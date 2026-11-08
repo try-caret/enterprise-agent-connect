@@ -51,8 +51,9 @@ const MAX_BODY = 1024 * 1024;
 const STUCK_MS = 30 * 60_000;
 const VERIFY_TTL_MS = 60_000;
 const SELF_TTL_MS = 3600_000;
-// Under the 5 second tick: of the processes' ticks in one interval, the first makes the pass.
-const WATCH_TURN_SECONDS = 4;
+// A pass holds the watch, renewed while it lasts and dropped after; one that dies mid-pass holds
+// the other processes' passes back this long at most.
+const WATCH_LEASE_SECONDS = 15;
 // One refused delivery per subscription and minute is audited: anyone can post refusals.
 const REFUSED_AUDIT_MS = 60_000;
 
@@ -743,9 +744,16 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     }
   }
 
-  /** One pass per tick across the processes, which all tick. */
+  /** One pass at a time, in this process and across them, however long one lasts. */
+  let watching = false;
   async function watchTurn() {
-    if (await events.takeLease("events-watch", WATCH_TURN_SECONDS)) await watch();
+    if (watching) return;
+    watching = true;
+    try {
+      await events.withLease("events-watch", WATCH_LEASE_SECONDS, () => watch());
+    } finally {
+      watching = false;
+    }
   }
 
   let timers: NodeJS.Timeout[] = [];

@@ -74,8 +74,9 @@ const BUDGET_NOTICE = "I stopped because this answer reached its spending limit.
 const NO_REPLY_NOTICE = "I could not answer this one. Ask your admin to check my Teams settings.";
 // A turn still running after this is stopped: it holds a slot and the thread's later messages.
 const STUCK_MS = 30 * 60_000;
-// Under the 5 second tick: of the processes' ticks in one interval, the first makes the pass.
-const WATCH_TURN_SECONDS = 4;
+// A pass holds the watch, renewed while it lasts and dropped after; one that dies mid-pass holds
+// the other processes' passes back this long at most.
+const WATCH_LEASE_SECONDS = 15;
 // How long a passed trigger check is trusted before the next answer checks again.
 const VERIFY_TTL_MS = 60_000;
 // Teams activities are small; anything bigger is not Teams.
@@ -1053,9 +1054,16 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       });
   }
 
-  /** One pass per tick across the processes, which all tick. */
+  /** One pass at a time, in this process and across them, however long one lasts. */
+  let watching = false;
   async function watchTurn() {
-    if (await teams.takeLease("teams-watch", WATCH_TURN_SECONDS)) await watch();
+    if (watching) return;
+    watching = true;
+    try {
+      await teams.withLease("teams-watch", WATCH_LEASE_SECONDS, () => watch());
+    } finally {
+      watching = false;
+    }
   }
 
   let timers: NodeJS.Timeout[] = [];

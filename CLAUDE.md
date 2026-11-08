@@ -286,9 +286,11 @@ Ingress with only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-conne
 ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). Any number of replicas: Teams and app event
 run limits (concurrent runs, runs per hour, daily spend) are counted and the run started in one
 transaction under an advisory lock per agent or trigger (`admit`, `admitRun`); each due poll is
-claimed (`claimDuePoll`); a Graph subscription's watches change under a lease renewed while the
-work lasts (`graph.ts` `leased`); and the watcher makes one pass per tick across the processes
-(`watchTurn`), a run's finish recorded and told once however passes overlap (`updateRun` with
+claimed (`claimDuePoll`); a Graph subscription's watches change, and an unsubscribe removes them,
+under a lease renewed while the work lasts (store.ts `withLease`, `graph.ts` `leased`; work
+whose renewal finds the lease taken makes no further Graph call); and the watcher makes one
+pass at a time, across the processes and in each (`watchTurn`, under a lease held while the pass
+lasts), a run's finish recorded and told once however passes overlap (`updateRun` with
 `from`). A rollout overlaps two versions, so a migration must leave the previous image working. The admin API is never public: it refuses any
 request carrying `X-Forwarded-For`. Give the service a database role that owns only its schema.
 
