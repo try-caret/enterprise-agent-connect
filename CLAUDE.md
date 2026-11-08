@@ -301,7 +301,8 @@ connectors/<id>/      # one folder per app: connector.json, index.ts (its Connec
 connectors/<id>/connector.json # one per app: logo (admin /brand path), setup steps, form fields,
                       # capabilities → tools + vendor scopes (+ token `roles` when they differ;
                       # connector-level `scopes`: needed whatever is ticked, e.g. Teams' target search)
-                      # + in-app permissions + step fills, value limits, `events` (types, kept
+                      # + in-app permissions + step fills, value limits (`discover.limit`: the
+                      # one list limit its values are choices for; none: any), `events` (types, kept
                       # fields, limit fields, self, webhook proof and steps, poll, graph, thread; docs/triggers.md), verify/discover
                       # probes, optional `provider`, `siteAccess` (grant steps and a note to
                       # IT per added site). Fields may be choices (`options`, the first the
@@ -440,6 +441,9 @@ scripts/wsdl-to-connector.ts, scripts/odata-to-connector.ts # draft a soap / oda
                       # from a WSDL or $metadata (tested in connectors/soap and connectors/odata)
 examples/legacy-apps/ # hr-soap and sap-sales-orders, JSON-only; the soap and odata tests' fixtures
 connectors/jira/jql.ts # confines agent JQL to granted projects
+connectors/jira/aql.ts # confines agent AQL (Jira Assets) to granted object schemas
+connectors/jira/assets.ts # the Jira Assets tools (joined to the issue tools with `toolsets`)
+connectors/jira/answers.ts # reads an Atlassian answer (2xx data or VendorFailed) for issues and Assets
 connectors/salesforce/soql.ts # finds the one object a SOQL query reads; refuses anything reaching another
 connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account client credentials;
                       # microsoft/client.ts: the Microsoft connection (certificate, client secret or
@@ -626,6 +630,44 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   UserDetails, ProjectDetails, issue comment GET/POST, issue changelog GET) and
   developer.atlassian.com/cloud/jira/service-desk/swagger.v3.json (Create request comment,
   CommentCreateDTO, CommentDTO, DateDTO), read October 25, 2026.
+  Jira Assets (connectors/jira/assets.ts), capabilities `assets_read` (search, get object, list
+  attributes) and `assets_update` (update object, destructive: it overwrites or clears values it
+  does not keep), neither required. Same gateway, under `jsm/assets/workspace/{workspaceId}/v1/`;
+  the vendor finds the workspace id once per cloudId and credential (`GET
+  /rest/servicedeskapi/assets/workspace`). Assets documents 401, not 403, for a missing seat,
+  scope or role, so a 401 gets the capability's `forbidden` hint in the tool (the framework adds
+  it only to a 403). Text values over 2000 characters are shortened. Roles: Object schema users
+  read, Object schema developers change objects; new schemas give developers to the groups with
+  JSM access, so the seat is often enough. Limit `asset_schemas` (empty: every schema; the
+  projects limit does not narrow Assets): AQL becomes `objectSchemaId = N AND (<agent's AQL>)`,
+  AQL that could look through references (`HAVING`, `...References(`, dot notation, also inside a
+  quoted name before an operator and anywhere in ORDER BY) is refused; with a schema or a projects
+  limit, `connectedTickets(` (JQL the projects limit does not hold), single quotes and any
+  backslash but `\"` (AQL's only documented escape) are refused too. Under a schema limit a
+  missing object or type id gets the same refusal as another schema's (ids are sequential, so
+  walking them would count; a missing workspace keeps its own message, and an empty attribute list
+  is refused), and every object answered or changed is checked on its schema; a referenced object
+  outside them (or a reference value with no `referencedObject`) is shown as a placeholder (reads
+  only: AQL like `Owner LIKE "Al"` still matches a reference's label, so an agent can probe the
+  labels its allowed objects point to). A reference is `type` 1, or with no `type` (optional in
+  the OpenAPI) a set `referenceObjectTypeId` or `referenceType`; a plain value is `type` 0 or
+  none; a User value reads as {name, account_id}. Update sends only the named attributes after
+  checking each (editable, a Select option; Object references refused; at most 20) and reads the
+  object as the PUT answered it (read again only when that answer is not the object); a failed
+  read-back answers the change with a warning, never an error. Only null clears (an empty list is
+  refused), never a required attribute (minimumCardinality). A Status id in the attribute's
+  `typeValueMulti` is taken as given; anything else is looked up by name on one object of the type
+  holding it (AQL), since service accounts are not offered `read:cmdb-config:jira` for the status
+  list; a status no object holds yet is refused without listing ids to guess. Select options are
+  one comma-separated text in Assets and a comma always separates two (tried live: "Boston, MA"
+  refused, "MA" taken), so a value must equal one piece; list_attributes gives the pieces. The
+  workspace lookup's refusal gets no capability hint. Jira's `discover` names `limit: projects`,
+  so a UI that reads it offers project keys only for that limit, never for `asset_schemas` (the
+  admin dashboard reads it from try-caret/pourly#1615). No create or delete. Errors read through
+  `answers.ts`, shared with the issue tools. Checked live November 8, 2026 (with all 15 cmdb
+  scopes, not only the listed ones): a service account needs a JSM agent seat, no schema role; a
+  partial PUT leaves other attributes as they were. Source:
+  developer.atlassian.com/cloud/assets/swagger.v3.json, read November 7, 2026.
 - Microsoft connection (provider `microsoft`, table `providers`, one per org):
   the apps with `"provider": "microsoft"` sign in through it, so its credentials are entered
   once; each app row keeps its own ceiling and settings (`provider_id`, no credential of its

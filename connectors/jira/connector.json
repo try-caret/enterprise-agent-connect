@@ -1,9 +1,9 @@
 {
   "id": "jira",
   "name": "Jira",
-  "description": "Let agents search, read and work on issues in the Jira projects you choose.",
+  "description": "Let agents search, read and work on issues in the Jira projects you choose, and find and update Jira Assets objects in the object schemas you choose.",
   "logo": "/brand/jira.svg",
-  "identity": "An Atlassian service account named \"{brand.microsoft.appName}\". It uses no Jira seat.",
+  "identity": "An Atlassian service account named \"{brand.microsoft.appName}\". It uses no Jira seat, except for Assets: reading or updating Assets needs a Jira Service Management agent seat for it.",
   "accountKey": "cloudId",
   "connectionKind": "guided",
   "setup": [
@@ -30,8 +30,19 @@
       "permissions": true
     },
     {
+      "title": "Give it a Jira Service Management seat and access to the Assets object schemas",
+      "body": "Assets is part of Jira Service Management: the service account needs Jira Service Management access as User (an agent seat), or Assets finds nothing. Assets also keeps its own access per object schema. The schema's role picker may not list service accounts; with the agent seat, schemas that let agents in by default need no role. New schemas give the Object schema developers role (view, create and change objects) to the groups with Jira Service Management access, so the seat is often enough. Otherwise give it Object schema users to let agents read, or Object schema developers to let them change objects, or add it to a group that has that role. You can narrow each agent to specific object schemas here later.",
+      "capabilities": ["assets_read", "assets_update"],
+      "click": [
+        "Atlassian Administration > Directory > Service accounts > {brand.microsoft.appName} > app roles: Jira Service Management > User",
+        "Jira > Assets > the object schema > Configure > Roles",
+        "Object schema users (read) or Object schema developers (change objects) > add {brand.microsoft.appName} > Save"
+      ],
+      "confirm": "jira-assets-schema-roles"
+    },
+    {
       "title": "Create OAuth 2.0 credentials",
-      "body": "On the service account, select Create credentials, then OAuth 2.0, and select exactly these scopes. Copy the client ID and secret: Atlassian shows the secret only once.",
+      "body": "On the service account, select Create credentials, then OAuth 2.0, and select exactly these scopes. Copy the client ID and secret: Atlassian shows the secret only once. Turning on an Assets capability later needs its scopes too: create new credentials with the full list and reconnect with them.",
       "copy": ["{scopes}"]
     }
   ],
@@ -97,6 +108,34 @@
       "scopes": ["write:jira-work"],
       "permissions": ["Delete issues"],
       "tools": ["jira_delete_issue"]
+    },
+    {
+      "id": "assets_read",
+      "label": "Read assets",
+      "description": "Find Jira Assets objects with AQL (Assets Query Language), read one object and list an object type's attributes, in the allowed object schemas.",
+      "scopes": [
+        "read:servicedesk-request",
+        "read:cmdb-object:jira",
+        "read:cmdb-attribute:jira"
+      ],
+      "permissions": [],
+      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has a role on the object schema, Object schema users or above (Assets > the schema > Configure > Roles).",
+      "tools": ["jira_assets_search", "jira_assets_get_object", "jira_assets_list_attributes"]
+    },
+    {
+      "id": "assets_update",
+      "label": "Update assets",
+      "description": "Change named attributes of existing Jira Assets objects in the allowed object schemas, such as an asset's status or who has it. A change overwrites or clears the old value, which is not kept. It never creates or deletes objects.",
+      "destructive": true,
+      "scopes": [
+        "read:servicedesk-request",
+        "read:cmdb-object:jira",
+        "read:cmdb-attribute:jira",
+        "write:cmdb-object:jira"
+      ],
+      "permissions": [],
+      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has the Object schema developers role on the object schema (Assets > the schema > Configure > Roles).",
+      "tools": ["jira_assets_update_object"]
     }
   ],
   "limits": [
@@ -107,6 +146,14 @@
       "kind": "list",
       "required": false,
       "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    {
+      "id": "asset_schemas",
+      "label": "Assets object schemas",
+      "help": "Object schema ids (the number in the schema's address in Assets). Leave empty to allow every object schema the service account can see: the projects limit does not narrow Assets.",
+      "kind": "list",
+      "required": false,
+      "pattern": "^[1-9][0-9]{0,17}$"
     }
   ],
   "verify": {
@@ -123,6 +170,7 @@
     },
     "label": "Projects agents can see",
     "show": "projects[].key",
+    "limit": "projects",
     "ifEmpty": "The service account cannot browse any project yet, so agents will find no issues. Give it a role with Browse projects in each project agents need, then check again."
   },
   "revoke": "In Atlassian Administration, open Directory, then Service accounts, then {brand.microsoft.appName}, and revoke its credentials.",

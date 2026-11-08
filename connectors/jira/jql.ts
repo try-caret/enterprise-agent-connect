@@ -14,8 +14,13 @@ export function isProjectKey(key: string): boolean {
   return PROJECT_KEY.test(key);
 }
 
-// Splits at a top-level ORDER BY (outside strings and parentheses).
-function splitOrderBy(jql: string): { where: string; orderBy: string | null } {
+// Splits at a top-level ORDER BY (outside strings and parentheses). `quotes`: the characters
+// that open a string (JQL takes both; AQL documents only double quotes, so a single quote there
+// is not a string and its parentheses count).
+export function splitOrderBy(
+  jql: string,
+  quotes = `"'`,
+): { where: string; orderBy: string | null } {
   let depth = 0;
   let quote: string | null = null;
   let orderAt = -1;
@@ -26,7 +31,7 @@ function splitOrderBy(jql: string): { where: string; orderBy: string | null } {
       else if (c === quote) quote = null;
       continue;
     }
-    if (c === '"' || c === "'") quote = c;
+    if (quotes.includes(c)) quote = c;
     else if (c === "(") depth++;
     else if (c === ")") {
       depth--;
@@ -35,7 +40,7 @@ function splitOrderBy(jql: string): { where: string; orderBy: string | null } {
       orderAt < 0 &&
       depth === 0 &&
       /^order\s+by\b/i.test(jql.slice(i)) &&
-      (i === 0 || /[\s)]/.test(jql[i - 1]))
+      (i === 0 || /[\s)"']/.test(jql[i - 1]))
     ) {
       orderAt = i;
     }

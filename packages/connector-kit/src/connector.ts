@@ -151,6 +151,9 @@ const httpProbeSchema = z
     body: z.record(z.string(), z.unknown()).optional(),
     // Shown to the admin when the probe finds nothing, e.g. a missing project permission.
     ifEmpty: text.optional(),
+    // discover only: the list limit its values are the choices for (Jira's projects, not its
+    // Assets schemas). Left out, a UI may offer them for every list limit, as before.
+    limit: slug.optional(),
   })
   .strict()
   .refine((p) => !p.name || listPrefix(p.name) === listPrefix(p.show), {
@@ -164,6 +167,7 @@ const vendorProbeSchema = z
     label: text,
     check: slug,
     ifEmpty: text.optional(),
+    limit: slug.optional(),
   })
   .strict();
 
@@ -1335,6 +1339,13 @@ export const connectorSchema = z
     (c) =>
       !c.agentAccess || c.limits.some((l) => l.id === c.agentAccess!.limit && l.kind === "text"),
     { message: "agentAccess.limit must be one of the connector's text limits" },
+  )
+  .refine(
+    (c) =>
+      !c.verify.limit &&
+      (!c.discover?.limit ||
+        c.limits.some((l) => l.id === c.discover!.limit && l.kind === "list")),
+    { message: "discover.limit must be one of the connector's list limits (verify takes none)" },
   )
   .refine(
     (c) => {
