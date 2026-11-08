@@ -602,14 +602,20 @@ test("jira_assets_update_object checks Select options, refuses references and an
   assert.deepEqual((sent.find((s) => s.method === "PUT")!.body as any).attributes, [
     { objectTypeAttributeId: "7", objectAttributeValues: [{ value: "Boston" }] },
   ]);
-  // An option holding a comma ("Needham, MA") is matched whole.
-  const comma = await call(h, key, "jira_assets_update_object", {
+  // A comma always separates options in Assets (tried live): "Needham, MA" is two options, so
+  // the joined text is refused and the piece "MA" is taken.
+  const joined = await call(h, key, "jira_assets_update_object", {
     object_id: "11",
     attributes: { Location: "needham, ma" },
   });
-  assert.equal(comma.isError, false, comma.text ?? "");
+  assert.match(joined.text!, /no option needham, ma/);
+  const piece = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Location: "ma" },
+  });
+  assert.equal(piece.isError, false, piece.text ?? "");
   assert.deepEqual((sent.filter((s) => s.method === "PUT").at(-1)!.body as any).attributes, [
-    { objectTypeAttributeId: "7", objectAttributeValues: [{ value: "Needham, MA" }] },
+    { objectTypeAttributeId: "7", objectAttributeValues: [{ value: "MA" }] },
   ]);
 });
 
@@ -949,4 +955,25 @@ test("the workspace is kept per site and credential", async () => {
   assert.equal(refused.status, 403);
   assert.match(JSON.stringify(refused.data), /agent seat/);
   assert.equal(lookups, 2);
+});
+
+test("a refused workspace lookup carries only its own fix, never the schema-role hint", async () => {
+  for (const status of [401, 403]) {
+    const h = harness();
+    const key = h.addAgent(["read", "assets_read"], { asset_schemas: ["137"] });
+    assets(h);
+    h.vendor.call = async () => ({
+      status,
+      data: {
+        errorMessages: [
+          "Jira Service Management refused the Assets workspace lookup: the service account " +
+            "needs Jira Service Management access as User (an agent seat) and the " +
+            "read:servicedesk-request scope",
+        ],
+      },
+    });
+    const r = await call(h, key, "jira_assets_get_object", { object_id: "11" });
+    assert.match(r.text!, /agent seat/);
+    assert.doesNotMatch(r.text!, /role on the object schema/, `status ${status}`);
+  }
 });

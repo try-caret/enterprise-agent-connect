@@ -155,17 +155,26 @@ export function keysUsing(agents: Agent[], connectorId: string): number {
 }
 
 /** The values a connected app reported for its discover probe, e.g. Jira project keys. */
-export function discovered(connector: Connector, checks: Check[] | null): string[] {
-  return discoveredChoices(connector, checks).map((c) => c.value);
+export function discovered(
+  connector: Connector,
+  checks: Check[] | null,
+  limit?: string,
+): string[] {
+  return discoveredChoices(connector, checks, limit).map((c) => c.value);
 }
 
 /** The same, each with the label to show for it (the value itself when the app gave none),
- *  e.g. a NetSuite subsidiary's name for its id. */
+ *  e.g. a NetSuite subsidiary's name for its id. With `limit`, only when they are that list
+ *  limit's choices: a probe naming its `limit` fills that one only (Jira's projects, not its
+ *  Assets schemas); one naming none fills any. */
 export function discoveredChoices(
   connector: Connector,
   checks: Check[] | null,
+  limit?: string,
 ): { value: string; label: string }[] {
   if (!connector.discover || !checks) return [];
+  if (limit !== undefined && connector.discover.limit && connector.discover.limit !== limit)
+    return [];
   const check = checks.find((c) => c.label === connector.discover!.label);
   return (check?.values ?? []).map((value) => ({ value, label: check?.labels?.[value] ?? value }));
 }

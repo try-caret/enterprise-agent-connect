@@ -57,8 +57,12 @@ async function ok(ctx: ToolContext, mark: Mark, req: Parameters<ToolContext["cal
   try {
     return await answer(ctx, mark, req);
   } catch (error) {
-    if (!(error instanceof VendorFailed) || error.status !== 401) throw error;
-    if (error.message.includes(WORKSPACE_PROBLEM)) throw error;
+    if (!(error instanceof VendorFailed)) throw error;
+    // The workspace lookup's refusal names its own fix (seat, scope): no capability hint on it,
+    // which the framework would add to a 403 (hintTool names no tool, so it finds none).
+    if (error.message.includes(WORKSPACE_PROBLEM))
+      throw new VendorFailed(error.status, error.message, "jira_assets_workspace_lookup");
+    if (error.status !== 401) throw error;
     const tool = req.method === "PUT" ? "jira_assets_update_object" : "jira_assets_search";
     const hint = ctx.forbidden?.[tool];
     throw hint ? new VendorFailed(401, `${error.message.replace(/\.$/, "")}. ${hint}`) : error;
@@ -240,17 +244,14 @@ async function statusByName(
 const shownError = (error: unknown) =>
   error instanceof VendorFailed || error instanceof Denied ? error.message : "";
 
-// A Select value as one of its options. Assets keeps the options as one comma-separated text,
-// so an option holding a comma is matched against neighbouring pieces joined again.
+// A Select value as one of its options, in the option's own spelling. Assets keeps the options
+// as one comma-separated text and a comma always separates two (tried live November 8, 2026:
+// with options "Boston, MA,London", "Boston, MA" is refused and "MA" is taken).
 function selectOption(def: Obj, value: string): string | null {
-  const pieces = typeof def.options === "string" && def.options ? def.options.split(",") : [];
+  const options = typeof def.options === "string" && def.options ? def.options.split(",") : [];
   const want = value.trim().toLowerCase();
-  for (let i = 0; i < pieces.length; i++)
-    for (let j = i; j < pieces.length; j++) {
-      const option = pieces.slice(i, j + 1).join(",").trim();
-      if (option.toLowerCase() === want) return option;
-    }
-  return null;
+  const found = options.map((o: string) => o.trim()).find((o: string) => o.toLowerCase() === want);
+  return found ?? null;
 }
 
 const attributeKind = (a: Obj) =>

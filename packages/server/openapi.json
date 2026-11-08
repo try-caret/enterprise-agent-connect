@@ -8683,6 +8683,10 @@
                   "ifEmpty": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "limit": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
                   }
                 },
                 "required": [
@@ -8707,6 +8711,10 @@
                   "ifEmpty": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "limit": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
                   }
                 },
                 "required": [
@@ -8769,6 +8777,10 @@
                   "ifEmpty": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "limit": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
                   }
                 },
                 "required": [
@@ -8793,6 +8805,10 @@
                   "ifEmpty": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "limit": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
                   }
                 },
                 "required": [

@@ -131,6 +131,14 @@ test("ticked capabilities are checked, ordered and always include the required o
   assert.deepEqual(validateCapabilities(teams, ["respond"]), ["respond"]);
 });
 
+test("discover.limit names one of the connector's list limits", () => {
+  const parse = (discover: unknown) =>
+    connectorSchema.safeParse({ ...jira, discover }).success;
+  assert.equal(parse(jira.discover), true);
+  assert.equal(parse({ ...jira.discover, limit: "asset_schemas" }), true);
+  assert.equal(parse({ ...jira.discover, limit: "nope" }), false);
+});
+
 test("connector capabilities are validated", () => {
   // Steps shown only with some capabilities (Assets) are left out: these lists drop them.
   const setup = jira.setup.filter((s) => !s.capabilities);

@@ -170,6 +170,7 @@
     },
     "label": "Projects agents can see",
     "show": "projects[].key",
+    "limit": "projects",
     "ifEmpty": "The service account cannot browse any project yet, so agents will find no issues. Give it a role with Browse projects in each project agents need, then check again."
   },
   "revoke": "In Atlassian Administration, open Directory, then Service accounts, then {brand.microsoft.appName}, and revoke its credentials.",

@@ -184,6 +184,14 @@ test("steps for a capability show only while it is ticked; discover labels are o
     { value: "1", label: "Parent Co" },
     { value: "2", label: "2" },
   ]);
+  // A probe naming its limit fills only that one: Jira's projects, never its Assets schemas.
+  const jira = connectors.find((c) => c.id === "jira")!;
+  const projects = [{ label: jira.discover!.label, values: ["HELP"] }];
+  assert.deepEqual(discovered(jira, projects, "projects"), ["HELP"]);
+  assert.deepEqual(discovered(jira, projects, "asset_schemas"), []);
+  assert.deepEqual(discovered(jira, projects), ["HELP"]);
+  // One naming none (NetSuite) fills any limit, as before.
+  assert.deepEqual(discovered(netsuite, checks, "locations"), ["1", "2"]);
 });
 
 test("a bot published by the setup script is asked to publish again when its package changes", () => {

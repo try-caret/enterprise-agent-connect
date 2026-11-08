@@ -1319,10 +1319,12 @@ export interface components {
                     [key: string]: unknown;
                 };
                 ifEmpty?: string;
+                limit?: string;
             } | {
                 label: string;
                 check: string;
                 ifEmpty?: string;
+                limit?: string;
             };
             discover?: {
                 /** @enum {string} */
@@ -1339,10 +1341,12 @@ export interface components {
                     [key: string]: unknown;
                 };
                 ifEmpty?: string;
+                limit?: string;
             } | {
                 label: string;
                 check: string;
                 ifEmpty?: string;
+                limit?: string;
             };
             revoke: string;
             http?: {

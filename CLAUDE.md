@@ -301,7 +301,8 @@ connectors/<id>/      # one folder per app: connector.json, index.ts (its Connec
 connectors/<id>/connector.json # one per app: logo (admin /brand path), setup steps, form fields,
                       # capabilities → tools + vendor scopes (+ token `roles` when they differ;
                       # connector-level `scopes`: needed whatever is ticked, e.g. Teams' target search)
-                      # + in-app permissions + step fills, value limits, `events` (types, kept
+                      # + in-app permissions + step fills, value limits (`discover.limit`: the
+                      # one list limit its values are choices for; none: any), `events` (types, kept
                       # fields, limit fields, self, webhook proof and steps, poll, graph, thread; docs/triggers.md), verify/discover
                       # probes, optional `provider`, `siteAccess` (grant steps and a note to
                       # IT per added site). Fields may be choices (`options`, the first the
@@ -658,10 +659,13 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   `typeValueMulti` is taken as given; anything else is looked up by name on one object of the type
   holding it (AQL), since service accounts are not offered `read:cmdb-config:jira` for the status
   list; a status no object holds yet is refused without listing ids to guess. Select options are
-  one comma-separated text in Assets: matched against pieces joined again, listed as the text. No
-  create or delete. Errors read through `answers.ts`, shared with the issue tools. Checked live
-  November 8, 2026 (with all 15 cmdb scopes, not only the listed ones): a service account needs a
-  JSM agent seat, no schema role; a partial PUT leaves other attributes as they were. Source:
+  one comma-separated text in Assets and a comma always separates two (tried live: "Boston, MA"
+  refused, "MA" taken), so a value must equal one piece; listed as the text. The workspace
+  lookup's refusal gets no capability hint. Jira's `discover` names `limit: projects`, so a UI
+  offers project keys only for that limit, never for `asset_schemas`. No create or delete. Errors
+  read through `answers.ts`, shared with the issue tools. Checked live November 8, 2026 (with all
+  15 cmdb scopes, not only the listed ones): a service account needs a JSM agent seat, no schema
+  role; a partial PUT leaves other attributes as they were. Source:
   developer.atlassian.com/cloud/assets/swagger.v3.json, read November 7, 2026.
 - Microsoft connection (provider `microsoft`, table `providers`, one per org):
   the apps with `"provider": "microsoft"` sign in through it, so its credentials are entered
