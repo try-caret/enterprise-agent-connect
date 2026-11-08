@@ -98,6 +98,15 @@ test("GitLab code: a branch resolves to its commit, and the archive takes only t
     fake.seen[0].url,
     `https://gitlab.example.com/api/v4/projects/g%2Fp/repository/files/src%2Fa.ts/raw?ref=${sha}`,
   );
+  // A JSON file comes back as its own text, formatting and all, not re-serialized.
+  const file = '{"name":"p",  "version": "1.0.0"}\n';
+  const raw = {
+    seen: [] as Seen[],
+    fetchImpl: (async () => new Response(file, { headers: { "content-type": "text/plain" } })) as typeof fetch,
+  };
+  out = await run(app("gitlab"), conn, "gitlab_read_file", { project: "g/p", file_path: "package.json", ref: sha }, raw);
+  assert.equal(out.isError, false, out.text);
+  assert.equal(out.text, file);
 
   const archive = Buffer.from([0x1f, 0x8b, 1, 2, 3]);
   const seen: string[] = [];

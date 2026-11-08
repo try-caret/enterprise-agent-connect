@@ -399,7 +399,7 @@ connectors/http/      # the generic module for a connector.json `http` block; ex
                       # marks a POST search read-only to clients; a param's `pattern` (a string's
                       # regex, checked by the tool's schema); a tool's `binary` (a GET answering
                       # a file: any type, read up to MAX_BINARY_BYTES by a second guarded fetch,
-                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls); a tool's `text` (a GET whose answer, e.g. a file, is handed back as the app sent it, never parsed as JSON: request `responseType: "text"`). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
                       # connector-kit oauth.ts jwtAssertion, http blocks only);
                       # openapi.ts: draftConnector (the OpenAPI drafter the script and the
                       # admin API's internal app drafts share)
@@ -1621,10 +1621,11 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
 id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resourcePrefix`) and Teams channel through a custom role on
   `azureResourceGroup`), retries the bot's sign-in while Microsoft replicates (then says it is
   waiting; running it again makes nothing twice), and keeps `appObjectId`, `appId`, `azureBot`,
-  `catalogAppId`, `publishedVersion` in the bot's config. Publishing needs an administrator's
+  `catalogAppId`, `publishedVersion` in the bot's config (`scriptVersion`, the package the setup
+  script published, when the admin pastes its app id back). Publishing needs an administrator's
   delegated AppCatalog.ReadWrite.All sign-in (signed state + browser nonce as for the shared-app
   approval; id token checked for app, tenant, nonce, expiry, no guest); installs consent to the
-  package's RSC list. Not for a connection on the shared app. The teams connector's `scopes`
+  package's RSC list, and one already there that lacks part of it is upgraded (`updated`). Not for a connection on the shared app. The teams connector's `scopes`
   (those permissions plus Team.ReadBasic.All and User.ReadBasic.All for the picker) are expected
   by every Teams ceiling's permission check; TeamsAppInstallation.ReadWriteAndConsentForUser.All
   only with the page's choice `person_installs` = `on` (kept in the teams connection's config;

@@ -20,6 +20,9 @@ export const RSC_PERMISSIONS = [
 const PACKAGE_REVISION = 1;
 export const packageVersion = (manifestVersion: number) =>
   `1.${PACKAGE_REVISION}.${manifestVersion}`;
+// The setup script publishes the package itself, always as this manifest version.
+const SCRIPT_MANIFEST_VERSION = 1;
+export const scriptPackageVersion = packageVersion(SCRIPT_MANIFEST_VERSION);
 
 export type PackageInput = {
   displayName: string;
@@ -270,7 +273,7 @@ export function setupScript(input: {
   // there, from a manifest with a placeholder.
   const PLACEHOLDER = "00000000-0000-0000-0000-00000000b07a";
   const template = JSON.stringify(
-    manifest({ ...input, botAppId: PLACEHOLDER, manifestVersion: 1 }),
+    manifest({ ...input, botAppId: PLACEHOLDER, manifestVersion: SCRIPT_MANIFEST_VERSION }),
     null,
     2,
   );

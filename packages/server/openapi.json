@@ -4775,7 +4775,8 @@
                       "type": "string",
                       "enum": [
                         "added",
-                        "already"
+                        "already",
+                        "updated"
                       ]
                     }
                   },
@@ -9287,6 +9288,10 @@
                     "binary": {
                       "default": false,
                       "type": "boolean"
+                    },
+                    "text": {
+                      "default": false,
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -9299,7 +9304,8 @@
                     "answerLimits",
                     "nestedBody",
                     "readOnly",
-                    "binary"
+                    "binary",
+                    "text"
                   ],
                   "additionalProperties": false
                 }
@@ -12658,6 +12664,12 @@
               "null"
             ]
           },
+          "scriptVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "packageVersion": {
             "type": "string"
           },
@@ -12698,6 +12710,7 @@
           "nextCertificate",
           "madeByService",
           "publishedVersion",
+          "scriptVersion",
           "packageVersion",
           "messagingEndpoint",
           "mcpUrl",
@@ -12799,6 +12812,12 @@
               "null"
             ]
           },
+          "scriptVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "packageVersion": {
             "type": "string"
           }
@@ -12821,6 +12840,7 @@
           "nextCertificate",
           "madeByService",
           "publishedVersion",
+          "scriptVersion",
           "packageVersion"
         ],
         "additionalProperties": false

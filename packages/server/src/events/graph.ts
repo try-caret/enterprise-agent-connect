@@ -306,27 +306,47 @@ export function createGraphSource(deps: GraphDeps) {
     await events.removeWatch(watch.id);
   }
 
+  /** Watches exactly the values agents with a trigger hold, renews subscriptions past half
+   *  their life, and catches each one up. */
+  async function syncOnce(sub: SubscriptionRow, connector: Connector) {
+    const g = connector.events!.graph!;
+    const want = await wanted(sub, g);
+    for (const w of await events.watches(sub.id)) if (!want.has(w.value)) await release(sub, w);
+    for (const v of want) await events.addWatch(sub.id, v);
+    const halfLife = (g.maxMinutes * 60_000) / 2;
+    for (const w of await events.watches(sub.id)) {
+      if (!w.remoteId || !w.expiresAt || Date.parse(w.expiresAt) - Date.now() < halfLife)
+        await subscribe(sub, g, w);
+      await catchUp(sub, connector, w);
+    }
+    const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
+    await events.polled(
+      sub.id,
+      null,
+      errors.length ? `${errors[0].value}: ${errors[0].lastError}` : null,
+    );
+  }
+
+  // One sync per subscription at a time (the service runs as one replica): the poll scheduler
+  // and a trigger change can both start one, and two would each make a Graph subscription for
+  // the same watch, the one refused clearing the other's id.
+  const syncing = new Map<string, Promise<void>>();
+
   return {
     inbound,
-    /** Watches exactly the values agents with a trigger hold, renews subscriptions past half
-     *  their life, and catches each one up. On the poll scheduler and after trigger changes. */
-    async sync(sub: SubscriptionRow, connector: Connector) {
-      const g = connector.events!.graph!;
-      const want = await wanted(sub, g);
-      for (const w of await events.watches(sub.id)) if (!want.has(w.value)) await release(sub, w);
-      for (const v of want) await events.addWatch(sub.id, v);
-      const halfLife = (g.maxMinutes * 60_000) / 2;
-      for (const w of await events.watches(sub.id)) {
-        if (!w.remoteId || !w.expiresAt || Date.parse(w.expiresAt) - Date.now() < halfLife)
-          await subscribe(sub, g, w);
-        await catchUp(sub, connector, w);
-      }
-      const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
-      await events.polled(
-        sub.id,
-        null,
-        errors.length ? `${errors[0].value}: ${errors[0].lastError}` : null,
-      );
+    /** On the poll scheduler and after trigger changes. One started while another runs waits
+     *  for it, then runs on what changed meanwhile. */
+    sync(sub: SubscriptionRow, connector: Connector) {
+      // The earlier sync's failure went to its own caller.
+      const run = (syncing.get(sub.id) ?? Promise.resolve())
+        .catch(() => {})
+        .then(() => syncOnce(sub, connector));
+      syncing.set(sub.id, run);
+      const done = () => {
+        if (syncing.get(sub.id) === run) syncing.delete(sub.id);
+      };
+      run.then(done, done);
+      return run;
     },
     /** Removes every watch's Graph subscription, before the organization's goes. */
     async releaseAll(sub: SubscriptionRow) {

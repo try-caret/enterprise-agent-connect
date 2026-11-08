@@ -37,7 +37,16 @@ const auth = { token: async () => () => {} } as unknown as BotAuth;
 type Sent = { method: string; path: string; body?: any };
 // A Bot Connector that records what was sent. A new channel post answers its thread and
 // activity id, any other post its activity id.
-function fakeBots(sent: Sent[], refuse?: (req: Sent) => number | undefined) {
+function fakeBots(
+  sent: Sent[],
+  {
+    refuse,
+    graph = async () => ok,
+  }: {
+    refuse?: (req: Sent) => number | undefined;
+    graph?: BotClient["graph"];
+  } = {},
+) {
   return {
     connector: async (_bot: unknown, _url: string, req: Sent) => {
       sent.push(req);
@@ -46,11 +55,14 @@ function fakeBots(sent: Sent[], refuse?: (req: Sent) => number | undefined) {
       if (req.method === "POST" && req.path === "/v3/conversations")
         return {
           status: 201,
-          data: { id: "19:general@thread.tacv2;messageid=900", activityId: "900" },
+          data: {
+            id: "19:general@thread.tacv2;messageid=900",
+            activityId: "900",
+          },
         };
       return { status: 200, data: { id: "900", value: [] } };
     },
-    graph: async () => ok,
+    graph,
   } as unknown as BotClient;
 }
 
@@ -72,7 +84,11 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
       calls.push(`continue ${session}`);
     },
     async state(run) {
-      return { status: run.replyCount > 0 ? "idle" : "running", costCents: 0, atBudget: false };
+      return {
+        status: run.replyCount > 0 ? "idle" : "running",
+        costCents: 0,
+        atBudget: false,
+      };
     },
     async stop(session) {
       calls.push(`stop ${session}`);
@@ -83,10 +99,14 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
 
 async function setup(
   runners: TriggerRunner[],
-  opts: { fetch?: typeof fetch; refuse?: (req: Sent) => number | undefined } = {},
+  opts: {
+    fetch?: typeof fetch;
+    refuse?: (req: Sent) => number | undefined;
+    graph?: BotClient["graph"];
+  } = {},
 ) {
   const sent: Sent[] = [];
-  const bots = fakeBots(sent, opts.refuse);
+  const bots = fakeBots(sent, { refuse: opts.refuse, graph: opts.graph });
   const store = createStore(sql!, SCHEMA);
   const teams = createTeamsStore(sql!, SCHEMA);
   const org = randomUUID();
@@ -160,7 +180,10 @@ async function setup(
       botAppId,
       new Request(`${publicUrl}/teams/bots/${botAppId}/messages`, {
         method: "POST",
-        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer x",
+          "content-type": "application/json",
+        },
         body: JSON.stringify(activity),
       }),
     );
@@ -251,7 +274,8 @@ test(
     assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"\n<\/teams_files>/);
     assert.doesNotMatch(prompt, /tempauth/);
     assert.deepEqual(files, [{ name: "q3.xlsx", source: "chat", url: link }]);
-    const [row] = await sql!`select files from agent_connect.teams_runs where agent_id = ${t.agentId}`;
+    const [row] =
+      await sql!`select files from agent_connect.teams_runs where agent_id = ${t.agentId}`;
     assert.ok(row.files && !Buffer.from(row.files).toString("latin1").includes("tempauth"));
   },
 );
@@ -268,7 +292,9 @@ test("a file sent with no text in a direct chat still starts a run", { skip: !sq
       {
         contentType: "application/vnd.microsoft.teams.file.download.info",
         name: "q3.xlsx",
-        content: { downloadUrl: "https://contoso-my.sharepoint.com/d?tempauth=x" },
+        content: {
+          downloadUrl: "https://contoso-my.sharepoint.com/d?tempauth=x",
+        },
       },
     ],
   });
@@ -276,6 +302,58 @@ test("a file sent with no text in a direct chat still starts a run", { skip: !sq
   assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"/);
   await t.message("");
   assert.equal((await t.runs()).length, 1);
+});
+
+// A group chat message that names the bot (replies only when mentioned, by default).
+const group = (botAppId: string) => ({
+  conversation: { id: "19:files@thread.v2", conversationType: "groupChat" },
+  entities: [{ type: "mention", mentioned: { id: `28:${botAppId}` } }],
+});
+
+test("a file sent with no text in a group chat starts a run", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-group-file", async (input) => {
+    prompt = input.text;
+  });
+  const asked: string[] = [];
+  const file = {
+    contentType: "reference",
+    name: "r.docx",
+    contentUrl: "https://x.example/r",
+  };
+  const t = await setup([runner], {
+    graph: async (_bot, path) => {
+      asked.push(path);
+      return path.endsWith("/messages/act-1") ? { status: 200, data: { attachments: [file] } } : ok;
+    },
+  });
+  await t.setRunner("fake-group-file");
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+  assert.match(prompt, /<teams_files>\n1\. "r\.docx" \(in a group chat/);
+  // Graph's copy of the message is read once, before deciding, and reused.
+  assert.equal(asked.filter((p) => p.endsWith("/messages/act-1")).length, 1);
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+});
+
+test("a message whose files cannot be read still reaches the agent", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-graph-down", async (input) => {
+    prompt = input.text;
+  });
+  const t = await setup([runner], {
+    graph: async (_bot, path) => {
+      if (/\/messages\/act-\d+$/.test(path)) throw new TypeError("fetch failed");
+      return ok;
+    },
+  });
+  await t.setRunner("fake-graph-down");
+  await t.message("hello", group(t.botAppId));
+  const [run] = await t.runs();
+  assert.equal(run.state, "running");
+  assert.match(prompt, /hello/);
+  assert.doesNotMatch(prompt, /teams_files/);
 });
 
 test(
@@ -361,7 +439,10 @@ test(
           `http://svc/agent-connect/admin${prefix}/orgs/${t.org}/agents/${t.agentId}/teams-bot/add`,
           {
             method: "POST",
-            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            headers: {
+              authorization: `Bearer ${ADMIN_TOKEN}`,
+              "content-type": "application/json",
+            },
             body: JSON.stringify({ displayName: "Triage", by: "admin" }),
           },
         ),
@@ -424,8 +505,14 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
     call: async (req) => {
       lookups.push(req.path);
       if (req.path.startsWith(`/v1.0/users/${encodeURIComponent("ann@contoso.example")}?`))
-        return { status: 200, data: { id: PERSON.toUpperCase(), displayName: "Ann" } };
-      return { status: 404, data: { error: { message: "Resource not found" } } };
+        return {
+          status: 200,
+          data: { id: PERSON.toUpperCase(), displayName: "Ann" },
+        };
+      return {
+        status: 404,
+        data: { error: { message: "Resource not found" } },
+      };
     },
     teams: t.runtime.access(bot),
     audit: (entry) =>
@@ -438,7 +525,9 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       }),
   };
   teamsTools.register(
-    { registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h) } as never,
+    {
+      registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h),
+    } as never,
     ctx,
     new Set(teamsTools.names),
   );
@@ -455,7 +544,11 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       facts: [{ name: "Cost", value: "1,200 USD" }],
     });
     assert.equal(r.isError, false, r.text);
-    return JSON.parse(r.text) as { approval_id: string; message_id: string; expires: string };
+    return JSON.parse(r.text) as {
+      approval_id: string;
+      message_id: string;
+      expires: string;
+    };
   }
   const read = async (approvalId: string) =>
     JSON.parse((await call("teams_get_approval", { approval_id: approvalId })).text);
@@ -479,15 +572,25 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       serviceUrl: SERVICE_URL,
       channelId: "msteams",
       recipient: { id: `28:${botAppId}` },
-      from: { id: "29:clicker", aadObjectId: opts.from ?? PERSON, name: "Ann Example" },
-      conversation: opts.conversation ?? { id: CHAT, conversationType: "groupChat" },
+      from: {
+        id: "29:clicker",
+        aadObjectId: opts.from ?? PERSON,
+        name: "Ann Example",
+      },
+      conversation: opts.conversation ?? {
+        id: CHAT,
+        conversationType: "groupChat",
+      },
       channelData: { tenant: { id: TENANT } },
       replyToId: "900",
       value: {
         action: {
           type: "Action.Execute",
           verb: opts.verb ?? "approve",
-          data: { approval: rowId, ...(opts.comment ? { comment: opts.comment } : {}) },
+          data: {
+            approval: rowId,
+            ...(opts.comment ? { comment: opts.comment } : {}),
+          },
         },
         trigger: "manual",
       },
@@ -496,12 +599,19 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       botAppId,
       new Request(`https://svc.example/agent-connect/teams/bots/${botAppId}/messages`, {
         method: "POST",
-        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer x",
+          "content-type": "application/json",
+        },
         body: JSON.stringify(activity),
       }),
     );
     assert.equal(res.status, 200);
-    return (await res.json()) as { statusCode: number; type: string; value: any };
+    return (await res.json()) as {
+      statusCode: number;
+      type: string;
+      value: any;
+    };
   }
   const rowId = async () => {
     const [row] = await sql!`select id::text from agent_connect.approvals
@@ -567,7 +677,10 @@ test("the approver's click is recorded once and the card shows it", { skip: !sql
   const a = await approvals(t);
   const asked = await a.request();
   const id = await a.rowId();
-  const answer = await a.click(id, { verb: "reject", comment: "Too expensive" });
+  const answer = await a.click(id, {
+    verb: "reject",
+    comment: "Too expensive",
+  });
   assert.equal(answer.statusCode, 200);
   assert.equal(answer.type, "application/vnd.microsoft.card.adaptive");
   assert.match(cardText(answer.value), /Rejected by Ann Example/);
@@ -643,7 +756,9 @@ test("another bot's approval is not answered through this bot", { skip: !sql }, 
   assert.equal(row.decision, "denied");
   // And the other agent cannot read it either.
   const b = await approvals(other);
-  const r = await b.call("teams_get_approval", { approval_id: asked.approval_id });
+  const r = await b.call("teams_get_approval", {
+    approval_id: asked.approval_id,
+  });
   assert.equal(r.isError, true);
 });
 
@@ -731,7 +846,11 @@ test("the store records a decision only when every condition holds", { skip: !sq
       facts: [],
       days: 7,
     });
-  const by = (aad: string) => ({ status: "approved" as const, byAadId: aad, byName: "Ann" });
+  const by = (aad: string) => ({
+    status: "approved" as const,
+    byAadId: aad,
+    byName: "Ann",
+  });
   const status = async (id: string) =>
     (await sql!`select status from agent_connect.approvals where id = ${id}`)[0].status;
 
@@ -758,7 +877,11 @@ test("the store records a decision only when every condition holds", { skip: !sq
   const decided = await t.teams.decideApproval(t.botId, e.id, CHAT, by(PERSON), "ok");
   assert.equal(decided?.status, "approved");
   assert.equal(decided?.decidedByAadId, PERSON);
-  const again = { status: "rejected" as const, byAadId: PERSON, byName: "Ann" };
+  const again = {
+    status: "rejected" as const,
+    byAadId: PERSON,
+    byName: "Ann",
+  };
   assert.equal(await t.teams.decideApproval(t.botId, e.id, CHAT, again, null), null);
   assert.equal(await status(e.id), "approved");
   // The lookup a click starts with keeps to the bot and the conversation too.
@@ -841,7 +964,9 @@ async function fileReplies(
       body: Buffer.from(init!.body as Uint8Array),
     });
     const next = putAnswers.shift() ?? 201;
-    return new Response("{}", { status: typeof next === "number" ? next : next() });
+    return new Response("{}", {
+      status: typeof next === "number" ? next : next(),
+    });
   }) as unknown as typeof fetch;
   let replyToken = "";
   const { runner } = fakeRunner("fake-file-reply", async (input) => {
@@ -876,12 +1001,18 @@ async function fileReplies(
       }),
   };
   teamsTools.register(
-    { registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h) } as never,
+    {
+      registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h),
+    } as never,
     ctx,
     new Set(teamsTools.names),
   );
   async function reply(files: { name: string; download_url: string }[]) {
-    const r = await handlers.get("teams_reply")!({ reply_token: replyToken, text: "Here it is", files });
+    const r = await handlers.get("teams_reply")!({
+      reply_token: replyToken,
+      text: "Here it is",
+      files,
+    });
     return { isError: Boolean(r.isError), text: r.content[0].text as string };
   }
   let n = 0;
@@ -918,7 +1049,10 @@ async function fileReplies(
       t.botAppId,
       new Request(`https://svc.example/agent-connect/teams/bots/${t.botAppId}/messages`, {
         method: "POST",
-        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer x",
+          "content-type": "application/json",
+        },
         body: JSON.stringify(activity),
       }),
     );
@@ -1098,7 +1232,9 @@ test(
   "a saved file whose file card Teams refuses is told to the person and its consent card goes",
   { skip: !sql },
   async () => {
-    const f = await fileReplies({ refuse: (r) => (isFileCard("info")(r) ? 502 : undefined) });
+    const f = await fileReplies({
+      refuse: (r) => (isFileCard("info")(r) ? 502 : undefined),
+    });
     await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
     const [offer] = await f.offers();
     await f.answer(offer.id);

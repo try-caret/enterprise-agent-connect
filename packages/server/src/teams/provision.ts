@@ -591,30 +591,33 @@ const INSTALL: Record<
   },
 };
 
+const CONSENT = {
+  resourceSpecificPermissions: RSC_PERMISSIONS.map((permissionValue) => ({
+    permissionValue,
+    permissionType: "application",
+  })),
+};
+
 /** Adds the published app there, consenting to the package's resource-specific permissions
- *  (Microsoft requires exactly the package's list). Already there counts as added. */
+ *  (Microsoft requires exactly the package's list). Already there: updated to the published
+ *  package when it lacks one of them (a package that asks for more), else counted as added. */
 export async function installBot(
   call: Call,
   catalogAppId: string,
   kind: InstallKind,
   id: string,
-): Promise<"added" | "already"> {
+): Promise<"added" | "already" | "updated"> {
   const spec = INSTALL[kind];
   const res = await call({
     method: "POST",
     path: spec.path(id),
     body: {
       "teamsApp@odata.bind": `${GRAPH}/v1.0/appCatalogs/teamsApps/${catalogAppId}`,
-      consentedPermissionSet: {
-        resourceSpecificPermissions: RSC_PERMISSIONS.map((permissionValue) => ({
-          permissionValue,
-          permissionType: "application",
-        })),
-      },
+      consentedPermissionSet: CONSENT,
     },
   });
   if (ok(res)) return "added";
-  if (res.status === 409) return "already";
+  if (res.status === 409) return upgradeBot(call, catalogAppId, kind, id);
   const { code, message } = errorOf(res.data);
   if (res.status === 403 && code !== "Authorization_RequestDenied")
     throw new ConnectError(
@@ -625,6 +628,43 @@ export async function installBot(
       `Microsoft found no such ${spec.what}, or the bot is not in your Teams apps yet. Publish it first.`,
     );
   throw graphFailure(res, `adding the bot to this ${spec.what}`, spec.permission);
+}
+
+async function upgradeBot(
+  call: Call,
+  catalogAppId: string,
+  kind: InstallKind,
+  id: string,
+): Promise<"already" | "updated"> {
+  const spec = INSTALL[kind];
+  const q = new URLSearchParams({
+    $expand: "teamsApp",
+    $filter: `teamsApp/id eq '${catalogAppId.replaceAll("'", "''")}'`,
+    $select: "id,consentedPermissionSet",
+  });
+  const list = await call({ method: "GET", path: `${spec.path(id)}?${q}` });
+  if (!ok(list))
+    throw graphFailure(list, `reading the bot's app in this ${spec.what}`, spec.permission);
+  type Installed = {
+    id: string;
+    consentedPermissionSet?: {
+      resourceSpecificPermissions?: { permissionValue?: string }[];
+    } | null;
+  };
+  const installed = (list.data as { value?: Installed[] }).value?.[0];
+  if (!installed)
+    throw new ConnectError(`Microsoft says the bot is in this ${spec.what} but did not list it`);
+  const granted = new Set(
+    installed.consentedPermissionSet?.resourceSpecificPermissions?.map((p) => p.permissionValue),
+  );
+  if (RSC_PERMISSIONS.every((p) => granted.has(p))) return "already";
+  const res = await call({
+    method: "POST",
+    path: `${spec.path(id)}/${encodeURIComponent(installed.id)}/upgrade`,
+    body: { consentedPermissionSet: CONSENT },
+  });
+  if (!ok(res)) throw graphFailure(res, `updating the bot in this ${spec.what}`, spec.permission);
+  return "updated";
 }
 
 /** Chat ids from a pasted Teams link or the id itself. */
