@@ -25,6 +25,7 @@ import {
   type EventData,
 } from "./deliver.js";
 import { createGraphSource } from "./graph.js";
+import { noReport, type Report } from "../report.js";
 import type { EventTriggerRow, EventsStore, QueuedEvent, SubscriptionRow } from "./store.js";
 
 // Events from connected apps (docs/triggers.md): deliveries at /events/<subscription id>, Graph
@@ -59,10 +60,30 @@ export type EventsRuntimeDeps = {
   runners: Map<string, TriggerRunner>;
   // Where Graph sends notifications.
   publicUrl: string | null;
+  report?: Report;
 };
 
 export function createEventsRuntime(deps: EventsRuntimeDeps) {
   const { events, key, connectors } = deps;
+  const report = deps.report ?? noReport;
+  // A subscription's poll or sync failing: reported when it starts failing, not on every retry.
+  const polled = (
+    sub: SubscriptionRow,
+    cursor: string | null,
+    error: string | null,
+    cause: unknown = null,
+    status?: number,
+  ) => {
+    if (error && !sub.lastError)
+      report("event_poll_failed", cause, {
+        app: sub.connectorId,
+        org: sub.organizationId,
+        subscription: sub.id,
+        source: sub.source,
+        status,
+      });
+    return events.polled(sub.id, cursor, error);
+  };
 
   const audit = (entry: Omit<AuditEntry, "vendorStatus"> & { vendorStatus?: number | null }) =>
     deps.store.audit({ vendorStatus: null, ...entry, reason: entry.reason?.slice(0, 500) ?? null });
@@ -201,6 +222,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       await events.finishEvent(event.id, "done", await handle(event));
     } catch (error) {
       console.error(`[events] event ${event.id} failed`, error);
+      report("event_failed", error, {
+        app: event.connectorId,
+        org: event.organizationId,
+        subscription: event.subscriptionId,
+      });
       await events.finishEvent(event.id, "failed", "Internal error");
     }
     return true;
@@ -308,15 +334,26 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       threadValue === null || threadValue === undefined || Array.isArray(threadValue)
         ? null
         : threadId(trigger.id, String(threadValue));
-    const runId = await events.startRun({
-      agentId: trigger.agentId,
-      triggerId: trigger.id,
-      eventId: event.id,
-      eventType: event.eventType,
-      deliveryId: event.deliveryId,
-      thread,
+    const runTags = {
+      app: connector.id,
+      org: event.organizationId,
+      agent: trigger.agentId,
       runner: trigger.runner,
-    });
+    };
+    const runId = await events
+      .startRun({
+        agentId: trigger.agentId,
+        triggerId: trigger.id,
+        eventId: event.id,
+        eventType: event.eventType,
+        deliveryId: event.deliveryId,
+        thread,
+        runner: trigger.runner,
+      })
+      .catch((error: unknown) => {
+        report("event_run_start_failed", error, runTags);
+        throw error;
+      });
     try {
       const secret = trigger.secret
         ? key.open(
@@ -348,6 +385,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       if (!(error instanceof ConnectError)) console.error(`[events] run ${runId}`, error);
+      report("event_run_start_failed", error, runTags);
       await events.updateRun(runId, { state: "failed", error: why.slice(0, 500) });
       return decide("failed", `Run ${runId} could not start: ${why}`);
     }
@@ -386,7 +424,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   async function poll(sub: SubscriptionRow) {
     const connector = connectors.get(sub.connectorId);
     const p = connector?.events?.poll;
-    if (!p) return events.polled(sub.id, null, `${sub.connectorId} cannot be polled`);
+    if (!p) return polled(sub, null, `${sub.connectorId} cannot be polled`);
     const cursor = sub.cursor ?? new Date().toISOString();
     const since = Date.parse(cursor);
     const minutes =
@@ -401,7 +439,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     }) as VendorRequest;
     try {
       const res = await deps.appCall(sub.organizationId, sub.connectorId, request);
-      if (!res) return events.polled(sub.id, null, `${connector!.name} is not connected`);
+      if (!res) return polled(sub, null, `${connector!.name} is not connected`);
       if (res.status < 200 || res.status >= 300) {
         await audit({
           organizationId: sub.organizationId,
@@ -414,7 +452,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
           reason: `${connector!.name} answered ${res.status}`,
           vendorStatus: res.status,
         });
-        return events.polled(sub.id, null, `${connector!.name} answered ${res.status}`);
+        return polled(sub, null, `${connector!.name} answered ${res.status}`, null, res.status);
       }
       // ponytail: one page per poll; the next continues from the newest item read. More changes
       // than a page within the overlap minute would be read again and again: page then.
@@ -442,11 +480,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       await events.polled(sub.id, newest, null);
     } catch (error) {
       console.error(`[events] poll ${sub.id}`, error);
-      await events.polled(
-        sub.id,
-        null,
-        error instanceof ConnectError ? error.message : "Internal error",
-      );
+      const why = error instanceof ConnectError ? error.message : "Internal error";
+      await polled(sub, null, why, error);
     }
   }
 
@@ -454,16 +489,14 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   async function sync(sub: SubscriptionRow) {
     const connector = connectors.get(sub.connectorId);
     if (!connector?.events?.graph)
-      return events.polled(sub.id, null, `${sub.connectorId} sends no Graph notifications`);
+      return polled(sub, null, `${sub.connectorId} sends no Graph notifications`);
     try {
-      await graph.sync(sub, connector);
+      const { error, status } = await graph.sync(sub, connector);
+      await polled(sub, null, error, null, status);
     } catch (error) {
       console.error(`[events] graph sync ${sub.id}`, error);
-      await events.polled(
-        sub.id,
-        null,
-        error instanceof ConnectError ? error.message : "Internal error",
-      );
+      const why = error instanceof ConnectError ? error.message : "Internal error";
+      await polled(sub, null, why, error);
     }
   }
 
