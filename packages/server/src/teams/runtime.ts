@@ -996,8 +996,12 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     for (const run of await teams.runningRuns()) {
       // Passes can overlap (one whose lease another process took over): what one read is
       // written, and told, only if the run is still as it read it, the same turn running.
-      const finish = (patch: Parameters<typeof teams.updateRun>[1]) =>
-        teams.updateRun(run.id, patch, run);
+      const finish = async (patch: Parameters<typeof teams.updateRun>[1]) => {
+        if (await teams.updateRun(run.id, patch, run)) return true;
+        // What the session spent still counts towards the daily limit.
+        if (patch.costCents !== undefined) await teams.recordCost(run.id, patch.costCents);
+        return false;
+      };
       try {
         const bot = await teams.botById(run.botId);
         if (!bot) continue;

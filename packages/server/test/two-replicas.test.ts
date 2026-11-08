@@ -834,3 +834,33 @@ test(
     assert.deepEqual(t.told(), [], "no notice for a turn it did not watch");
   },
 );
+
+test(
+  "what a session spent is logged when its finish finds the run stopped meanwhile",
+  { skip: !sql },
+  async () => {
+    const reading = gate();
+    const t = await teamsSetup({
+      state: async () => {
+        await reading.pass();
+        return { status: "idle", costCents: 30, atBudget: false };
+      },
+    });
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const pass = a.watch();
+    await reading.entered;
+    // An administrator stops the session while the pass reads it.
+    const [{ id }] = await sql!`
+      select id::text from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+    await t.teams.updateRun(id, { state: "failed", error: "Stopped by an administrator" });
+    reading.open();
+    await pass;
+    const spend = await sql!`select cents from ${name("teams_spend")} where agent_id = ${t.agentId}`;
+    assert.deepEqual(
+      spend.map((s) => s.cents),
+      [30],
+    );
+  },
+);

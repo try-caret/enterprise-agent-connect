@@ -690,6 +690,21 @@ export function createTeamsStore(sql: Sql, schema: string) {
       return changed > 0;
     },
 
+    // The session's cost total as a pass read it, when its finish found the run moved on (its
+    // next turn, an administrator's stop): its increase over what is recorded is logged, which
+    // no later finish of that turn would do. The row is locked, so it is logged once.
+    async recordCost(id: string, costCents: number): Promise<void> {
+      await sql.begin(async (tx) => {
+        const [row] = await tx<{ agentId: string; old: number }[]>`
+          select agent_id::text as "agentId", coalesce(cost_cents, 0) as old
+            from ${t.teams_runs} where id = ${id} for update`;
+        if (!row || costCents <= row.old) return;
+        await tx`update ${t.teams_runs} set cost_cents = ${costCents} where id = ${id}`;
+        await tx`insert into ${t.teams_spend} (agent_id, run_id, cents)
+                 values (${row.agentId}, ${id}, ${costCents - row.old})`;
+      });
+    },
+
     // Runs stuck starting (the process stopped, or a write failed, before the start finished)
     // would hold their thread forever under the one-active index. Returns how many failed.
     async failStaleStarts(): Promise<number> {
