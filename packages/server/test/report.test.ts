@@ -4,85 +4,53 @@ import {
   errorReporter,
   noReport,
   reportingVendorRefusals,
+  type AgentConnectError,
   type ReportTags,
 } from "../src/report.ts";
 import type { AuditEntry } from "../src/store.ts";
 
-function fakeSentry() {
-  const sent: { url: string; headers: Record<string, string>; lines: any[] }[] = [];
-  const fetch = (async (url: string, init: RequestInit) => {
-    sent.push({
-      url,
-      headers: init.headers as Record<string, string>,
-      lines: String(init.body)
-        .split("\n")
-        .map((l) => JSON.parse(l)),
-    });
-    return new Response(null, { status: 200 });
-  }) as typeof globalThis.fetch;
-  return { sent, fetch };
-}
-const settle = () => new Promise((r) => setImmediate(r));
-
-test("without a DSN nothing is reported", () => {
+test("without a hook nothing is reported", () => {
   assert.equal(errorReporter(null), noReport);
-  assert.equal(errorReporter({ dsn: "" }), noReport);
+  assert.equal(errorReporter(undefined), noReport);
 });
 
-test("a DSN that is not Sentry's stops startup", () => {
-  assert.throws(() => errorReporter({ dsn: "https://sentry.example.com/1" }), /SENTRY_DSN/);
-  assert.throws(() => errorReporter({ dsn: "not a url" }));
-});
-
-test("an error goes as one envelope: fingerprint, tags, class and code, never its message", async () => {
-  const s = fakeSentry();
-  const report = errorReporter(
-    {
-      dsn: "https://pub123@sentry.example.com/prefix/42",
-      environment: "staging",
-      release: "1.2.3",
-    },
-    { fetch: s.fetch, now: () => 1_700_000_000_000 },
-  );
+test("an error reaches the hook once: kind, tags, class, code and status, never its message", () => {
+  const seen: AgentConnectError[] = [];
+  const report = errorReporter((e) => seen.push(e), { now: () => 1_700_000_000_000 });
   const error = Object.assign(new TypeError("token sk-secret for ann@example.com"), {
     code: "ECONNRESET",
   });
   report("teams_send_failed", error, { app: "teams", agent: "a1", bot: null, status: 502 });
-  await settle();
 
-  assert.equal(s.sent.length, 1);
-  const [{ url, headers, lines }] = s.sent;
-  assert.equal(url, "https://sentry.example.com/prefix/api/42/envelope/");
-  assert.match(headers["x-sentry-auth"], /sentry_version=7, sentry_key=pub123,/);
-  const [head, item, event] = lines;
-  assert.equal(head.event_id, event.event_id);
-  assert.deepEqual(item, { type: "event" });
-  assert.deepEqual(event.fingerprint, ["agent-connect", "teams_send_failed"]);
-  assert.deepEqual(event.tags, {
-    kind: "teams_send_failed",
-    app: "teams",
-    agent: "a1",
-    status: "502",
-  });
-  assert.equal(event.environment, "staging");
-  assert.equal(event.release, "1.2.3");
-  assert.equal(event.timestamp, 1_700_000_000);
-  const [exception] = event.exception.values;
-  assert.equal(exception.type, "teams_send_failed");
-  assert.equal(exception.value, "TypeError ECONNRESET 502");
-  assert.ok(exception.stacktrace.frames.length > 0);
-  assert.ok(exception.stacktrace.frames.every((f: { lineno: number }) => f.lineno > 0));
-  const body = JSON.stringify(lines);
+  assert.equal(seen.length, 1);
+  const [event] = seen;
+  assert.equal(event.kind, "teams_send_failed");
+  assert.deepEqual(event.tags, { app: "teams", agent: "a1", status: "502" });
+  assert.equal(event.errorClass, "TypeError");
+  assert.equal(event.code, "ECONNRESET");
+  assert.equal(event.status, 502);
+  assert.equal(event.timestamp, "2023-11-14T22:13:20.000Z");
+  assert.ok(event.frames!.length > 0);
+  assert.ok(event.frames!.every((f) => f.line > 0 && f.file));
+  assert.match(event.frames![0].file, /report\.test\.ts$/);
+  const body = JSON.stringify(event);
   assert.ok(!body.includes("sk-secret") && !body.includes("ann@example.com"), body);
 });
 
-test("one event per kind and app a minute", async () => {
-  const s = fakeSentry();
-  let now = 0;
-  const report = errorReporter(
-    { dsn: "https://k@sentry.example.com/1" },
-    { fetch: s.fetch, now: () => now },
+test("a status on the error wins over the tag's", () => {
+  const seen: AgentConnectError[] = [];
+  errorReporter((e) => seen.push(e))(
+    "event_failed",
+    Object.assign(new Error("x"), { status: 503 }),
+    { app: "jira", status: 400 },
   );
+  assert.equal(seen[0].status, 503);
+});
+
+test("one event per kind and app a minute", () => {
+  const seen: AgentConnectError[] = [];
+  let now = 0;
+  const report = errorReporter((e) => seen.push(e), { now: () => now });
   report("vendor_auth_failed", null, { app: "jira" });
   report("vendor_auth_failed", null, { app: "jira" });
   report("vendor_auth_failed", null, { app: "slack" });
@@ -91,9 +59,8 @@ test("one event per kind and app a minute", async () => {
   report("vendor_auth_failed", null, { app: "jira" });
   now = 60_000;
   report("vendor_auth_failed", null, { app: "jira" });
-  await settle();
   assert.deepEqual(
-    s.sent.map((e) => `${e.lines[2].tags.kind} ${e.lines[2].tags.app}`),
+    seen.map((e) => `${e.kind} ${e.tags.app}`),
     [
       "vendor_auth_failed jira",
       "vendor_auth_failed slack",
@@ -101,26 +68,27 @@ test("one event per kind and app a minute", async () => {
       "vendor_auth_failed jira",
     ],
   );
-  // No error object: the kind alone, no stack.
-  assert.deepEqual(s.sent[0].lines[2].exception.values[0], {
-    type: "vendor_auth_failed",
-    value: "",
+  // No error object: the kind and tags alone.
+  assert.deepEqual(seen[0], {
+    kind: "vendor_auth_failed",
+    tags: { app: "jira" },
+    errorClass: undefined,
+    code: undefined,
+    status: undefined,
+    frames: undefined,
+    timestamp: "1970-01-01T00:00:00.000Z",
   });
 });
 
-test("a report that cannot be sent is logged, never thrown", async () => {
+test("a hook that throws is logged, never thrown into the service", () => {
   const logged: unknown[] = [];
   const report = errorReporter(
-    { dsn: "https://k@sentry.example.com/1" },
-    {
-      fetch: (async () => {
-        throw new Error("offline");
-      }) as typeof fetch,
-      log: { error: (...a: unknown[]) => logged.push(a) },
+    () => {
+      throw new Error("sink down");
     },
+    { log: { error: (...a: unknown[]) => logged.push(a) } },
   );
-  report("event_failed", new Error("x"));
-  await settle();
+  assert.doesNotThrow(() => report("event_failed", new Error("x")));
   assert.equal(logged.length, 1);
 });
 
@@ -155,4 +123,33 @@ test("an audited call the app refused with 401 or 403 is reported after its row 
       { app: "jira", org: "o1", agent: "a1", tool: "jira_get_issue", status: 403 },
     ],
   ]);
+});
+
+test("a vendor refusal through the audit wrapper reaches the hook with no message", async () => {
+  const seen: AgentConnectError[] = [];
+  const store = reportingVendorRefusals(
+    { audit: async (_entry: AuditEntry) => {} },
+    errorReporter((e) => seen.push(e)),
+  );
+  await store.audit({
+    organizationId: "o1",
+    agentId: "a1",
+    agentName: "Triage",
+    connectorId: "jira",
+    tool: "jira_get_issue",
+    target: "KAN-1",
+    decision: "failed",
+    reason: "Jira said: invalid token for ann@example.com",
+    vendorStatus: 401,
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].status, 401);
+  assert.deepEqual(seen[0].tags, {
+    app: "jira",
+    org: "o1",
+    agent: "a1",
+    tool: "jira_get_issue",
+    status: "401",
+  });
+  assert.ok(!JSON.stringify(seen[0]).includes("ann@example.com"));
 });
