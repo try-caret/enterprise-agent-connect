@@ -240,11 +240,17 @@ test("calendar_create_event answers the first event when Microsoft refuses a rep
   const { run, requests } = setup((req) => {
     if (req.method === "POST")
       return { status: 409, data: { error: { code: "ErrorDuplicateTransactionId", message: "dup" } } };
-    if (req.path.startsWith(`${BOX}/events?`))
+    // The event carrying the id is on the second page.
+    if (req.path.startsWith(`${BOX}/events?`) && !req.path.includes("$skip="))
       return {
         status: 200,
-        data: { value: [{ id: "E0", transactionId: "other" }, { id: "E1", transactionId: "req-1" }] },
+        data: {
+          value: [{ id: "E0", transactionId: "other" }],
+          "@odata.nextLink": `https://graph.microsoft.com${BOX}/events?$skip=100`,
+        },
       };
+    if (req.path.startsWith(`${BOX}/events?`))
+      return { status: 200, data: { value: [{ id: "E1", transactionId: "req-1" }] } };
     if (req.path.startsWith(`${BOX}/events/E1?`))
       return { status: 200, data: created({ transactionId: "req-1" }) };
   });
@@ -255,6 +261,9 @@ test("calendar_create_event answers the first event when Microsoft refuses a rep
   assert.equal(r.body.existing, true);
   const q = new URL(`https://graph.microsoft.com${requests[1].path}`).searchParams;
   assert.equal(q.get("$filter"), "subject eq 'Pat''s intro'");
+  const second = new URL(`https://graph.microsoft.com${requests[2].path}`).searchParams;
+  assert.equal(second.get("$filter"), "subject eq 'Pat''s intro'");
+  assert.equal(second.get("$skip"), "100");
 
   // Without a transaction id, or with no event carrying it, the refusal is the answer.
   const none = await run("calendar_create_event", { ...args, transaction_id: "req-2" });
