@@ -58,10 +58,10 @@ async function ok(ctx: ToolContext, mark: Mark, req: Parameters<ToolContext["cal
     return await answer(ctx, mark, req);
   } catch (error) {
     if (!(error instanceof VendorFailed)) throw error;
-    // The workspace lookup's refusal names its own fix (seat, scope): no capability hint on it,
-    // which the framework would add to a 403 (hintTool names no tool, so it finds none).
+    // The workspace lookup's refusal names its own fix (seat, scope): hintTool "" keeps the
+    // framework from adding the capability's hint to a 403.
     if (error.message.includes(WORKSPACE_PROBLEM))
-      throw new VendorFailed(error.status, error.message, "jira_assets_workspace_lookup");
+      throw new VendorFailed(error.status, error.message, "");
     if (error.status !== 401) throw error;
     const tool = req.method === "PUT" ? "jira_assets_update_object" : "jira_assets_search";
     const hint = ctx.forbidden?.[tool];
@@ -244,14 +244,18 @@ async function statusByName(
 const shownError = (error: unknown) =>
   error instanceof VendorFailed || error instanceof Denied ? error.message : "";
 
-// A Select value as one of its options, in the option's own spelling. Assets keeps the options
-// as one comma-separated text and a comma always separates two (tried live November 8, 2026:
-// with options "Boston, MA,London", "Boston, MA" is refused and "MA" is taken).
+// A Select's options. Assets keeps them as one comma-separated text and a comma always
+// separates two (tried live November 8, 2026: with options "Boston, MA,London", "Boston, MA" is
+// refused and "MA" is taken).
+const selectOptions = (def: Obj): string[] =>
+  typeof def.options === "string" && def.options
+    ? def.options.split(",").map((o: string) => o.trim()).filter(Boolean)
+    : [];
+
+// A Select value as one of its options, in the option's own spelling.
 function selectOption(def: Obj, value: string): string | null {
-  const options = typeof def.options === "string" && def.options ? def.options.split(",") : [];
   const want = value.trim().toLowerCase();
-  const found = options.map((o: string) => o.trim()).find((o: string) => o.toLowerCase() === want);
-  return found ?? null;
+  return selectOptions(def).find((o) => o.toLowerCase() === want) ?? null;
 }
 
 const attributeKind = (a: Obj) =>
@@ -360,7 +364,7 @@ export const assetsTools: Toolset = {
             "List the attributes of a Jira Assets object type (its object_type_id from a search " +
             "or object): name, kind (Text, Date, Select, Status, User, Object reference...), " +
             "whether it can be edited, is required or takes several values, and the options of " +
-            "a Select (comma-separated, as Assets keeps them).",
+            "a Select.",
           inputSchema: z.object({
             object_type_id: z.string().max(20).describe("Object type id, e.g. 23."),
           }),
@@ -376,8 +380,7 @@ export const assetsTools: Toolset = {
                 editable: canEdit(a),
                 required: (a.minimumCardinality ?? 0) > 0,
                 multiple: a.maximumCardinality !== 1,
-                // As Assets keeps them: one comma-separated text, so an option may hold a comma.
-                options: typeof a.options === "string" && a.options ? a.options : null,
+                options: selectOptions(a).length ? selectOptions(a) : null,
                 description: a.description ?? null,
               })),
             ),
@@ -462,7 +465,8 @@ export const assetsTools: Toolset = {
                     const found = selectOption(def, v);
                     if (!found)
                       throw new Denied(
-                        `${def.name} has no option ${v}. Use one of: ${def.options}`,
+                        `${def.name} has no option ${v}. ` +
+                          `Use one of: ${selectOptions(def).join(" | ")}`,
                       );
                     return found;
                   });

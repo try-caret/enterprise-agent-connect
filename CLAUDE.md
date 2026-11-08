@@ -302,7 +302,8 @@ connectors/<id>/connector.json # one per app: logo (admin /brand path), setup st
                       # capabilities → tools + vendor scopes (+ token `roles` when they differ;
                       # connector-level `scopes`: needed whatever is ticked, e.g. Teams' target search)
                       # + in-app permissions + step fills, value limits (`discover.limit`: the
-                      # one list limit its values are choices for; none: any), `events` (types, kept
+                      # one list limit its values are choices for; none: any; every connector with
+                      # a discover and two or more list limits names it), `events` (types, kept
                       # fields, limit fields, self, webhook proof and steps, poll, graph, thread; docs/triggers.md), verify/discover
                       # probes, optional `provider`, `siteAccess` (grant steps and a note to
                       # IT per added site). Fields may be choices (`options`, the first the

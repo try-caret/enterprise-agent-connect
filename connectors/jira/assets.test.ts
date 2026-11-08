@@ -323,7 +323,7 @@ test("jira_assets_list_attributes lists names and kinds, and refuses another sch
   assert.equal(byName.Status.kind, "Status");
   assert.equal(byName.Recipient.kind, "User");
   assert.equal(byName["Date Received"].kind, "Date");
-  assert.equal(byName.Location.options, "Boston, London,Needham, MA");
+  assert.deepEqual(byName.Location.options, ["Boston", "London", "Needham", "MA"]);
   assert.equal(byName.Key.editable, false);
   const other = await call(h, key, "jira_assets_list_attributes", { object_type_id: "77" });
   assert.match(other.text!, /not in an object schema this agent may use/);
@@ -584,7 +584,7 @@ test("jira_assets_update_object checks Select options, refuses references and an
   const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
   const { sent } = assets(h);
   const refused: [object, RegExp][] = [
-    [{ Location: "Paris" }, /no option Paris. Use one of: Boston, London,Needham, MA/],
+    [{ Location: "Paris" }, /no option Paris\. Use one of: Boston \| London \| Needham \| MA$/],
     [{ Owner: "IT-12" }, /Owner links to other objects/],
     [{ Status: "In use", status: "In use" }, /Status is named twice/],
   ];

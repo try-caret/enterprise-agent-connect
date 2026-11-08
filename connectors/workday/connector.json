@@ -182,6 +182,7 @@
   },
   "discover": {
     "label": "Reports agents can run",
+    "limit": "reports",
     "check": "reports"
   },
   "revoke": "In Workday, open View API Clients, then API Clients for Integrations, then {brand.microsoft.appName}, and revoke its refresh token under Manage Refresh Tokens for Integrations, or inactivate the integration system user."

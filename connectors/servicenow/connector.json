@@ -222,6 +222,7 @@
     "method": "GET",
     "path": "/api/now/table/sys_user_group?sysparm_query=active%3Dtrue%5EORDERBYname&sysparm_fields=name&sysparm_limit=500",
     "label": "Assignment groups",
+    "limit": "groups",
     "show": "result[].name"
   },
   "revoke": "In ServiceNow, open System OAuth, then Application Registry, and set the {brand.microsoft.appName} entry to inactive, or open User Administration, then Users, and set the {brand.microsoft.appName} user to inactive."

@@ -137,7 +137,11 @@ export async function audited(
       return fail(error.message);
     }
     if (error instanceof VendorFailed) {
-      const hint = error.status === 403 ? ctx.forbidden?.[error.hintTool ?? tool] : undefined;
+      // hintTool "" means the failure names its own fix: no capability hint is added.
+      const hint =
+        error.status === 403 && error.hintTool !== ""
+          ? ctx.forbidden?.[error.hintTool ?? tool]
+          : undefined;
       const message = hint ? `${error.message.replace(/\.$/, "")}. ${hint}` : error.message;
       await ctx.audit({
         tool,
