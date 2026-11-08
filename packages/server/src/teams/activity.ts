@@ -199,7 +199,6 @@ export type DecideInput = {
 
 const list = (v: string[] | string | undefined) => (Array.isArray(v) && v.length ? v : null);
 
-/** In order, first match wins; each refusal is recorded as the reason. */
 // Past a limit: why the message was not answered, and what the person is told.
 export const CAP_LIMITS = {
   hour: {
@@ -216,6 +215,7 @@ export const CAP_LIMITS = {
   },
 };
 
+/** In order, first match wins; each refusal is recorded as the reason. */
 export function decide(input: DecideInput): Decision {
   const { activity: a, place, trigger } = input;
   const ignore = (reason: string): Decision => ({ action: "ignore", reason });
