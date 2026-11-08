@@ -157,8 +157,9 @@ run its runner did not take is handed over again (Trigger runners).
 Option `onError` (no environment variable; a host wraps `serveFromEnv` from
 `@arbium/enterprise-agent-connect/server`): called once per failure as it happens
 (packages/server/src/report.ts, README "Error reporting": the kinds, ids and error
-class/code/status only, never a message; once a minute per kind and app; a throwing hook is
-logged, never passed on); left out, nothing is called.
+class/code/status only, never a message; once a minute per kind, app, organization,
+subscription and bot; a throwing or rejecting hook is logged, never passed on); left out,
+nothing is called.
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
 multi-tenant Entra app instead of the customer's own, and then needs
 `MICROSOFT_SHARED_APP_CLIENT_ID` / `MICROSOFT_SHARED_APP_CLIENT_SECRET`: only for a deployment
@@ -170,7 +171,7 @@ a deprecation line in the log (server.ts `renamed`; drop it in the release after
 recorded or read only (an app page or the Integrations tab; only over the credential it read, so a
 reconnect meanwhile wins). Teams bot credentials
 (`teams_bots`), Claude keys (`providers`, provider `anthropic`), trigger signing secrets
-(`teams_triggers.secret`) and app event webhook and trigger secrets (`event_subscriptions.secret`,
+(`teams_triggers.secret`), files waiting in `teams_file_offers` and app event webhook and trigger secrets (`event_subscriptions.secret`,
 `event_triggers.secret`) are re-sealed by a pass at startup while `CONNECT_ENCRYPTION_KEY_PREVIOUS` is set. Drop the
 previous key once every row's `credential_key_id` is the new one in `connections`,
 `providers` and `teams_bots`. Approvals in flight during a rotation must be restarted.
@@ -379,7 +380,8 @@ packages/server/src/builtin.ts # the built-in connectors' modules (connectors/<i
                       # describedApp(id): a built-in with only a connector.json `http` block
 packages/connector-kit/src/branding.ts # names shown and created in tenants (BRANDING), {brand.*} placeholders
 packages/server/src/server.ts # the container's entry: env (old names for one release) → createAgentConnect, listen;
-                      # exported as serveFromEnv(overrides) ("./server") for hosts adding onError
+                      # exported as serveFromEnv(overrides) ("./server") for hosts adding onError;
+                      # runs as the entry also through a symlink (argv[1] resolved)
 packages/server/src/app.ts # HTTP routing, agent auth, admin API handlers (typed against api.ts)
 packages/server/src/api.ts # the admin API's contract: every route, its body and answer schemas
 packages/server/src/openapi.ts # openapi.json from api.ts (zod's toJSONSchema; named shapes as components)
@@ -424,7 +426,7 @@ connectors/http/      # the generic module for a connector.json `http` block; ex
                       # marks a POST search read-only to clients; a param's `pattern` (a string's
                       # regex, checked by the tool's schema); a tool's `binary` (a GET answering
                       # a file: any type, read up to MAX_BINARY_BYTES by a second guarded fetch,
-                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls); a tool's `text` (a GET whose answer, e.g. a file, is handed back as the app sent it, never parsed as JSON: request `responseType: "text"`). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
                       # connector-kit oauth.ts jwtAssertion, http blocks only);
                       # openapi.ts: draftConnector (the OpenAPI drafter the script and the
                       # admin API's internal app drafts share)
@@ -488,7 +490,8 @@ packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window
                       # admin.ts (subscriptions, triggers, runs, secret re-seal), store.ts
 packages/server/src/queue.ts # the one-process queue worker Teams and app events share
 packages/server/src/report.ts # onError: AgentConnectError per failure (kind, id tags, class/code/
-                      # status, frames), a per-kind-and-app minute limit; the store wrapper
+                      # status, frames), a minute limit per kind, app, org, subscription and
+                      # bot; the store wrapper
                       # reporting audited vendor 401/403s
 deploy/docker/        # Dockerfile (context: the repository root),
                       # docker-compose.yml (Postgres + the service) and .env.example
@@ -1649,10 +1652,11 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
 id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resourcePrefix`) and Teams channel through a custom role on
   `azureResourceGroup`), retries the bot's sign-in while Microsoft replicates (then says it is
   waiting; running it again makes nothing twice), and keeps `appObjectId`, `appId`, `azureBot`,
-  `catalogAppId`, `publishedVersion` in the bot's config. Publishing needs an administrator's
+  `catalogAppId`, `publishedVersion` in the bot's config (`scriptVersion`, the package the setup
+  script published, when the admin pastes its app id back). Publishing needs an administrator's
   delegated AppCatalog.ReadWrite.All sign-in (signed state + browser nonce as for the shared-app
   approval; id token checked for app, tenant, nonce, expiry, no guest); installs consent to the
-  package's RSC list. Not for a connection on the shared app. The teams connector's `scopes`
+  package's RSC list, and one already there that lacks part of it is upgraded (`updated`). Not for a connection on the shared app. The teams connector's `scopes`
   (those permissions plus Team.ReadBasic.All and User.ReadBasic.All for the picker) are expected
   by every Teams ceiling's permission check; TeamsAppInstallation.ReadWriteAndConsentForUser.All
   only with the page's choice `person_installs` = `on` (kept in the teams connection's config;

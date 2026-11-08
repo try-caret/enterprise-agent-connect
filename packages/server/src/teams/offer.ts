@@ -132,7 +132,7 @@ export async function downloadFile(
   }
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+  for await (const chunk of (res.body ?? []) as unknown as AsyncIterable<Uint8Array>) {
     size += chunk.length;
     if (size > max) throw tooBig();
     chunks.push(chunk);

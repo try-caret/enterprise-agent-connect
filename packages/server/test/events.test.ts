@@ -828,6 +828,21 @@ test(
   },
 );
 
+test("a run whose row cannot be written is reported", { skip: !sql }, async () => {
+  const f = fakeRunner();
+  const t = await setup([f.runner]);
+  const { subscription, secret } = await t.subscribe();
+  await t.trigger();
+  t.events.startRun = async () => {
+    throw new Error("the database is gone");
+  };
+  assert.equal(await t.deliver(subscription.id, secret!, item()), 200);
+  const start = t.reports.find((r) => r.kind === "event_run_start_failed")!;
+  assert.deepEqual(start.tags, { app: "tracker", org: t.org, agent: t.agentId, runner: "fake" });
+  assert.match((start.error as Error).message, /database is gone/);
+  assert.equal(f.started.length, 0);
+});
+
 // A signed webhook runner whose receiver answers each event post with the next of `answers`
 // (200 once they run out), recording the delivery header and body.
 async function flakyReceiver(answers: number[], opts: { retryWindowMs?: number } = {}) {
@@ -925,7 +940,10 @@ test(
     await lost.t.runtime.retryDue();
     const [failed] = await lost.t.runs();
     assert.equal(failed.state, "failed");
-    assert.equal(failed.error, "No longer allowed: Not started: the agent has no access to Tracker");
+    assert.equal(
+      failed.error,
+      "No longer allowed: Not started: the agent has no access to Tracker",
+    );
     assert.equal(lost.posts.length, 1);
     assert.deepEqual(
       lost.t.reports.map((r) => r.kind),
@@ -978,28 +996,24 @@ test(
   },
 );
 
-test(
-  "an event run taken on a late attempt has its full 30 minutes",
-  { skip: !sql },
-  async () => {
-    const f = fakeRunner();
-    let refusals = 1;
-    const startEvent = f.runner.startEvent!;
-    f.runner.startEvent = async (input) => {
-      if (refusals-- > 0) throw new RetryLater("not yet");
-      return startEvent(input);
-    };
-    const t = await setup([f.runner], undefined, undefined, { retryWindowMs: 3600_000 });
-    const { subscription, secret } = await t.subscribe();
-    await t.trigger();
-    await t.deliver(subscription.id, secret!, item());
-    await sql!`update agent_connect.event_runs
+test("an event run taken on a late attempt has its full 30 minutes", { skip: !sql }, async () => {
+  const f = fakeRunner();
+  let refusals = 1;
+  const startEvent = f.runner.startEvent!;
+  f.runner.startEvent = async (input) => {
+    if (refusals-- > 0) throw new RetryLater("not yet");
+    return startEvent(input);
+  };
+  const t = await setup([f.runner], undefined, undefined, { retryWindowMs: 3600_000 });
+  const { subscription, secret } = await t.subscribe();
+  await t.trigger();
+  await t.deliver(subscription.id, secret!, item());
+  await sql!`update agent_connect.event_runs
                   set started_at = now() - interval '40 minutes', next_attempt_at = now()
                 where agent_id = ${t.agentId}`;
-    await t.runtime.retryDue();
-    assert.equal(f.started.length, 1);
-    assert.equal((await t.runs())[0].state, "running");
-    await t.runtime.watch();
-    assert.equal((await t.runs())[0].state, "running");
-  },
-);
+  await t.runtime.retryDue();
+  assert.equal(f.started.length, 1);
+  assert.equal((await t.runs())[0].state, "running");
+  await t.runtime.watch();
+  assert.equal((await t.runs())[0].state, "running");
+});

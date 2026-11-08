@@ -567,16 +567,44 @@ export const teamsTools: Toolset = {
               await teams.releaseReply(run.id);
               throw error;
             }
-            for (const f of files)
-              ok(
-                await teams.offerFile({
-                  conversation: place,
-                  recipientAadId: place.userAadId!,
-                  ...f,
-                }),
-                mark,
-              );
-            return json({ replied: true, ...(files.length ? { files_offered: files.length } : {}) });
+            // The reply is used now, so a file whose card fails is told, not thrown.
+            const notSent: { name: string; reason: string }[] = [];
+            for (const f of files) {
+              try {
+                ok(
+                  await teams.offerFile({
+                    conversation: place,
+                    recipientAadId: place.userAadId!,
+                    ...f,
+                  }),
+                  mark,
+                );
+              } catch (error) {
+                notSent.push({
+                  name: f.name,
+                  reason: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            // The person is told which files are missing; the agent, whether that note got there.
+            const told =
+              notSent.length > 0 &&
+              (await teams
+                .post(
+                  place.serviceUrl,
+                  run.threadId,
+                  `I couldn't send ${notSent.map((f) => f.name).join(", ")}.`,
+                  run.triggerActivityId,
+                )
+                .then(
+                  (r) => r.status >= 200 && r.status < 300,
+                  () => false,
+                ));
+            return json({
+              replied: true,
+              ...(files.length ? { files_offered: files.length - notSent.length } : {}),
+              ...(notSent.length ? { files_not_sent: notSent, person_told: told } : {}),
+            });
           }),
       );
 

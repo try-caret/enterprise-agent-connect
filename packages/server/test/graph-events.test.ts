@@ -8,6 +8,7 @@ import type { VendorRequest, VendorResponse } from "../../connector-kit/src/type
 import { createApp } from "../src/app.ts";
 import { createEventsAdmin } from "../src/events/admin.ts";
 import { createEventsRuntime } from "../src/events/runtime.ts";
+import type { ReportTags } from "../src/report.ts";
 import { createEventsStore } from "../src/events/store.ts";
 import { migrate } from "../src/migrate.ts";
 import { CredentialKey } from "../src/secrets.ts";
@@ -113,13 +114,22 @@ function fakeGraph() {
   const subscriptions = new Map<string, Record<string, unknown>>();
   let made = 0;
   let renew = 200;
+  let refuseDuplicates = false;
   let deltaPages: VendorResponse[] = [];
   async function appCall(_org: string, _app: string, req: VendorRequest) {
     calls.push(req);
     if (req.path === "/v1.0/subscriptions" && req.method === "POST") {
-      const id = `g-${++made}`;
       const body = req.body as Record<string, unknown>;
-      subscriptions.set(id, body);
+      // Graph refuses a second subscription to the same resource and change type, and its
+      // answers take a while (Graph checks the notification URL first).
+      const duplicate = [...subscriptions.values()].some(
+        (s) => s.resource === body.resource && s.changeType === body.changeType,
+      );
+      const id = `g-${++made}`;
+      if (!(refuseDuplicates && duplicate)) subscriptions.set(id, body);
+      if (refuseDuplicates) await new Promise((r) => setTimeout(r, 50));
+      if (refuseDuplicates && duplicate)
+        return { status: 409, data: { error: { code: "Conflict" } } };
       return { status: 201, data: { id, expirationDateTime: body.expirationDateTime } };
     }
     const sub = /^\/v1\.0\/subscriptions\/(.+)$/.exec(req.path);
@@ -150,6 +160,7 @@ function fakeGraph() {
     messages,
     subscriptions,
     setRenew: (status: number) => (renew = status),
+    refuseDuplicates: () => (refuseDuplicates = true),
     setDelta: (pages: VendorResponse[]) => (deltaPages = pages),
   };
 }
@@ -173,6 +184,7 @@ async function setup(runner: TriggerRunner) {
              values (${org}, 'mailer', ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["read"])})`;
   const agentId = await agent("Helper", MAILBOX);
   const graph = fakeGraph();
+  const reports: { kind: string; tags?: ReportTags }[] = [];
   const deps = {
     store,
     events,
@@ -181,6 +193,7 @@ async function setup(runner: TriggerRunner) {
     appCall: graph.appCall,
     runners: new Map([[runner.id, runner]]),
     publicUrl: PUBLIC,
+    report: (kind: string, _error: unknown, tags?: ReportTags) => reports.push({ kind, tags }),
   };
   const runtime = createEventsRuntime(deps);
   const admin = createEventsAdmin({ ...deps, runtime });
@@ -259,6 +272,7 @@ async function setup(runner: TriggerRunner) {
     notify,
     audit,
     graph,
+    reports,
   };
 }
 
@@ -656,3 +670,47 @@ test("an app's graph block needs its limit, so no trigger hears another agent's 
     /thread name fields/,
   );
 });
+
+test("a Graph catch-up Microsoft refuses is reported with its status", { skip: !sql }, async () => {
+  const t = await setup(fakeRunner().runner);
+  const { subscription } = await t.subscribe();
+  await t.trigger();
+  t.graph.setDelta([{ status: 403, data: null }]);
+  await t.runtime.syncApp(t.org, "mailer");
+  assert.deepEqual(
+    t.reports.filter((r) => r.kind === "event_poll_failed").map((r) => r.tags),
+    [{ app: "mailer", org: t.org, subscription: subscription.id, source: "graph", status: 403 }],
+  );
+});
+
+test(
+  "a trigger change during a scheduled sync keeps the watch's Graph subscription",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup(f.runner);
+    const { subscription } = await t.subscribe();
+    await t.trigger();
+    t.graph.refuseDuplicates();
+    // The watch needs a subscription again (as after a failed one) when both syncs start.
+    t.graph.subscriptions.clear();
+    await sql!`update agent_connect.event_watches set remote_id = null, expires_at = null
+                where subscription_id = ${subscription.id}`;
+    await sql!`update agent_connect.event_subscriptions set polled_at = null
+                where id = ${subscription.id}`;
+    await Promise.all([t.runtime.pollDue(), t.runtime.syncApp(t.org, "mailer")]);
+
+    const posts = t.graph.calls.filter(
+      (c) => c.method === "POST" && c.path === "/v1.0/subscriptions",
+    );
+    assert.equal(posts.length, 2, "one at the trigger, one again: no duplicate");
+    const [w] = await t.watches(subscription.id);
+    assert.equal(w.subscribed, true);
+    assert.equal(w.lastError, null);
+    const [remote] = t.graph.subscriptions.keys();
+    const [clientState] = [...t.graph.subscriptions.values()].map((s) => String(s.clientState));
+    t.graph.messages.set("m-race", message("m-race"));
+    assert.equal(await t.notify(subscription.id, [created(remote, clientState, "m-race")]), 202);
+    assert.equal(f.started.length, 1, "the notification found its watch");
+  },
+);

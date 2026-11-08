@@ -221,12 +221,17 @@ async function createEvent(
   const error = (res.data as { error?: { code?: string; message?: string } } | null)?.error;
   if (transactionId && (res.status === 409 || /transaction/i.test(error?.code ?? ""))) {
     const filter = `subject eq '${String(body.subject).replaceAll("'", "''")}'`;
-    const found = await ok(ctx, mark, {
-      method: "GET",
-      path: `${mailboxPath(ctx)}/events?$filter=${encodeURIComponent(filter)}&$select=id,transactionId&$top=100`,
-    });
-    const same = (found.value as Event[]).find((e) => e.transactionId === transactionId);
-    if (same) return { id: same.id, existing: true };
+    let cursor: string | undefined;
+    do {
+      const query = [`$filter=${encodeURIComponent(filter)}`, "$select=id,transactionId", "$top=100"];
+      const found = await ok(ctx, mark, {
+        method: "GET",
+        path: `${mailboxPath(ctx)}/events?${[...query, ...pageParam(cursor)].join("&")}`,
+      });
+      const same = (found.value as Event[]).find((e) => e.transactionId === transactionId);
+      if (same) return { id: same.id, existing: true };
+      cursor = nextPage(found) ?? undefined;
+    } while (cursor);
   }
   throw new VendorFailed(
     res.status,

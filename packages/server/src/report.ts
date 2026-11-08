@@ -38,15 +38,17 @@ export function errorReporter(
   const last = new Map<string, number>();
 
   return (kind, error, tags = {}) => {
-    // Per kind and app, so one broken app neither floods the sink nor hides another.
-    const limitKey = `${kind}\0${tags.app ?? ""}`;
+    // Per kind, app, organization, subscription and bot: one broken one neither floods the sink
+    // nor hides another (a poll failure is reported only when it starts).
+    const limitKey = [kind, tags.app, tags.org, tags.subscription, tags.bot].join("\0");
     const at = now();
     if (at - (last.get(limitKey) ?? -Infinity) < PER_KIND_MS) return;
     last.set(limitKey, at);
     const e = error instanceof Error ? (error as Error & { code?: unknown; status?: unknown }) : null;
     const status = typeof e?.status === "number" ? e.status : Number(tags.status) || undefined;
+    const failed = (err: unknown) => log.error(`[agent-connect] onError failed for ${kind}`, err);
     try {
-      onError({
+      const sent = onError({
         kind,
         tags: Object.fromEntries(
           Object.entries(tags)
@@ -59,8 +61,10 @@ export function errorReporter(
         frames: e?.stack ? frames(e.stack) : undefined,
         timestamp: new Date(at).toISOString(),
       });
+      // An async hook that rejects: logged, never an unhandled rejection.
+      void Promise.resolve(sent).catch(failed);
     } catch (err) {
-      log.error(`[agent-connect] onError threw for ${kind}`, err);
+      failed(err);
     }
   };
 }

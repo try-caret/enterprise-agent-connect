@@ -214,7 +214,11 @@ export function createGraphSource(deps: GraphDeps) {
   }
 
   /** Makes the watch's Graph subscription, or renews it (which also reauthorizes it). */
-  async function subscribe(sub: SubscriptionRow, g: Graph, watch: WatchRow) {
+  async function subscribe(
+    sub: SubscriptionRow,
+    g: Graph,
+    watch: WatchRow,
+  ): Promise<number | undefined> {
     const expires = new Date(Date.now() + g.maxMinutes * 60_000).toISOString();
     if (watch.remoteId) {
       const res = await call(sub, {
@@ -222,8 +226,14 @@ export function createGraphSource(deps: GraphDeps) {
         path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
         body: { expirationDateTime: expires },
       });
-      if (ok(res)) return events.watchSubscribed(watch.id, watch.remoteId, expires, null);
-      if (res?.status !== 404) return events.watchFailed(watch.id, `Renewing: ${why(res)}`);
+      if (ok(res)) {
+        await events.watchSubscribed(watch.id, watch.remoteId, expires, null);
+        return undefined;
+      }
+      if (res?.status !== 404) {
+        await events.watchFailed(watch.id, `Renewing: ${why(res)}`);
+        return res?.status;
+      }
     }
     const url = urlOf(sub);
     const res = await call(sub, {
@@ -239,15 +249,22 @@ export function createGraphSource(deps: GraphDeps) {
       },
     });
     const remoteId = ok(res) ? rawAt(res!.data, "id") : null;
-    if (typeof remoteId !== "string")
-      return events.watchSubscribed(watch.id, null, null, `Subscribing: ${why(res)}`);
+    if (typeof remoteId !== "string") {
+      await events.watchSubscribed(watch.id, null, null, `Subscribing: ${why(res)}`);
+      return res?.status;
+    }
     const at = rawAt(res!.data, "expirationDateTime");
     await events.watchSubscribed(watch.id, remoteId, typeof at === "string" ? at : expires, null);
+    return undefined;
   }
 
   /** Reads the delta from the watch's cursor (from its start the first time) and offers each
    *  item; what notifications already queued is a repeat. */
-  async function catchUp(sub: SubscriptionRow, connector: Connector, watch: WatchRow) {
+  async function catchUp(
+    sub: SubscriptionRow,
+    connector: Connector,
+    watch: WatchRow,
+  ): Promise<number | undefined> {
     const g = connector.events!.graph!;
     let link =
       watch.cursor ??
@@ -261,10 +278,14 @@ export function createGraphSource(deps: GraphDeps) {
         path: link,
       } as VendorRequest);
       // A delta link Graph no longer knows: start again from the watch's start.
-      if (res?.status === 410) return events.watchCaughtUp(watch.id, null);
+      if (res?.status === 410) {
+        await events.watchCaughtUp(watch.id, null);
+        return undefined;
+      }
       if (!ok(res)) {
         await events.watchFailed(watch.id, `Catching up: ${why(res)}`);
-        return failed(sub, `delta ${watch.value}`, why(res), res?.status);
+        await failed(sub, `delta ${watch.value}`, why(res), res?.status);
+        return res?.status;
       }
       const items = rawAt(res!.data, "value");
       for (const item of Array.isArray(items) ? items : [])
@@ -274,13 +295,15 @@ export function createGraphSource(deps: GraphDeps) {
       const after = typeof next === "string" ? next : typeof delta === "string" ? delta : null;
       if (!after) {
         await events.watchFailed(watch.id, "Catching up: Microsoft gave no next or delta link");
-        return failed(sub, `delta ${watch.value}`, "No next or delta link");
+        await failed(sub, `delta ${watch.value}`, "No next or delta link");
+        return undefined;
       }
       link = pathOf(after);
       if (typeof next !== "string") break;
     }
     // A round longer than the pages read continues from its next link next time.
     await events.watchCaughtUp(watch.id, link);
+    return undefined;
   }
 
   // The values of the `per` limit agents with a trigger on hold now.
@@ -306,24 +329,53 @@ export function createGraphSource(deps: GraphDeps) {
     await events.removeWatch(watch.id);
   }
 
+  /** Watches exactly the values agents with a trigger hold, renews subscriptions past half
+   *  their life, and catches each one up. */
+  /** Watches exactly the values agents with a trigger hold, renews subscriptions past half their
+   *  life, and catches each one up. Answers the first failing watch's error and the HTTP status of
+   *  this round's first refused call. */
+  async function syncOnce(sub: SubscriptionRow, connector: Connector) {
+    const g = connector.events!.graph!;
+    const want = await wanted(sub, g);
+    for (const w of await events.watches(sub.id)) if (!want.has(w.value)) await release(sub, w);
+    for (const v of want) await events.addWatch(sub.id, v);
+    const halfLife = (g.maxMinutes * 60_000) / 2;
+    let status: number | undefined;
+    for (const w of await events.watches(sub.id)) {
+      if (!w.remoteId || !w.expiresAt || Date.parse(w.expiresAt) - Date.now() < halfLife) {
+        const refused = await subscribe(sub, g, w);
+        status ??= refused;
+      }
+      const refused = await catchUp(sub, connector, w);
+      status ??= refused;
+    }
+    const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
+    return {
+      error: errors.length ? `${errors[0].value}: ${errors[0].lastError}` : null,
+      status,
+    };
+  }
+
+  // One sync per subscription at a time (the service runs as one replica): the poll scheduler
+  // and a trigger change can both start one, and two would each make a Graph subscription for
+  // the same watch, the one refused clearing the other's id.
+  const syncing = new Map<string, ReturnType<typeof syncOnce>>();
+
   return {
     inbound,
-    /** Watches exactly the values agents with a trigger hold, renews subscriptions past half
-     *  their life, and catches each one up. On the poll scheduler and after trigger changes. */
-    async sync(sub: SubscriptionRow, connector: Connector) {
-      const g = connector.events!.graph!;
-      const want = await wanted(sub, g);
-      for (const w of await events.watches(sub.id)) if (!want.has(w.value)) await release(sub, w);
-      for (const v of want) await events.addWatch(sub.id, v);
-      const halfLife = (g.maxMinutes * 60_000) / 2;
-      for (const w of await events.watches(sub.id)) {
-        if (!w.remoteId || !w.expiresAt || Date.parse(w.expiresAt) - Date.now() < halfLife)
-          await subscribe(sub, g, w);
-        await catchUp(sub, connector, w);
-      }
-      // The subscription's error, the first failing watch's (null when none is).
-      const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
-      return errors.length ? `${errors[0].value}: ${errors[0].lastError}` : null;
+    /** On the poll scheduler and after trigger changes. One started while another runs waits
+     *  for it, then runs on what changed meanwhile. */
+    sync(sub: SubscriptionRow, connector: Connector) {
+      // The earlier sync's failure went to its own caller.
+      const run = (syncing.get(sub.id) ?? Promise.resolve())
+        .catch(() => {})
+        .then(() => syncOnce(sub, connector));
+      syncing.set(sub.id, run);
+      const done = () => {
+        if (syncing.get(sub.id) === run) syncing.delete(sub.id);
+      };
+      run.then(done, done);
+      return run;
     },
     /** Removes every watch's Graph subscription, before the organization's goes. */
     async releaseAll(sub: SubscriptionRow) {

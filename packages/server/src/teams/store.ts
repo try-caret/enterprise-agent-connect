@@ -79,6 +79,10 @@ export type TriggerRow = {
 
 export type FileOfferRow = {
   id: string;
+  botId: string;
+  conversationId: string;
+  recipientAadId: string;
+  expiresAt: string;
   name: string;
   size: number;
   content: Buffer;
@@ -853,7 +857,6 @@ export function createTeamsStore(sql: Sql, schema: string) {
       sealed: { ciphertext: Buffer; keyId: string };
       hours: number;
     }): Promise<void> {
-      await sql`delete from ${t.teams_file_offers} where expires_at <= now()`;
       await sql`
         insert into ${t.teams_file_offers}
           (id, bot_id, conversation_id, service_url, recipient_aad_id, name, size, content,
@@ -879,9 +882,52 @@ export function createTeamsStore(sql: Sql, schema: string) {
         delete from ${t.teams_file_offers}
          where bot_id = ${botId} and id = ${id} and conversation_id = ${conversationId}
            and recipient_aad_id = ${aadId} and expires_at > now()
-        returning id::text as id, name, size, content, content_key_id as "contentKeyId",
+        returning id::text as id, bot_id::text as "botId", conversation_id as "conversationId",
+                  recipient_aad_id::text as "recipientAadId", expires_at::text as "expiresAt",
+                  name, size, content, content_key_id as "contentKeyId",
                   service_url as "serviceUrl"`;
       return row ?? null;
+    },
+
+    // Puts back an accepted offer whose upload failed, so another Accept can retry it.
+    async restoreFileOffer(o: FileOfferRow): Promise<void> {
+      await sql`
+        insert into ${t.teams_file_offers}
+          (id, bot_id, conversation_id, service_url, recipient_aad_id, name, size, content,
+           content_key_id, expires_at)
+        values (${o.id}, ${o.botId}, ${o.conversationId}, ${o.serviceUrl}, ${o.recipientAadId},
+                ${o.name}, ${o.size}, ${o.content}, ${o.contentKeyId}, ${o.expiresAt}::timestamptz)
+        on conflict (id) do nothing`;
+    },
+
+    async pruneFileOffers(): Promise<void> {
+      await sql`delete from ${t.teams_file_offers} where expires_at <= now()`;
+    },
+
+    // Offers still sealed with one of `keyIds`, read one at a time (each up to 25 MB).
+    async staleFileOffers(keyIds: string[]): Promise<string[]> {
+      const rows = await sql<{ id: string }[]>`
+        select id::text from ${t.teams_file_offers} where content_key_id = any(${keyIds})`;
+      return rows.map((r) => r.id);
+    },
+
+    async sealedFileOffer(id: string): Promise<{ content: Buffer; contentKeyId: string } | null> {
+      const [row] = await sql<{ content: Buffer; contentKeyId: string }[]>`
+        select content, content_key_id as "contentKeyId"
+          from ${t.teams_file_offers} where id = ${id}`;
+      return row ?? null;
+    },
+
+    async resealFileOffer(
+      id: string,
+      content: Buffer,
+      contentKeyId: string,
+      replacesKeyId: string,
+    ): Promise<boolean> {
+      const rows = await sql`
+        update ${t.teams_file_offers} set content = ${content}, content_key_id = ${contentKeyId}
+         where id = ${id} and content_key_id = ${replacesKeyId} returning id`;
+      return rows.length > 0;
     },
 
     // ---- the organization's Claude API key (providers, provider anthropic) ----

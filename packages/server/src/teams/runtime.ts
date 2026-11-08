@@ -401,29 +401,48 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       await dropCard();
       return;
     }
-    const work = (async () => {
-      const bytes = Buffer.from(
-        key.open({ ciphertext: offer.content, keyId: offer.contentKeyId }, offerAad(offer.id))
-          .content,
-        "base64",
+    const say = (text: string) =>
+      notice(bot, offer.serviceUrl, place.conversationId, text).catch((e) =>
+        console.error(`[teams] notice for file ${offer.id}`, e),
       );
-      const res = await fetchImpl(target!, {
-        method: "PUT",
-        redirect: "error",
-        headers: {
-          "content-type": "application/octet-stream",
-          "content-range": `bytes 0-${bytes.length - 1}/${bytes.length}`,
-        },
-        body: bytes,
-      });
-      await res.body?.cancel();
-      if (!res.ok) {
-        await audit("denied", `${offer.name}: OneDrive answered ${res.status}`);
-        await notice(
-          bot,
-          offer.serviceUrl,
-          place.conversationId,
-          `I couldn't save ${offer.name} to your OneDrive. Ask me to send it again.`,
+    const work = (async () => {
+      let bytes: Buffer;
+      try {
+        bytes = Buffer.from(
+          key.open({ ciphertext: offer.content, keyId: offer.contentKeyId }, offerAad(offer.id))
+            .content,
+          "base64",
+        );
+      } catch (e) {
+        console.error(`[teams] opening file ${offer.id}`, e);
+        await audit("denied", `${offer.name}: the waiting file could not be opened`);
+        await say(`I couldn't send ${offer.name}. Ask me to send it again.`);
+        await dropCard();
+        return;
+      }
+      let failed: string | null = null;
+      try {
+        const res = await fetchImpl(target!, {
+          method: "PUT",
+          redirect: "error",
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-range": `bytes 0-${bytes.length - 1}/${bytes.length}`,
+          },
+          body: bytes,
+        });
+        await res.body?.cancel();
+        // Teams' upload contract: only 200 and 201 mean the file is complete.
+        if (res.status !== 200 && res.status !== 201) failed = `OneDrive answered ${res.status}`;
+      } catch (e) {
+        failed = `the upload failed: ${e instanceof Error ? e.message : String(e)}`;
+      }
+      if (failed) {
+        // The consent card stays, so the person can accept again.
+        await teams.restoreFileOffer(offer);
+        await audit("denied", `${offer.name}: ${failed}`);
+        await say(
+          `I couldn't save ${offer.name} to your OneDrive. Select Accept on it to try again, or ask me to send it again.`,
         );
         return;
       }
@@ -432,14 +451,22 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         offer.serviceUrl,
         place.conversationId,
         fileInfoCard(upload!, offer.name),
-      );
+      ).catch((e: unknown) => {
+        console.error(`[teams] file card for ${offer.id}`, e);
+        return { status: 0 };
+      });
       if (sent.status < 200 || sent.status >= 300) {
         report("teams_send_failed", null, {
           ...botTags(bot),
           what: "file_card",
           status: sent.status,
         });
-        await audit("denied", `${offer.name} saved, but Teams refused its file card: ${sent.status}`);
+        await audit(
+          "denied",
+          `${offer.name} saved, but Teams refused its file card: ${sent.status}`,
+        );
+        await say(`I saved ${offer.name} to your OneDrive, but couldn't show it here.`);
+        await dropCard();
         return;
       }
       await audit("allowed", `${offer.name} saved to their OneDrive`);
@@ -540,6 +567,9 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     state: AgentTeamsState | null,
     trigger: TriggerRow | null,
     counts: RunCounts,
+    // Without text, only files make it a message; a channel's or group chat's are on Graph. The
+    // caller passes them when it has read them already.
+    early?: TeamsFile[] | null,
   ) {
     const runner = trigger ? deps.runners.get(trigger.runner) : undefined;
     const runnerUnready = !trigger?.enabled
@@ -560,6 +590,8 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       place.teamGroupId =
         (await teams.conversations(bot.id)).find((c) => c.conversationId === place.conversationId)
           ?.teamGroupId ?? null;
+    const files =
+      early !== undefined ? early : a.text?.trim() ? null : await messageFiles(bot, place, a);
     return decide({
       activity: a,
       place,
@@ -571,6 +603,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       trigger,
       runnerUnready,
       counts,
+      hasFiles: Boolean(files?.length),
     });
   }
 
@@ -581,7 +614,8 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     ]);
     const runner = trigger ? deps.runners.get(trigger.runner) : undefined;
     const counts = await teams.runCounts(bot.agentId, bot.id);
-    const decision = await authorize(bot, a, place, state, trigger, counts);
+    const early = a.text?.trim() ? null : await messageFiles(bot, place, a);
+    const decision = await authorize(bot, a, place, state, trigger, counts, early);
     if (decision.action === "ignore")
       return teams.finishEvent(event.id, "ignored", decision.reason);
     if (decision.action === "limit") {
@@ -642,7 +676,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       const channelName = a.channelData?.channel?.name ?? null;
       const context = reusable ? null : await threadContext(bot, place, a.id!);
       if (context?.note) await teams.updateRun(run.id, { note: context.note });
-      const files = await messageFiles(bot, place, a);
+      const files = early ?? (await messageFiles(bot, place, a));
       await teams.setRunFiles(
         run.id,
         files.length ? key.seal({ files: JSON.stringify(files) }, runFilesAad(run.id)) : null,
@@ -938,8 +972,11 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       const base = `/v1.0/teams/${place.teamGroupId}/channels/${encodeURIComponent(place.channelId)}/messages`;
       path = root && root !== a.id ? `${base}/${root}/replies/${a.id}` : `${base}/${a.id}`;
     }
-    const res = await bots.graph(botCredential(key, bot), path);
-    if (res.status !== 200) return [];
+    const res = await bots.graph(botCredential(key, bot), path).catch((error: unknown) => {
+      console.error(`[teams] reading the files of message ${a.id}`, error);
+      return null;
+    });
+    if (res?.status !== 200) return [];
     return graphFiles(res.data as GraphMessage, place.kind === "team" ? "channel" : "groupChat");
   }
 
@@ -1037,7 +1074,10 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
           watch().catch((error) => console.error("[teams] watch", error));
         }, 5000),
         setInterval(
-          () => teams.pruneEvents().catch((error) => console.error("[teams] prune", error)),
+          () =>
+            Promise.all([teams.pruneEvents(), teams.pruneFileOffers()]).catch((error) =>
+              console.error("[teams] prune", error),
+            ),
           3600_000,
         ),
       ];
