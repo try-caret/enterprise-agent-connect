@@ -7,6 +7,8 @@ import {
   promptText,
   type Activity,
 } from "../src/teams/activity.ts";
+import { RSC_PERMISSIONS } from "../src/teams/package.ts";
+import { installBot, type Call } from "../src/teams/provision.ts";
 
 // Files sent with a Teams message: what is kept of them and how the agent is told.
 
@@ -98,4 +100,34 @@ test("the agent is told each file by number, its name quoted, and which it canno
   assert.match(text, /2\. "b\.docx" \(in a group chat: apps cannot open it/);
   assert.doesNotMatch(text, /https:\/\/x/);
   assert.equal(text.split("</teams_files>").length, 2);
+});
+
+test("a team that has the bot already is updated to consent to what it lacks", async () => {
+  const seen: { method: string; path: string; body?: any }[] = [];
+  let granted = ["ChannelMessage.Read.Group", "ChatMessage.Read.Chat"];
+  const call: Call = async (req) => {
+    seen.push({ method: req.method, path: req.path, body: req.body });
+    if (req.method === "POST" && req.path === "/v1.0/teams/t1/installedApps")
+      return { status: 409, data: { error: { code: "Conflict" } } };
+    if (req.method === "GET") {
+      const resourceSpecificPermissions = granted.map((permissionValue) => ({ permissionValue }));
+      const value = [{ id: "inst=1", consentedPermissionSet: { resourceSpecificPermissions } }];
+      return { status: 200, data: { value } };
+    }
+    return { status: 204, data: null };
+  };
+  assert.equal(await installBot(call, "cat-1", "team", "t1"), "updated");
+  const query = new URLSearchParams(seen[1].path.split("?")[1]);
+  assert.equal(query.get("$filter"), "teamsApp/id eq 'cat-1'");
+  assert.equal(seen[2].path, "/v1.0/teams/t1/installedApps/inst%3D1/upgrade");
+  const consented = seen[2].body.consentedPermissionSet.resourceSpecificPermissions;
+  assert.deepEqual(
+    consented.map((p: { permissionValue: string }) => p.permissionValue),
+    RSC_PERMISSIONS,
+  );
+
+  seen.length = 0;
+  granted = [...RSC_PERMISSIONS];
+  assert.equal(await installBot(call, "cat-1", "team", "t1"), "already");
+  assert.equal(seen.length, 2);
 });

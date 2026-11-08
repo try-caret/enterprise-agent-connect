@@ -152,6 +152,7 @@ export const schemas = (() => {
     nextCertificate: CertificateInfo.nullable(),
     madeByService: z.boolean(),
     publishedVersion: z.string().nullable(),
+    scriptVersion: z.string().nullable(),
     packageVersion: z.string(),
   };
   const TeamsBotRecord = named("TeamsBotRecord", z.strictObject(botFields));
@@ -860,7 +861,7 @@ export const routes = {
       id: z.string().max(2000),
       by: name,
     }),
-    responses: { 200: z.strictObject({ result: z.enum(["added", "already"]) }) },
+    responses: { 200: z.strictObject({ result: z.enum(["added", "already", "updated"]) }) },
     teams: true,
   },
   teamsKit: {

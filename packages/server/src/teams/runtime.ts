@@ -386,6 +386,8 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       place.teamGroupId =
         (await teams.conversations(bot.id)).find((c) => c.conversationId === place.conversationId)
           ?.teamGroupId ?? null;
+    // Without text, only files make it a message; a channel's or group chat's are on Graph.
+    const early = a.text?.trim() ? null : await messageFiles(bot, place, a);
     const decision = decide({
       activity: a,
       place,
@@ -397,6 +399,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       trigger,
       runnerUnready,
       counts: await teams.runCounts(bot.agentId, bot.id),
+      hasFiles: Boolean(early?.length),
     });
     if (decision.action === "ignore")
       return teams.finishEvent(event.id, "ignored", decision.reason);
@@ -456,7 +459,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       const channelName = a.channelData?.channel?.name ?? null;
       const context = reusable ? null : await threadContext(bot, place, a.id!);
       if (context?.note) await teams.updateRun(run.id, { note: context.note });
-      const files = await messageFiles(bot, place, a);
+      const files = early ?? (await messageFiles(bot, place, a));
       await teams.setRunFiles(
         run.id,
         files.length ? key.seal({ files: JSON.stringify(files) }, runFilesAad(run.id)) : null,
@@ -634,8 +637,11 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       const base = `/v1.0/teams/${place.teamGroupId}/channels/${encodeURIComponent(place.channelId)}/messages`;
       path = root && root !== a.id ? `${base}/${root}/replies/${a.id}` : `${base}/${a.id}`;
     }
-    const res = await bots.graph(botCredential(key, bot), path);
-    if (res.status !== 200) return [];
+    const res = await bots.graph(botCredential(key, bot), path).catch((error: unknown) => {
+      console.error(`[teams] reading the files of message ${a.id}`, error);
+      return null;
+    });
+    if (res?.status !== 200) return [];
     return graphFiles(res.data as GraphMessage, place.kind === "team" ? "channel" : "groupChat");
   }
 

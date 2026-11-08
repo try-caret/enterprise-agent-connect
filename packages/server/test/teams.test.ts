@@ -36,7 +36,7 @@ const auth = { token: async () => () => {} } as unknown as BotAuth;
 type Sent = { method: string; path: string; body?: any };
 // A Bot Connector that records what was sent. A new channel post answers its thread and
 // activity id, any other post its activity id.
-function fakeBots(sent: Sent[]) {
+function fakeBots(sent: Sent[], graph: BotClient["graph"] = async () => ok) {
   return {
     connector: async (_bot: unknown, _url: string, req: Sent) => {
       sent.push(req);
@@ -47,7 +47,7 @@ function fakeBots(sent: Sent[]) {
         };
       return { status: 200, data: { id: "900", value: [] } };
     },
-    graph: async () => ok,
+    graph,
   } as unknown as BotClient;
 }
 
@@ -78,9 +78,9 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
   return { runner, calls };
 }
 
-async function setup(runners: TriggerRunner[]) {
+async function setup(runners: TriggerRunner[], graph?: BotClient["graph"]) {
   const sent: Sent[] = [];
-  const bots = fakeBots(sent);
+  const bots = fakeBots(sent, graph);
   const store = createStore(sql!, SCHEMA);
   const teams = createTeamsStore(sql!, SCHEMA);
   const org = randomUUID();
@@ -269,6 +269,50 @@ test("a file sent with no text in a direct chat still starts a run", { skip: !sq
   assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"/);
   await t.message("");
   assert.equal((await t.runs()).length, 1);
+});
+
+// A group chat message that names the bot (replies only when mentioned, by default).
+const group = (botAppId: string) => ({
+  conversation: { id: "19:files@thread.v2", conversationType: "groupChat" },
+  entities: [{ type: "mention", mentioned: { id: `28:${botAppId}` } }],
+});
+
+test("a file sent with no text in a group chat starts a run", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-group-file", async (input) => {
+    prompt = input.text;
+  });
+  const asked: string[] = [];
+  const file = { contentType: "reference", name: "r.docx", contentUrl: "https://x.example/r" };
+  const t = await setup([runner], async (_bot, path) => {
+    asked.push(path);
+    return path.endsWith("/messages/act-1") ? { status: 200, data: { attachments: [file] } } : ok;
+  });
+  await t.setRunner("fake-group-file");
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+  assert.match(prompt, /<teams_files>\n1\. "r\.docx" \(in a group chat/);
+  // Graph's copy of the message is read once, before deciding, and reused.
+  assert.equal(asked.filter((p) => p.endsWith("/messages/act-1")).length, 1);
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+});
+
+test("a message whose files cannot be read still reaches the agent", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-graph-down", async (input) => {
+    prompt = input.text;
+  });
+  const t = await setup([runner], async (_bot, path) => {
+    if (/\/messages\/act-\d+$/.test(path)) throw new TypeError("fetch failed");
+    return ok;
+  });
+  await t.setRunner("fake-graph-down");
+  await t.message("hello", group(t.botAppId));
+  const [run] = await t.runs();
+  assert.equal(run.state, "running");
+  assert.match(prompt, /hello/);
+  assert.doesNotMatch(prompt, /teams_files/);
 });
 
 test(

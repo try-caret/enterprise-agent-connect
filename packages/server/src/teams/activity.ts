@@ -193,6 +193,8 @@ export type DecideInput = {
   // Why the trigger's runner cannot answer for the organization now (e.g. no Claude key).
   runnerUnready: string | null;
   counts: { active: number; lastHour: number; spentToday: number };
+  // Files came with it (a channel's or group chat's are only on Graph's copy of the message).
+  hasFiles?: boolean;
 };
 
 const list = (v: string[] | string | undefined) => (Array.isArray(v) && v.length ? v : null);
@@ -211,8 +213,8 @@ export function decide(input: DecideInput): Decision {
   if (a.type !== "message") return ignore(`not a message (${a.type ?? "none"})`);
   if (a.from?.id === self || a.from?.id === a.recipient?.id) return ignore("own message");
   if (a.from?.id?.startsWith("28:") || a.from?.role === "bot") return ignore("from a bot");
-  // A file sent alone in a direct chat is a message too.
-  if (!a.text?.trim() && !directChatFiles(a).length) return ignore("no text");
+  // A file sent alone is a message too.
+  if (!a.text?.trim() && !input.hasFiles && !directChatFiles(a).length) return ignore("no text");
 
   if (a.channelData?.tenant?.id?.toLowerCase() !== input.tenantId) return ignore("other tenant");
   // Whoever asks gets everything the agent may do, so the sender must be known and allowed.

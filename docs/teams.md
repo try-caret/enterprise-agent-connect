@@ -175,8 +175,10 @@ Built by the service per bot, deterministic from the bot row and its grant:
 
 - **Package version** `1.<revision>.<manifest_version>`: the revision is `PACKAGE_REVISION` in
   `package.ts`, raised when the package changes (1: `supportsFiles` and `File.Read.Group`), so
-  every bot reads "Its package changed: publish it again" until it is published again; a team
-  then updates the app to consent to the new permission.
+  every bot reads "Its package changed: publish it again" until it is published again (a bot
+  connected from the setup script keeps the script's version as `scriptVersion`; one set up
+  before that is unknown and asked too); a team then updates the app to consent to the new
+  permission, or the admin adds the bot there again, which upgrades its installation.
 - **Version**: pin `1.24` (October 2025; latest listed is 1.30, August 2026 [7]). RSC needs
   ≥ 1.12 in this `authorization` form [8]; group chat bots need ≥ 1.3 [17]. A pinned, older
   version is what admin tooling has seen longest; bump only when a field needs it.
@@ -321,8 +323,10 @@ Where a file sent to the bot is, and how it is opened (Microsoft's bot file guid
 - **Group chat**: Graph's copy names a file in the sender's OneDrive, which no RSC permission
   reaches: it is listed as one the agent cannot open.
 
-The run keeps its latest message's files (`teams_runs.files`, sealed like a credential, replaced
-with each message) and lists their names in the event text. `teams_get_attachment {reply_token,
+A message with no text starts a run only when files came with it: for a channel or group chat
+Graph's copy is read before deciding (once; the run reuses it). Graph failing to answer lists no
+files rather than failing the run. The run keeps its latest message's files (`teams_runs.files`,
+sealed like a credential, replaced with each message) and lists their names in the event text. `teams_get_attachment {reply_token,
 file}` takes the reply token as `teams_reply` does (6.4: the calling agent's run, the key's
 limits) but uses no reply, and answers `{name, size?, download_url}`; the agent downloads the
 file from its own workspace within the hour. It is part of `respond`.
@@ -690,7 +694,9 @@ the picker. Plain errors: a Graph 403 Authorization_RequestDenied names the miss
 ARM AuthorizationFailed = the role step, MissingSubscriptionRegistration = the register step,
 ResourceGroupNotFound; catalog 403 = not an administrator, 409 = another app with this bot;
 install 403 other than a permission = the organization's app settings block it, 409 = already
-there. Not yet run against a real tenant.
+there: its installation (`$filter=teamsApp/id eq '<catalog id>'`, `$select=consentedPermissionSet`)
+is upgraded (`POST …/installedApps/{id}/upgrade` with the package's RSC list) when it lacks one
+of them, answering `updated`. Not yet run against a real tenant.
 
 ## Approval cards (built 2026-10-25)
 
