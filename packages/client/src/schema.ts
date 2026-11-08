@@ -2205,6 +2205,7 @@ export interface components {
             nextCertificate: components["schemas"]["CertificateInfo"] | null;
             madeByService: boolean;
             publishedVersion: string | null;
+            scriptVersion: string | null;
             packageVersion: string;
             messagingEndpoint: string | null;
             mcpUrl: string | null;
@@ -2230,6 +2231,7 @@ export interface components {
             nextCertificate: components["schemas"]["CertificateInfo"] | null;
             madeByService: boolean;
             publishedVersion: string | null;
+            scriptVersion: string | null;
             packageVersion: string;
         };
         TeamsPlace: {
@@ -5526,7 +5528,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        result: "added" | "already";
+                        result: "added" | "already" | "updated";
                     };
                 };
             };

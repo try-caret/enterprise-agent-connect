@@ -1553,9 +1553,12 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   `teams-bot:<bot id>`). An agent gets Teams tools only once its bot is connected. Capabilities:
   read (list teams, channels, read messages and threads; optional, since whoever messages the
   agent could ask it to read any place it is in), post, respond ("React in real time":
-  `teams_reply`); the connector has no required capability, so an empty choice is refused. Limits `teams` (group ids) and `channels`; either one leaves chats out.
-  The manifest (1.24) always asks for RSC ChannelMessage.Read.Group and ChatMessage.Read.Chat:
-  every message where the bot is added reaches it, and Graph reads only there. Direct chats are
+  `teams_reply`, `teams_get_attachment`); the connector has no required capability, so an empty choice is refused. Limits `teams` (group ids) and `channels`; either one leaves chats out.
+  The manifest (1.24) always asks for RSC ChannelMessage.Read.Group, ChatMessage.Read.Chat and
+  File.Read.Group, with `supportsFiles`: every message where the bot is added reaches it, Graph
+  reads only there, and files sent to it can be opened (docs/teams.md 6.6). The package version
+  is `1.<PACKAGE_REVISION>.<manifest_version>` (package.ts); raising the revision when the
+  package changes makes every bot ask to be published again. Direct chats are
   not readable app-only. Inbound messages go through `decide()` (agent, respond capability,
   trigger on, its runner ready (Claude: the key); loop guard against any bot; tenant; a sender with an Entra id who is in
   allowed people or, with `anyone_in_organization`, a member Teams confirms (same tenant,
@@ -1580,7 +1583,14 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   calling agent's, while the run is running or idle, under 12 h, at most 3 replies per message)
   and posts only to that thread, after the key's limits are checked again and the channel is
   confirmed to be in the team (as for every channel tool: a channel id alone could name another
-  team's); a reply is counted only when its post goes through. A busy thread holds later messages until its session is idle.
+  team's); a reply is counted only when its post goes through. The run keeps its latest
+  message's files sealed (`teams_runs.files`, migration 0010, under
+  `agent-connect:teams-run-files:<run id>`): a direct chat's from the activity's download
+  links, a channel's or group chat's from Graph's copy of the message; the event text lists
+  their names by number. `teams_get_attachment {reply_token, file}` takes the token as
+  `teams_reply` does, uses no reply, and answers a short-lived download link: a direct chat's as
+  it came, a channel's only for a file inside that channel's own files folder (`filesFolder`,
+  then the item at its path, File.Read.Group); a group chat's is refused (no RSC reaches it). A busy thread holds later messages until its session is idle.
   The watcher records a session that goes idle without replying as `no_reply`, one stopped at its
   budget as failed (both with a notice in the thread), interrupts turns running over 30 min, and
   fails runs whose session is gone. A run is `starting` until its message is sent (a continued
@@ -1593,10 +1603,11 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
 id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resourcePrefix`) and Teams channel through a custom role on
   `azureResourceGroup`), retries the bot's sign-in while Microsoft replicates (then says it is
   waiting; running it again makes nothing twice), and keeps `appObjectId`, `appId`, `azureBot`,
-  `catalogAppId`, `publishedVersion` in the bot's config. Publishing needs an administrator's
+  `catalogAppId`, `publishedVersion` in the bot's config (`scriptVersion`, the package the setup
+  script published, when the admin pastes its app id back). Publishing needs an administrator's
   delegated AppCatalog.ReadWrite.All sign-in (signed state + browser nonce as for the shared-app
   approval; id token checked for app, tenant, nonce, expiry, no guest); installs consent to the
-  package's RSC list. Not for a connection on the shared app. The teams connector's `scopes`
+  package's RSC list, and one already there that lacks part of it is upgraded (`updated`). Not for a connection on the shared app. The teams connector's `scopes`
   (those permissions plus Team.ReadBasic.All and User.ReadBasic.All for the picker) are expected
   by every Teams ceiling's permission check; TeamsAppInstallation.ReadWriteAndConsentForUser.All
   only with the page's choice `person_installs` = `on` (kept in the teams connection's config;

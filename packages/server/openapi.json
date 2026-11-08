@@ -4775,7 +4775,8 @@
                       "type": "string",
                       "enum": [
                         "added",
-                        "already"
+                        "already",
+                        "updated"
                       ]
                     }
                   },
@@ -12569,6 +12570,12 @@
               "null"
             ]
           },
+          "scriptVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "packageVersion": {
             "type": "string"
           },
@@ -12609,6 +12616,7 @@
           "nextCertificate",
           "madeByService",
           "publishedVersion",
+          "scriptVersion",
           "packageVersion",
           "messagingEndpoint",
           "mcpUrl",
@@ -12710,6 +12718,12 @@
               "null"
             ]
           },
+          "scriptVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "packageVersion": {
             "type": "string"
           }
@@ -12732,6 +12746,7 @@
           "nextCertificate",
           "madeByService",
           "publishedVersion",
+          "scriptVersion",
           "packageVersion"
         ],
         "additionalProperties": false

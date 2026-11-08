@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { hashReplyToken, looksLikeReplyToken } from "../../packages/server/src/teams/activity.js";
+import {
+  hashReplyToken,
+  looksLikeReplyToken,
+  pathUnder,
+} from "../../packages/server/src/teams/activity.js";
 import {
   APPROVAL_DAYS,
   approvalCard,
@@ -67,6 +71,22 @@ async function team(ctx: ToolContext, id: string): Promise<ConversationRow> {
   const found = (await places(ctx)).teams.find((t) => t.teamGroupId === id.toLowerCase());
   if (!found) throw new Denied("This agent cannot reach that team");
   return found;
+}
+
+// The run a reply token names, and where it is, if this key may still reach it: a token is the
+// only way to the message that started the session (another agent's, an old or a made-up one
+// finds nothing), and the key's limits may have changed since the message arrived.
+async function replyRun(ctx: ToolContext, token: string, mark: (s: number) => void) {
+  if (!looksLikeReplyToken(token)) throw new Denied("That reply token is not valid");
+  const teams = access(ctx);
+  const run = await teams.runForReply(hashReplyToken(token));
+  if (!run) throw new Denied("That reply token is not valid or has expired");
+  const place = (await teams.places()).find((p) => p.conversationId === run.conversationId);
+  if (!place) throw new Denied("The bot is no longer in that conversation");
+  if (place.kind === "team")
+    await channel(ctx, await team(ctx, place.teamGroupId ?? ""), run.threadId.split(";")[0], mark);
+  else if (confined(ctx)) throw new Denied("This agent cannot reach that chat");
+  return { teams, run, place };
 }
 
 // Posts and reads address a channel by its id alone, so it must be one of the team's
@@ -201,6 +221,7 @@ export const teamsTools: Toolset = {
     "teams_read_thread",
     "teams_post_message",
     "teams_reply",
+    "teams_get_attachment",
     "teams_request_approval",
     "teams_get_approval",
   ],
@@ -492,26 +513,8 @@ export const teamsTools: Toolset = {
         (input) =>
           audited(ctx, "teams_reply", null, async (mark, retarget) => {
             const body = text(input.text);
-            if (!looksLikeReplyToken(input.reply_token))
-              throw new Denied("That reply token is not valid");
-            const teams = access(ctx);
-            // Another agent's token, an old one or a made-up one all find nothing.
-            const run = await teams.runForReply(hashReplyToken(input.reply_token));
-            if (!run) throw new Denied("That reply token is not valid or has expired");
+            const { teams, run, place } = await replyRun(ctx, input.reply_token, mark);
             retarget(run.threadId);
-            const place = (await teams.places()).find(
-              (p) => p.conversationId === run.conversationId,
-            );
-            if (!place) throw new Denied("The bot is no longer in that conversation");
-            // The key's limits may have changed since the message arrived.
-            if (place.kind === "team") {
-              await channel(
-                ctx,
-                await team(ctx, place.teamGroupId ?? ""),
-                run.threadId.split(";")[0],
-                mark,
-              );
-            } else if (confined(ctx)) throw new Denied("This agent cannot reach that chat");
             // A reply is used only by a post that went through.
             if (!(await teams.claimReply(run.id)))
               throw new Denied("That reply token is not valid or has expired");
@@ -525,6 +528,58 @@ export const teamsTools: Toolset = {
               throw error;
             }
             return json({ replied: true });
+          }),
+      );
+
+    if (allowed.has("teams_get_attachment"))
+      server.registerTool(
+        "teams_get_attachment",
+        {
+          description:
+            "Get a short-lived download link for a file sent with the Teams message that started this session (listed with it by number). Download it from your own workspace straight away, e.g. `curl -sSfL -o <name> '<download_url>'`: the link works for about an hour.",
+          inputSchema: z.object({
+            reply_token: z.string(),
+            file: z.number().int().min(1).max(50).describe("The file's number in the list"),
+          }),
+          annotations: readOnly,
+        },
+        (input) =>
+          audited(ctx, "teams_get_attachment", null, async (mark, retarget) => {
+            const { teams, run, place } = await replyRun(ctx, input.reply_token, mark);
+            const file = (await teams.files(run))[input.file - 1];
+            if (!file) throw new Denied(`That message has no file ${input.file}`);
+            retarget(`${run.threadId} ${file.name}`);
+            if (file.source === "chat") return json({ name: file.name, download_url: file.url });
+            if (file.source === "groupChat" || place.kind !== "team")
+              throw new Denied(
+                "Apps cannot open files sent in a group chat. Ask for it in a channel or a direct chat.",
+              );
+            // Only a file in the channel's own files folder, through the bot's File.Read.Group.
+            const channelId = encodeURIComponent(run.threadId.split(";")[0]);
+            const folderRes = await teams.graph(
+              `/v1.0/teams/${place.teamGroupId}/channels/${channelId}/filesFolder`,
+            );
+            if (folderRes.status === 403)
+              throw new Denied(
+                "The bot cannot read this team's files yet: publish its Teams app again and update it in the team, so the team allows it to read files.",
+              );
+            const folder = ok(folderRes, mark) as {
+              id: string;
+              webUrl: string;
+              parentReference: { driveId: string };
+            };
+            const path = pathUnder(file.url, folder.webUrl);
+            if (!path) throw new Denied("That file is not in this channel's files");
+            const drive = encodeURIComponent(folder.parentReference.driveId);
+            const at = `${encodeURIComponent(folder.id)}:/${path.map(encodeURIComponent).join("/")}`;
+            const item = ok(await teams.graph(`/v1.0/drives/${drive}/items/${at}`), mark) as {
+              name?: string;
+              size?: number;
+              "@microsoft.graph.downloadUrl"?: string;
+            };
+            const url = item["@microsoft.graph.downloadUrl"];
+            if (!url) throw new Denied("That is a folder, not a file");
+            return json({ name: item.name ?? file.name, size: item.size ?? null, download_url: url });
           }),
       );
   },

@@ -95,8 +95,8 @@ async function catalog(sql: Sql, schema: string) {
 }
 
 // Each table's row count and a hash of every row (without the two never-used columns 0003
-// drops and the runner columns 0004 and 0005 add), so ids, values and ciphertexts are compared byte
-// for byte.
+// drops, the runner columns 0004 and 0005 add and the run files 0010 adds), so ids, values and
+// ciphertexts are compared byte for byte.
 async function contents(sql: Sql, name: (table: string) => string) {
   const out: Record<string, { n: number; hash: string }> = {};
   for (const table of TABLES) {
@@ -104,7 +104,7 @@ async function contents(sql: Sql, name: (table: string) => string) {
       `select count(*)::int as n,
               md5(coalesce(string_agg(r::text, ',' order by r::text), '')) as hash
          from (select to_jsonb(x) - 'access_ceiling' - 'access_level' - 'runner' - 'settings' - 'secret'
-                       - 'secret_key_id' as r from ${name(table)} x) s`,
+                       - 'secret_key_id' - 'files' - 'files_key_id' as r from ${name(table)} x) s`,
     );
     out[table] = { n: row.n, hash: row.hash };
   }

@@ -36,7 +36,7 @@ const auth = { token: async () => () => {} } as unknown as BotAuth;
 type Sent = { method: string; path: string; body?: any };
 // A Bot Connector that records what was sent. A new channel post answers its thread and
 // activity id, any other post its activity id.
-function fakeBots(sent: Sent[]) {
+function fakeBots(sent: Sent[], graph: BotClient["graph"] = async () => ok) {
   return {
     connector: async (_bot: unknown, _url: string, req: Sent) => {
       sent.push(req);
@@ -47,7 +47,7 @@ function fakeBots(sent: Sent[]) {
         };
       return { status: 200, data: { id: "900", value: [] } };
     },
-    graph: async () => ok,
+    graph,
   } as unknown as BotClient;
 }
 
@@ -78,9 +78,9 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
   return { runner, calls };
 }
 
-async function setup(runners: TriggerRunner[]) {
+async function setup(runners: TriggerRunner[], graph?: BotClient["graph"]) {
   const sent: Sent[] = [];
-  const bots = fakeBots(sent);
+  const bots = fakeBots(sent, graph);
   const store = createStore(sql!, SCHEMA);
   const teams = createTeamsStore(sql!, SCHEMA);
   const org = randomUUID();
@@ -136,7 +136,7 @@ async function setup(runners: TriggerRunner[]) {
     });
   let n = 0;
   // A direct message from PERSON, through the bot's inbound route; `message` also waits for it.
-  async function send(text: string) {
+  async function send(text: string, extra: Record<string, unknown> = {}) {
     const activity = {
       type: "message",
       id: `act-${++n}`,
@@ -147,6 +147,7 @@ async function setup(runners: TriggerRunner[]) {
       conversation: { id: "a:chat", conversationType: "personal" },
       channelData: { tenant: { id: TENANT } },
       text,
+      ...extra,
     };
     const res = await runtime.inbound(
       botAppId,
@@ -158,8 +159,8 @@ async function setup(runners: TriggerRunner[]) {
     );
     assert.equal(res.status, 200);
   }
-  async function message(text: string) {
-    await send(text);
+  async function message(text: string, extra: Record<string, unknown> = {}) {
+    await send(text, extra);
     await runtime.idle();
   }
   const runs = async () => teams.recentRuns(org, agentId, 10);
@@ -214,6 +215,105 @@ test(
     assert.equal((await t.runs())[0].state, "idle");
   },
 );
+
+test(
+  "a file sent in a direct chat is listed for the agent and handed over only through its run",
+  { skip: !sql },
+  async () => {
+    const link = "https://contoso-my.sharepoint.com/personal/ann/download.aspx?tempauth=secret";
+    let prompt = "";
+    let files: unknown[] = [];
+    let onStart: (input: RunInput) => Promise<void> = async () => {};
+    const { runner } = fakeRunner("fake-files", (input) => onStart(input));
+    const t = await setup([runner]);
+    const access = t.runtime.access((await t.teams.botById(t.botId))!);
+    onStart = async (input) => {
+      prompt = input.text;
+      files = await access.files((await access.runForReply(hashReplyToken(input.replyToken)))!);
+    };
+    await t.setRunner("fake-files");
+    await t.message("please check", {
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.teams.file.download.info",
+          name: "q3.xlsx",
+          content: { downloadUrl: link, fileType: "xlsx" },
+        },
+      ],
+    });
+    assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"\n<\/teams_files>/);
+    assert.doesNotMatch(prompt, /tempauth/);
+    assert.deepEqual(files, [{ name: "q3.xlsx", source: "chat", url: link }]);
+    const [row] = await sql!`select files from agent_connect.teams_runs where agent_id = ${t.agentId}`;
+    assert.ok(row.files && !Buffer.from(row.files).toString("latin1").includes("tempauth"));
+  },
+);
+
+test("a file sent with no text in a direct chat still starts a run", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-file-only", async (input) => {
+    prompt = input.text;
+  });
+  const t = await setup([runner]);
+  await t.setRunner("fake-file-only");
+  await t.message("", {
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.teams.file.download.info",
+        name: "q3.xlsx",
+        content: { downloadUrl: "https://contoso-my.sharepoint.com/d?tempauth=x" },
+      },
+    ],
+  });
+  assert.equal((await t.runs()).length, 1);
+  assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"/);
+  await t.message("");
+  assert.equal((await t.runs()).length, 1);
+});
+
+// A group chat message that names the bot (replies only when mentioned, by default).
+const group = (botAppId: string) => ({
+  conversation: { id: "19:files@thread.v2", conversationType: "groupChat" },
+  entities: [{ type: "mention", mentioned: { id: `28:${botAppId}` } }],
+});
+
+test("a file sent with no text in a group chat starts a run", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-group-file", async (input) => {
+    prompt = input.text;
+  });
+  const asked: string[] = [];
+  const file = { contentType: "reference", name: "r.docx", contentUrl: "https://x.example/r" };
+  const t = await setup([runner], async (_bot, path) => {
+    asked.push(path);
+    return path.endsWith("/messages/act-1") ? { status: 200, data: { attachments: [file] } } : ok;
+  });
+  await t.setRunner("fake-group-file");
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+  assert.match(prompt, /<teams_files>\n1\. "r\.docx" \(in a group chat/);
+  // Graph's copy of the message is read once, before deciding, and reused.
+  assert.equal(asked.filter((p) => p.endsWith("/messages/act-1")).length, 1);
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+});
+
+test("a message whose files cannot be read still reaches the agent", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-graph-down", async (input) => {
+    prompt = input.text;
+  });
+  const t = await setup([runner], async (_bot, path) => {
+    if (/\/messages\/act-\d+$/.test(path)) throw new TypeError("fetch failed");
+    return ok;
+  });
+  await t.setRunner("fake-graph-down");
+  await t.message("hello", group(t.botAppId));
+  const [run] = await t.runs();
+  assert.equal(run.state, "running");
+  assert.match(prompt, /hello/);
+  assert.doesNotMatch(prompt, /teams_files/);
+});
 
 test(
   "a session stays with the runner that started it when the trigger changes runner",
