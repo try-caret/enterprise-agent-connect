@@ -50,7 +50,7 @@ function shownValue(v: Obj, schemas: string[] | null, reference: boolean): unkno
   if (reference || v?.referencedObject || v?.referencedType === true) {
     if (!allowedSchema(schemas, v?.referencedObject?.objectType?.objectSchemaId))
       return HIDDEN_REFERENCE;
-    return v.displayValue ?? v.referencedObject.label ?? null;
+    return v.displayValue ?? v.referencedObject?.label ?? null;
   }
   if (v?.status) return v.status.name ?? v.displayValue ?? null;
   if (v?.user) return v.user.displayName ?? v.displayValue ?? null;
@@ -395,6 +395,8 @@ export const assetsTools: Toolset = {
                   object: shownObject(after, listLimit(ctx.limits, "asset_schemas")),
                 });
               } catch (error) {
+                if (!shownError(error))
+                  console.error("[agent-connect] jira_assets_update_object read-back failed", error);
                 mark(200);
                 return json({
                   updated,

@@ -540,12 +540,16 @@ test("scopeAql refuses, for a limited agent, AQL that looks through references o
     ['Owner-1.Name = "x"', /dot notation/],
     ['Bürö2.Name = "x"', /dot notation/],
     ['Owner .2FA = "x"', /dot notation/],
+    ['Owner .2 = "x"', /dot notation/],
+    ['"Owner" .2 = "x"', /dot notation/],
+    ['Owner$.5 = "x"', /dot notation/],
+    ['Owne\u0301.2 = "x"', /dot notation/],
   ] as [string, RegExp][])
     assert.throws(() => scopeAql(aql, ["137"]), message, aql);
   // Inside double quotes the same characters are plain text; numbers keep their decimal point.
   assert.equal(
-    scopeAql('Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5 AND Gain > -1.5', ["137"]),
-    'objectSchemaId = 137 AND (Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5 AND Gain > -1.5)',
+    scopeAql('Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5 AND Gain > -1.5 AND Size IN (1.5,2.)', ["137"]),
+    'objectSchemaId = 137 AND (Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5 AND Gain > -1.5 AND Size IN (1.5,2.))',
   );
 });
 
@@ -595,6 +599,18 @@ test("a referenced object outside the agent's schemas is not named", async () =>
   } as any);
   const r = await call(h, key, "jira_assets_get_object", { object_id: "11" });
   assert.equal(r.isError, false, r.text ?? "");
+  // With no schema limit a reference value carrying nothing but its attribute's type is null.
+  const open = harness();
+  const all = open.addAgent(["read", "assets_read"]);
+  const { objects: openObjects } = assets(open);
+  openObjects["11"].attributes.push({
+    objectTypeAttributeId: "8",
+    objectAttributeValues: [{}],
+    objectTypeAttribute: ATTRS.find((d) => d.id === "8"),
+  } as any);
+  const bare = await call(open, all, "jira_assets_get_object", { object_id: "11" });
+  assert.equal(bare.isError, false, bare.text ?? "");
+  assert.equal(bare.data.attributes.Owner, null);
   const hidden = "(an object in a schema this agent may not use)";
   // The last value has no reference marks at all: Owner's definition (type 1) hides it.
   assert.deepEqual(r.data.attributes.Owner, ["Owner 12", hidden, hidden, hidden]);

@@ -8,9 +8,9 @@ const SCHEMA_ID = /^[1-9][0-9]{0,17}$/;
 // A double-quoted string, its backslash escaping any character (line breaks too), as
 // splitOrderBy reads it, so both see the same strings.
 const STRING = /"(?:\\[\s\S]|[^"\\])*"/g;
-// A number with a decimal point, standing alone: not part of a name (letters of any script,
-// digits, _, a quote, a dot, or a hyphen inside a name) on either side.
-const DECIMAL = /(?<![\p{L}\p{N}_".])(?<![\p{L}\p{N}_]-)(?:\d*\.\d+|\d+\.)(?![\p{L}\p{N}_.])/gu;
+// A number with a decimal point where a value starts (after an operator, `(` or `,`, or at the
+// start), with nothing of a name right after it. Anything else with a dot is dot notation.
+const DECIMAL = /(?<=(?:^|[(,=<>!~])\s*-?)(?:\d*\.\d+|\d+\.)(?![\p{L}\p{N}\p{M}_.$])/gu;
 
 export function isSchemaId(id: string): boolean {
   return SCHEMA_ID.test(id);
