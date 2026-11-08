@@ -200,6 +200,22 @@ export type DecideInput = {
 const list = (v: string[] | string | undefined) => (Array.isArray(v) && v.length ? v : null);
 
 /** In order, first match wins; each refusal is recorded as the reason. */
+// Past a limit: why the message was not answered, and what the person is told.
+export const CAP_LIMITS = {
+  hour: {
+    reason: "hourly limit reached",
+    notice: "I've reached my limit for this hour. Please try again later.",
+  },
+  day: {
+    reason: "daily spending limit reached",
+    notice: "I've reached my spending limit for today. Please try again tomorrow.",
+  },
+  concurrent: {
+    reason: "too many conversations at once",
+    notice: "I'm busy in other conversations right now. Please try again in a few minutes.",
+  },
+};
+
 export function decide(input: DecideInput): Decision {
   const { activity: a, place, trigger } = input;
   const ignore = (reason: string): Decision => ({ action: "ignore", reason });
@@ -247,24 +263,7 @@ export function decide(input: DecideInput): Decision {
     return ignore("not mentioned");
 
   const cap = capReached(input.counts, trigger);
-  if (cap === "hour")
-    return {
-      action: "limit",
-      reason: "hourly limit reached",
-      notice: "I've reached my limit for this hour. Please try again later.",
-    };
-  if (cap === "day")
-    return {
-      action: "limit",
-      reason: "daily spending limit reached",
-      notice: "I've reached my spending limit for today. Please try again tomorrow.",
-    };
-  if (cap === "concurrent")
-    return {
-      action: "limit",
-      reason: "too many conversations at once",
-      notice: "I'm busy in other conversations right now. Please try again in a few minutes.",
-    };
+  if (cap) return { action: "limit", ...CAP_LIMITS[cap] };
   return { action: "respond", sender, checkMember: !listed };
 }
 

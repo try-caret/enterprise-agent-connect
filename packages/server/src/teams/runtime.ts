@@ -18,6 +18,7 @@ import {
   type Place,
   type TeamsFile,
   type ThreadMessage,
+  CAP_LIMITS,
 } from "./activity.js";
 import {
   approvalCard,
@@ -73,6 +74,8 @@ const BUDGET_NOTICE = "I stopped because this answer reached its spending limit.
 const NO_REPLY_NOTICE = "I could not answer this one. Ask your admin to check my Teams settings.";
 // A turn still running after this is stopped: it holds a slot and the thread's later messages.
 const STUCK_MS = 30 * 60_000;
+// Under the 5 second tick: of the processes' ticks in one interval, the first makes the pass.
+const WATCH_TURN_SECONDS = 4;
 // How long a passed trigger check is trusted before the next answer checks again.
 const VERIFY_TTL_MS = 60_000;
 // Teams activities are small; anything bigger is not Teams.
@@ -618,10 +621,11 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     const decision = await authorize(bot, a, place, state, trigger, counts, early);
     if (decision.action === "ignore")
       return teams.finishEvent(event.id, "ignored", decision.reason);
-    if (decision.action === "limit") {
-      await limitNotice(bot, a.serviceUrl!, place, place.threadId, decision.notice);
-      return teams.finishEvent(event.id, "ignored", decision.reason);
-    }
+    const limited = async ({ reason, notice }: { reason: string; notice: string }) => {
+      await limitNotice(bot, a.serviceUrl!, place, place.threadId, notice);
+      return teams.finishEvent(event.id, "ignored", reason);
+    };
+    if (decision.action === "limit") return limited(decision);
     // Not named in the allowed people: only a member of the organization, never a guest.
     if (decision.checkMember && !(await member(bot, a, place)))
       return teams.finishEvent(event.id, "ignored", "sender is not a member of the organization");
@@ -638,13 +642,10 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       latest.turns < SESSION_MAX_TURNS &&
       Date.now() - Date.parse(latest.startedAt) < SESSION_MAX_AGE_MS;
     const since = Date.now();
-    let run: RunRow | null = null;
-    if (reusable) {
-      if (!(await teams.continueRun(latest.id, a.id!, hashReplyToken(token))))
-        return teams.finishEvent(event.id, "held", "conversation busy");
-      run = { ...latest, triggerActivityId: a.id! };
-    } else {
-      run = await teams.startRun({
+    // The counts above were read before the slow checks, and another process may have started
+    // a run since: admission counts again.
+    const admitted = await teams.admit(
+      {
         agentId: bot.agentId,
         botId: bot.id,
         conversationId: place.conversationId,
@@ -653,9 +654,13 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         replyTokenHash: hashReplyToken(token),
         requestedBy: decision.sender,
         runner: trigger!.runner,
-      });
-      if (!run) return teams.finishEvent(event.id, "held", "conversation busy");
-    }
+      },
+      reusable ? latest : null,
+      trigger!,
+    );
+    if ("cap" in admitted) return limited(CAP_LIMITS[admitted.cap]);
+    const { run } = admitted;
+    if (!run) return teams.finishEvent(event.id, "held", "conversation busy");
 
     let input: RunInput;
     try {
@@ -988,56 +993,47 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     const stale = await teams.failStaleStarts();
     if (stale) console.error(`[teams] ${stale} run(s) failed after not starting`);
     for (const run of await teams.runningRuns()) {
+      // Passes can overlap (one that outlasts the tick, on either process): what one read is
+      // written, and told, only if the run is still as it read it.
+      const finish = (patch: Parameters<typeof teams.updateRun>[1]) =>
+        teams.updateRun(run.id, patch, "running");
       try {
         const bot = await teams.botById(run.botId);
         if (!bot) continue;
         const runner = deps.runners.get(run.runner);
         // The session itself is left running: no runner here can stop it.
         if (!runner) {
-          await teams.updateRun(run.id, {
+          await finish({
             state: "failed",
             error: `Runner ${run.runner} is not offered by this deployment`,
           });
           continue;
         }
         if (!(await teams.trigger(run.agentId))) {
-          await teams.updateRun(run.id, { state: "failed", error: "Its trigger was removed" });
+          await finish({ state: "failed", error: "Its trigger was removed" });
           continue;
         }
         const s = await runner.state(run, bot.organizationId);
         if ("gone" in s) {
-          await teams.updateRun(run.id, { state: "failed", error: s.gone });
+          await finish({ state: "failed", error: s.gone });
           continue;
         }
         const costCents = s.costCents ?? undefined;
         const tell = (text: string) => runNotice(bot, run, text);
         if (s.status === "idle" && s.atBudget) {
-          await teams.updateRun(run.id, {
-            state: "failed",
-            error: "Stopped at its spending limit",
-            costCents,
-          });
-          await tell(BUDGET_NOTICE);
+          if (await finish({ state: "failed", error: "Stopped at its spending limit", costCents }))
+            await tell(BUDGET_NOTICE);
         } else if (s.status === "idle" && run.replyCount === 0) {
-          await teams.updateRun(run.id, {
-            state: "no_reply",
-            error: "Finished without replying in Teams",
-            costCents,
-          });
-          await tell(NO_REPLY_NOTICE);
-        } else if (s.status === "idle") await teams.updateRun(run.id, { state: "idle", costCents });
-        else if (s.status === "terminated")
-          await teams.updateRun(run.id, { state: "ended", costCents });
+          const error = "Finished without replying in Teams";
+          if (await finish({ state: "no_reply", error, costCents })) await tell(NO_REPLY_NOTICE);
+        } else if (s.status === "idle") await finish({ state: "idle", costCents });
+        else if (s.status === "terminated") await finish({ state: "ended", costCents });
         else if (Date.now() - Date.parse(run.replyTokenAt) > STUCK_MS) {
           await runner
             .stop(run.sessionId!, bot.organizationId)
             .catch((e) => console.error(`[teams] interrupting run ${run.id}`, e));
-          await teams.updateRun(run.id, {
-            state: "failed",
-            error: "Stopped after 30 minutes without finishing",
-            costCents,
-          });
-          await tell(FAILED_NOTICE);
+          const error = "Stopped after 30 minutes without finishing";
+          if (await finish({ state: "failed", error, costCents })) await tell(FAILED_NOTICE);
         }
       } catch (error) {
         console.error(`[teams] watching run ${run.id}`, error);
@@ -1057,11 +1053,17 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       });
   }
 
+  /** One pass per tick across the processes, which all tick. */
+  async function watchTurn() {
+    if (await teams.takeLease("teams-watch", WATCH_TURN_SECONDS)) await watch();
+  }
+
   let timers: NodeJS.Timeout[] = [];
   return {
     inbound,
     kick,
     watch,
+    watchTurn,
     /** Drains the queue now and then (events from a worker that stopped) and watches sessions
      *  every few seconds. */
     start() {
@@ -1071,7 +1073,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         setInterval(() => {
           kick();
           retries.kick();
-          watch().catch((error) => console.error("[teams] watch", error));
+          watchTurn().catch((error) => console.error("[teams] watch", error));
         }, 5000),
         setInterval(
           () =>

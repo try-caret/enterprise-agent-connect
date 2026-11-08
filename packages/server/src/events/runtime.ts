@@ -9,7 +9,6 @@ import { drainer } from "../queue.js";
 import { credentialAad, type CredentialKey } from "../secrets.js";
 import type { AuditEntry, Store } from "../store.js";
 import {
-  capReached,
   nextAttempt,
   RETRY_WINDOW_MS,
   RetryLater,
@@ -52,6 +51,8 @@ const MAX_BODY = 1024 * 1024;
 const STUCK_MS = 30 * 60_000;
 const VERIFY_TTL_MS = 60_000;
 const SELF_TTL_MS = 3600_000;
+// Under the 5 second tick: of the processes' ticks in one interval, the first makes the pass.
+const WATCH_TURN_SECONDS = 4;
 // One refused delivery per subscription and minute is audited: anyone can post refusals.
 const REFUSED_AUDIT_MS = 60_000;
 
@@ -372,12 +373,6 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     const refused = await refusal(org, connector, event.eventType, data, trigger, state);
     if (refused) return decide(...refused);
     const runner = deps.runners.get(trigger.runner)!;
-    const cap = capReached(await events.runCounts(trigger.id), trigger);
-    if (cap)
-      return decide(
-        "denied",
-        `Capped: ${cap === "hour" ? "runs per hour" : cap === "day" ? "spending per day" : "runs at once"} reached`,
-      );
 
     const threadField = connector.events!.thread;
     const threadValue = threadField ? data[threadField] : null;
@@ -393,20 +388,31 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     };
     // A run whose row cannot even be written is reported here; any later failure, once, by
     // failStart.
-    const runId = await events
-      .startRun({
-        agentId: trigger.agentId,
-        triggerId: trigger.id,
-        eventId: event.id,
-        eventType: event.eventType,
-        deliveryId: event.deliveryId,
-        thread,
-        runner: trigger.runner,
-      })
+    const admitted = await events
+      .admitRun(
+        {
+          agentId: trigger.agentId,
+          triggerId: trigger.id,
+          eventId: event.id,
+          eventType: event.eventType,
+          deliveryId: event.deliveryId,
+          thread,
+          runner: trigger.runner,
+        },
+        trigger,
+      )
       .catch((error: unknown) => {
         report("event_run_start_failed", error, runTags);
         throw error;
       });
+    if ("cap" in admitted) {
+      const { cap } = admitted;
+      return decide(
+        "denied",
+        `Capped: ${cap === "hour" ? "runs per hour" : cap === "day" ? "spending per day" : "runs at once"} reached`,
+      );
+    }
+    const { runId } = admitted;
     const type = connector.events!.types.find((t) => t.id === event.eventType)!;
     const run = {
       runId,
@@ -680,7 +686,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (polling) return;
     polling = true;
     try {
-      for (const sub of await events.duePolls())
+      let sub;
+      while ((sub = await events.claimDuePoll()))
         if (sub.source === "graph") await sync(sub);
         else await poll(sub);
     } finally {
@@ -736,6 +743,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     }
   }
 
+  /** One pass per tick across the processes, which all tick. */
+  async function watchTurn() {
+    if (await events.takeLease("events-watch", WATCH_TURN_SECONDS)) await watch();
+  }
+
   let timers: NodeJS.Timeout[] = [];
   return {
     inbound,
@@ -750,6 +762,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     releaseAll: graph.releaseAll,
     settle: graph.settle,
     watch,
+    watchTurn,
     kick: queue.kick,
     idle: queue.idle,
     /** Drains the queue, watches runs and polls what is due, every few seconds. */
@@ -760,7 +773,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         setInterval(() => {
           queue.kick();
           retries.kick();
-          watch().catch((error) => console.error("[events] watch", error));
+          watchTurn().catch((error) => console.error("[events] watch", error));
         }, 5000),
         setInterval(
           () => pollDue().catch((error) => console.error("[events] poll", error)),

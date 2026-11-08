@@ -242,7 +242,7 @@ itself, read with the agent's tools, holds what came before), with `thread` in i
 
 Schema `agent_connect` (`DATABASE_SCHEMA`), tables without a prefix (`agents`, `providers`,
 `connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`,
-`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`, `internal_apps`); index and
+`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`, `internal_apps`, `leases`); index and
 constraint names keep the `agent_connect_<table>_...` spelling they had in public (`store.ts`
 matches `agent_connect_providers_one_org_per_tenant`). `packages/server/src/migrate.ts` applies
 `packages/server/migrations/NNNN_*.sql` on start, all pending in one transaction under an advisory lock, with
@@ -263,7 +263,8 @@ connector definitions; rollback drops it), 0009 the `graph` source (its check co
 catch-up delta link) and `event_runs.thread` (rollback drops `event_watches` first; the rest
 goes with the 0007 tables), and 0012 the retry columns on `teams_runs` and `event_runs`
 (`attempts`, `next_attempt_at`, sealed `delivery`; rollback drops them from `teams_runs`, the rest
-goes with 0007). The adopting run then makes simple views
+goes with 0007), and 0013 `leases` (work every process would otherwise do at once; rollback
+drops it). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -279,13 +280,16 @@ equivalence of both paths, the rows, the key and the rollback.
 `deploy/docker` (image, `docker-compose.yml` with Postgres, `docker-compose.example.yml` adding
 the example internal app, `docker-compose.sql-example.yml` the example orders database; the
 image moves the optional database drivers, peers of the npm package, into its dependencies
-before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (one replica, Service, optional
+before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (`replicaCount`, Service, optional
 Ingress with only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`; `existingSecret` holds
 `DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`; `caBundle` mounts a
-ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). One replica only: Teams
-and app event run limits (concurrent runs, runs per hour, daily spend) and polls are counted,
-admitted and run by one process,
-so a rollout recreates rather than overlaps. The admin API is never public: it refuses any
+ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). Any number of replicas: Teams and app event
+run limits (concurrent runs, runs per hour, daily spend) are counted and the run started in one
+transaction under an advisory lock per agent or trigger (`admit`, `admitRun`); each due poll is
+claimed (`claimDuePoll`); a Graph subscription's watches change under a lease renewed while the
+work lasts (`graph.ts` `leased`); and the watcher makes one pass per tick across the processes
+(`watchTurn`), a run's finish recorded and told once however passes overlap (`updateRun` with
+`from`). A rollout overlaps two versions, so a migration must leave the previous image working. The admin API is never public: it refuses any
 request carrying `X-Forwarded-For`. Give the service a database role that owns only its schema.
 
 ## Layout

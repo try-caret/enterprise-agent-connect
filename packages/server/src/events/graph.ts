@@ -21,6 +21,9 @@ const MAX_ID = 1024;
 const NEWS_MS = 7 * 86400_000;
 const DELTA_PAGES = 20;
 const SUBSCRIPTIONS = "/v1.0/subscriptions";
+// Renewed while a sync runs, so a process that dies holding it is waited for this long at most.
+const LEASE_SECONDS = 60;
+const LEASE_WAIT_MS = 500;
 
 export type GraphDeps = {
   events: EventsStore;
@@ -158,13 +161,17 @@ export function createGraphSource(deps: GraphDeps) {
     const lifecycle = rawAt(n, "lifecycleEvent");
     if (typeof lifecycle === "string") {
       await deps.delivery(sub, `${lifecycle} ${watch.value}`, "allowed", `Lifecycle: ${lifecycle}`);
-      if (lifecycle === "reauthorizationRequired") await subscribe(sub, g, watch);
-      else if (lifecycle === "subscriptionRemoved") {
-        await events.watchSubscribed(watch.id, null, null, "Removed by Microsoft");
-        await subscribe(sub, g, { ...watch, remoteId: null });
-        await catchUp(sub, connector, watch);
-      } else if (lifecycle === "missed") await catchUp(sub, connector, watch);
-      return;
+      // A sync may be subscribing this watch right now, and may have replaced it by its turn.
+      return inTurn(sub, async () => {
+        const now = await events.watchByRemote(sub.id, watch.remoteId!);
+        if (!now) return;
+        if (lifecycle === "reauthorizationRequired") await subscribe(sub, g, now);
+        else if (lifecycle === "subscriptionRemoved") {
+          await events.watchSubscribed(now.id, null, null, "Removed by Microsoft");
+          await subscribe(sub, g, { ...now, remoteId: null });
+          await catchUp(sub, connector, now);
+        } else if (lifecycle === "missed") await catchUp(sub, connector, now);
+      });
     }
     await events.watchNotified(watch.id);
     const id = rawAt(n, "resourceData.id");
@@ -356,27 +363,57 @@ export function createGraphSource(deps: GraphDeps) {
     };
   }
 
-  // One sync per subscription at a time (the service runs as one replica): the poll scheduler
-  // and a trigger change can both start one, and two would each make a Graph subscription for
-  // the same watch, the one refused clearing the other's id.
-  const syncing = new Map<string, ReturnType<typeof syncOnce>>();
+  // One change to a subscription's watches at a time, in this process and across them: the poll
+  // scheduler, a trigger change and a lifecycle notification can each start one, on any process,
+  // and two would each make a Graph subscription for the same watch, the one refused clearing
+  // the other's id.
+  const syncing = new Map<string, Promise<unknown>>();
+
+  function inTurn<T>(sub: SubscriptionRow, work: () => Promise<T>): Promise<T> {
+    // The earlier one's failure went to its own caller.
+    const run = (syncing.get(sub.id) ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => leased(sub, work));
+    syncing.set(sub.id, run);
+    const done = () => {
+      if (syncing.get(sub.id) === run) syncing.delete(sub.id);
+    };
+    run.then(done, done);
+    return run;
+  }
+
+  // Waits for the other processes' work on the subscription. A sync waits on Graph for as long
+  // as it needs, so a lease, not a lock held on one of the pool's few connections.
+  async function leased<T>(sub: SubscriptionRow, work: () => Promise<T>): Promise<T> {
+    const name = `graph-sync:${sub.id}`;
+    let token = await events.takeLease(name, LEASE_SECONDS);
+    while (!token) {
+      await new Promise((r) => setTimeout(r, LEASE_WAIT_MS));
+      token = await events.takeLease(name, LEASE_SECONDS);
+    }
+    const held = token;
+    const renewing = setInterval(
+      () =>
+        events
+          .takeLease(name, LEASE_SECONDS, held)
+          .catch((error) => console.error(`[events] renewing the sync of ${sub.id}`, error)),
+      (LEASE_SECONDS * 1000) / 3,
+    );
+    renewing.unref();
+    try {
+      return await work();
+    } finally {
+      clearInterval(renewing);
+      await events.dropLease(name, held);
+    }
+  }
 
   return {
     inbound,
     /** On the poll scheduler and after trigger changes. One started while another runs waits
      *  for it, then runs on what changed meanwhile. */
-    sync(sub: SubscriptionRow, connector: Connector) {
-      // The earlier sync's failure went to its own caller.
-      const run = (syncing.get(sub.id) ?? Promise.resolve())
-        .catch(() => {})
-        .then(() => syncOnce(sub, connector));
-      syncing.set(sub.id, run);
-      const done = () => {
-        if (syncing.get(sub.id) === run) syncing.delete(sub.id);
-      };
-      run.then(done, done);
-      return run;
-    },
+    sync: (sub: SubscriptionRow, connector: Connector) =>
+      inTurn(sub, () => syncOnce(sub, connector)),
     /** Removes every watch's Graph subscription, before the organization's goes. */
     async releaseAll(sub: SubscriptionRow) {
       for (const w of await events.watches(sub.id)) await release(sub, w);

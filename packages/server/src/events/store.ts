@@ -1,5 +1,5 @@
-import { tables, type Sql } from "../store.js";
-import type { RunCounts } from "../teams/runner.js";
+import { leases, tables, withAdvisoryLock, type Sql } from "../store.js";
+import { capReached, type Caps, type RunCounts } from "../teams/runner.js";
 
 // Postgres for app events: each organization's subscriptions, the inbound queue, each agent's
 // event triggers and the runs they started (migrations/0007_app_events.sql).
@@ -77,6 +77,16 @@ export type EventRetryRow = EventRunRow & {
   deliveryKeyId: string;
 };
 
+type NewEventRun = {
+  agentId: string;
+  triggerId: string;
+  eventId: string;
+  eventType: string;
+  deliveryId: string;
+  thread: string | null;
+  runner: string;
+};
+
 export type QueuedEvent = {
   id: string;
   subscriptionId: string;
@@ -137,6 +147,8 @@ const WATCH = `id::text, subscription_id::text as "subscriptionId", value,
 export function createEventsStore(sql: Sql, schema: string) {
   const t = tables(sql, schema);
   return {
+    ...leases(sql, t),
+
     // ---- subscriptions ----
 
     // Null when the organization already subscribed to the app.
@@ -219,15 +231,20 @@ export function createEventsStore(sql: Sql, schema: string) {
       return row ?? null;
     },
 
-    // Polls and Graph subscriptions whose interval has passed since they last ran.
-    async duePolls(): Promise<SubscriptionRow[]> {
-      return sql.unsafe(
-        `select ${SUBSCRIPTION} from ${t.event_subscriptions}
-          where source in ('poll', 'graph')
-            and (polled_at is null
-                 or polled_at < now() - make_interval(secs => interval_seconds))
-          order by polled_at nulls first`,
+    // A poll or Graph subscription whose interval has passed since it last ran, marked as run
+    // now. Never the same one to two workers; one that dies polling leaves it to its next interval.
+    async claimDuePoll(): Promise<SubscriptionRow | null> {
+      const [row] = await sql.unsafe<SubscriptionRow[]>(
+        `update ${t.event_subscriptions} set polled_at = now()
+          where id = (
+            select id from ${t.event_subscriptions}
+             where source in ('poll', 'graph')
+               and (polled_at is null
+                    or polled_at < now() - make_interval(secs => interval_seconds))
+             order by polled_at nulls first for update skip locked limit 1)
+          returning ${SUBSCRIPTION}`,
       );
+      return row ?? null;
     },
 
     async polled(id: string, cursor: string | null, error: string | null): Promise<void> {
@@ -500,8 +517,8 @@ export function createEventsStore(sql: Sql, schema: string) {
 
     // Runs live now, started in the last hour (failed starts too), and what finished runs
     // cost in the last 24 hours, for one trigger.
-    async runCounts(triggerId: string): Promise<RunCounts> {
-      const [row] = await sql<RunCounts[]>`
+    async runCounts(triggerId: string, db: Sql = sql): Promise<RunCounts> {
+      const [row] = await db<RunCounts[]>`
         select count(*) filter (where state in ('starting', 'running'))::int as active,
                count(*) filter (where started_at > now() - interval '1 hour')::int as "lastHour",
                coalesce(sum(cost_cents) filter (where started_at > now() - interval '24 hours'),
@@ -512,16 +529,19 @@ export function createEventsStore(sql: Sql, schema: string) {
       return row;
     },
 
-    async startRun(input: {
-      agentId: string;
-      triggerId: string;
-      eventId: string;
-      eventType: string;
-      deliveryId: string;
-      thread: string | null;
-      runner: string;
-    }): Promise<string> {
-      const [row] = await sql<{ id: string }[]>`
+    // The trigger's caps counted and its run started as one step, whichever process gets there.
+    async admitRun(
+      input: NewEventRun,
+      caps: Caps,
+    ): Promise<{ runId: string } | { cap: NonNullable<ReturnType<typeof capReached>> }> {
+      return withAdvisoryLock(sql, `${schema}.event-runs:${input.triggerId}`, async (tx) => {
+        const cap = capReached(await this.runCounts(input.triggerId, tx), caps);
+        return cap ? { cap } : { runId: await this.startRun(input, tx) };
+      });
+    },
+
+    async startRun(input: NewEventRun, db: Sql = sql): Promise<string> {
+      const [row] = await db<{ id: string }[]>`
         insert into ${t.event_runs}
           (agent_id, trigger_id, event_id, event_type, delivery_id, thread, runner, state)
         values (${input.agentId}, ${input.triggerId}, ${input.eventId}, ${input.eventType},

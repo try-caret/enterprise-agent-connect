@@ -384,5 +384,5 @@ by changed_at limit 100` and
 - Event content is written by people in the app: it is quoted as untrusted data, never put into
   the instructions, and cut to the fields the connector keeps (text to 2000 characters, lists to
   50 items).
-- Runs are bounded by each trigger's caps and budget. Counting them is one process's job, so the
-  service runs as one replica, as for Teams.
+- Runs are bounded by each trigger's caps and budget, counted in the database as each run is
+  admitted, as for Teams, so they hold however many replicas of the service run.

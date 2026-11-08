@@ -3,7 +3,6 @@
 {{- if not .Values.existingSecret }}{{ fail "existingSecret is required" }}{{ end }}
 {{- if and .Values.caBundle.configMap .Values.caBundle.secret }}{{ fail "caBundle: set configMap or secret, not both" }}{{ end }}
 {{- $ca := or .Values.caBundle.configMap .Values.caBundle.secret }}
-{{- if ne (int .Values.replicaCount) 1 }}{{ fail "replicaCount must be 1: Teams run limits are admitted by a single process" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,9 +11,9 @@ metadata:
     app.kubernetes.io/name: agent-connect
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   strategy:
-    type: Recreate
+    type: RollingUpdate
   selector:
     matchLabels:
       app.kubernetes.io/name: agent-connect
