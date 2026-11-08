@@ -14,6 +14,7 @@ import { CredentialKey } from "../src/secrets.ts";
 import type { ReportTags } from "../src/report.ts";
 import { connectDatabase, createStore } from "../src/store.ts";
 import {
+  DELIVERY_HEADER,
   signedWebhook,
   SIGNATURE_HEADER,
   type EventRunInput,
@@ -110,6 +111,7 @@ async function setup(
   runners: TriggerRunner[],
   limits: Record<string, unknown> = { projects: ["KAN"] },
   connector = tracker,
+  opts: { retryWindowMs?: number } = {},
 ) {
   const appId = connector.id;
   const store = createStore(sql!, SCHEMA);
@@ -145,8 +147,11 @@ async function setup(
     publicUrl: PUBLIC,
     report: (kind: string, error: unknown, tags?: ReportTags) =>
       reports.push({ kind, error, tags }),
+    retryWindowMs: opts.retryWindowMs,
   };
   const runtime = createEventsRuntime(deps);
+  // Another process of the service on the same database.
+  const newRuntime = () => createEventsRuntime(deps);
   const admin = createEventsAdmin({ ...deps, runtime });
   const app = createApp({
     service: {} as never,
@@ -237,6 +242,7 @@ async function setup(
     calls,
     answers,
     reports,
+    newRuntime,
   };
 }
 
@@ -818,5 +824,89 @@ test(
     const start = t.reports.find((r) => r.kind === "event_run_start_failed")!;
     assert.deepEqual(start.tags, { app: "tracker", org: t.org, agent: t.agentId, runner: "fake" });
     assert.ok(start.error instanceof Error);
+  },
+);
+
+// A signed webhook runner whose receiver answers each event post with the next of `answers`
+// (200 once they run out), recording the delivery header and body.
+async function flakyReceiver(answers: number[], opts: { retryWindowMs?: number } = {}) {
+  const posts: { delivery: string; body: any }[] = [];
+  const fetch = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    if (body.type === "ping") return new Response(null, { status: 200 });
+    posts.push({ delivery: (init.headers as Record<string, string>)[DELIVERY_HEADER], body });
+    return new Response(null, { status: answers.shift() ?? 200 });
+  }) as never;
+  const ctx = { teams: { claudeKey: async () => null } as never, key, publicUrl: PUBLIC };
+  const t = await setup([signedWebhook(fetch)(ctx)], undefined, undefined, opts);
+  const { subscription, secret } = await t.subscribe();
+  await t.trigger({
+    runner: "webhook",
+    settings: { url: "https://hooks.example/events" },
+    signingSecret: "r".repeat(40),
+  });
+  const due = () => sql!`update agent_connect.event_runs set next_attempt_at = now()
+                          where agent_id = ${t.agentId} and next_attempt_at is not null`;
+  return { t, posts, due, send: () => t.deliver(subscription.id, secret!, item()) };
+}
+
+test(
+  "an event the runner did not take is handed over again with the same delivery, audited once",
+  { skip: !sql },
+  async () => {
+    const { t, posts, due, send } = await flakyReceiver([503, 429]);
+    await send();
+    const [run] = await t.runs();
+    assert.equal(run.state, "starting");
+    assert.ok(!(await t.audit()).some((l) => l.startsWith("events:run")));
+    await t.runtime.retryDue();
+    assert.equal(posts.length, 1);
+    await due();
+    await t.runtime.retryDue();
+    // Picked up by another process, as after a restart.
+    await due();
+    await t.newRuntime().retryDue();
+    assert.equal(posts.length, 3);
+    assert.equal((await t.runs())[0].state, "running");
+    assert.equal(new Set(posts.map((p) => p.delivery)).size, 1);
+    assert.ok(posts.every((p) => p.body.delivery === p.delivery && p.body.run === run.id));
+    assert.deepEqual(
+      (await t.audit()).filter((l) => l.startsWith("events:run")),
+      [`events:run allowed Started run ${run.id} after 3 attempts`],
+    );
+    assert.deepEqual(t.reports, []);
+  },
+);
+
+test(
+  "an event run fails past the retry window, or at once on 401, reported once",
+  { skip: !sql },
+  async () => {
+    const late = await flakyReceiver([503, 500], { retryWindowMs: 10_000 });
+    await late.send();
+    await late.due();
+    await late.t.runtime.retryDue();
+    const [run] = await late.t.runs();
+    assert.equal(run.state, "failed");
+    assert.equal(run.error, "The webhook answered 500");
+    assert.deepEqual(
+      (await late.t.audit()).filter((l) => l.startsWith("events:run")),
+      [
+        `events:run failed Run ${run.id} could not start: The webhook answered 500 after 2 attempts`,
+      ],
+    );
+    assert.deepEqual(
+      late.t.reports.map((r) => r.kind),
+      ["event_run_start_failed"],
+    );
+
+    const refused = await flakyReceiver([401]);
+    await refused.send();
+    const [no] = await refused.t.runs();
+    assert.equal(no.state, "failed");
+    assert.equal(no.error, "The webhook answered 401");
+    await refused.due();
+    await refused.t.runtime.retryDue();
+    assert.equal(refused.posts.length, 1);
   },
 );

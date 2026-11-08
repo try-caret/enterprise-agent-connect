@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { effectiveCapabilities, type Connector } from "../../../connector-kit/src/connector.js";
 import {
   ConnectError,
@@ -7,7 +8,14 @@ import {
 import { drainer } from "../queue.js";
 import { credentialAad, type CredentialKey } from "../secrets.js";
 import type { AuditEntry, Store } from "../store.js";
-import { capReached, type TriggerRunner } from "../teams/runner.js";
+import {
+  capReached,
+  nextAttempt,
+  RETRY_WINDOW_MS,
+  RetryLater,
+  type EventRunInput,
+  type TriggerRunner,
+} from "../teams/runner.js";
 import { readCappedBytes } from "../teams/runtime.js";
 import {
   bodyHash,
@@ -26,7 +34,13 @@ import {
 } from "./deliver.js";
 import { createGraphSource } from "./graph.js";
 import { noReport, type Report } from "../report.js";
-import type { EventTriggerRow, EventsStore, QueuedEvent, SubscriptionRow } from "./store.js";
+import type {
+  EventRetryRow,
+  EventTriggerRow,
+  EventsStore,
+  QueuedEvent,
+  SubscriptionRow,
+} from "./store.js";
 
 // Events from connected apps (docs/triggers.md): deliveries at /events/<subscription id>, Graph
 // notifications (graph.ts) and polls, one queue, and the runs they start on the same runners
@@ -46,6 +60,19 @@ export const eventTriggerAad = (org: string, agentId: string, app: string) =>
   credentialAad(org, `event-trigger:${agentId}:${app}`);
 const eventAad = (subscriptionId: string, deliveryId: string) =>
   `agent-connect:app-event:${subscriptionId}:${deliveryId}`;
+const deliveryAad = (runId: string) => `agent-connect:event-delivery:${runId}`;
+
+// What a run's next hand-over to its runner sends again, sealed on the run meanwhile.
+type Delivery = Pick<EventRunInput, "deliveryId" | "text" | "event">;
+// The run being handed over, as its audit rows name it.
+type RunContext = {
+  runId: string;
+  org: string;
+  agentName: string;
+  connectorId: string;
+  eventType: string;
+  deliveryId: string;
+};
 
 const reply = (status: number) => new Response(null, { status });
 
@@ -61,11 +88,14 @@ export type EventsRuntimeDeps = {
   // Where Graph sends notifications.
   publicUrl: string | null;
   report?: Report;
+  // How long a start the runner did not take is tried again (runner.ts nextAttempt).
+  retryWindowMs?: number;
 };
 
 export function createEventsRuntime(deps: EventsRuntimeDeps) {
   const { events, key, connectors } = deps;
   const report = deps.report ?? noReport;
+  const retryWindowMs = deps.retryWindowMs ?? RETRY_WINDOW_MS;
   // A subscription's poll or sync failing: reported when it starts failing, not on every retry.
   const polled = (
     sub: SubscriptionRow,
@@ -343,46 +373,150 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       thread,
       runner: trigger.runner,
     });
+    const type = connector.events!.types.find((t) => t.id === event.eventType)!;
+    const run = {
+      runId,
+      org: event.organizationId,
+      agentName: state?.agentName ?? "",
+      connectorId: connector.id,
+      eventType: event.eventType,
+      deliveryId: event.deliveryId,
+    };
+    const sent: Delivery = {
+      deliveryId: randomUUID(),
+      text: eventPrompt({
+        prompt: trigger.prompt,
+        appName: connector.name,
+        type,
+        deliveryId: event.deliveryId,
+        data,
+      }),
+      event: { app: connector.id, type: type.id, deliveryId: event.deliveryId, thread, data },
+    };
+    return handOver(run, runner, trigger, sent, 1, Date.now());
+  }
+
+  const runAudit = (run: RunContext, agentId: string) =>
+    async (decision: AuditEntry["decision"], reason: string) =>
+      audit({
+        organizationId: run.org,
+        agentId,
+        agentName: run.agentName,
+        connectorId: run.connectorId,
+        tool: "events:run",
+        target: `${run.eventType} ${run.deliveryId}`,
+        decision,
+        reason,
+      });
+
+  /** Hands the event to the runner: started (true), tried again later while the runner may
+   *  yet take it (RetryLater, within the retry window), or failed. */
+  async function handOver(
+    run: RunContext,
+    runner: TriggerRunner,
+    trigger: EventTriggerRow,
+    sent: Delivery,
+    attempt: number,
+    since: number,
+  ): Promise<boolean> {
+    const after = attempt > 1 ? ` after ${attempt} attempts` : "";
     try {
       const secret = trigger.secret
         ? key.open(
             { ciphertext: trigger.secret, keyId: trigger.secretKeyId! },
-            eventTriggerAad(event.organizationId, trigger.agentId, connector.id),
+            eventTriggerAad(run.org, trigger.agentId, run.connectorId),
           ).secret
         : null;
-      await verified(runner, trigger, event.organizationId, secret);
-      const type = connector.events!.types.find((t) => t.id === event.eventType)!;
-      const sessionId = await runner.startEvent({
-        org: event.organizationId,
+      await verified(runner, trigger, run.org, secret);
+      const sessionId = await runner.startEvent!({
+        org: run.org,
         agentId: trigger.agentId,
-        runId,
-        text: eventPrompt({
-          prompt: trigger.prompt,
-          appName: connector.name,
-          type,
-          deliveryId: event.deliveryId,
-          data,
-        }),
+        runId: run.runId,
+        text: sent.text,
         budgetCents: trigger.budgetCents,
         trigger,
         secret,
-        event: { app: connector.id, type: type.id, deliveryId: event.deliveryId, thread, data },
+        deliveryId: sent.deliveryId,
+        event: sent.event,
       });
-      await events.updateRun(runId, { state: "running", sessionId });
-      await decide("allowed", `Started run ${runId}`);
+      await events.updateRun(run.runId, { state: "running", sessionId });
+      await runAudit(run, trigger.agentId)("allowed", `Started run ${run.runId}${after}`);
       return true;
     } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
-      if (!(error instanceof ConnectError)) console.error(`[events] run ${runId}`, error);
-      report("event_run_start_failed", error, {
-        app: connector.id,
-        org: event.organizationId,
-        agent: trigger.agentId,
-        runner: trigger.runner,
-      });
-      await events.updateRun(runId, { state: "failed", error: why.slice(0, 500) });
-      return decide("failed", `Run ${runId} could not start: ${why}`);
+      const at =
+        error instanceof RetryLater
+          ? nextAttempt(attempt, since, retryWindowMs, error.retryAfterMs)
+          : null;
+      if (at === null) {
+        await failStart(run, trigger, error, attempt);
+        return false;
+      }
+      console.warn(
+        `[events] run ${run.runId} attempt ${attempt}: ${(error as Error).message}; again later`,
+      );
+      await events.scheduleRetry(
+        run.runId,
+        attempt,
+        new Date(at),
+        key.seal({ delivery: JSON.stringify(sent) }, deliveryAad(run.runId)),
+      );
+      return false;
     }
+  }
+
+  // A run that could not start: failed with the reason, audited and reported once.
+  async function failStart(
+    run: RunContext,
+    trigger: Pick<EventTriggerRow, "agentId" | "runner">,
+    error: unknown,
+    attempts: number,
+  ) {
+    const why = error instanceof Error ? error.message : String(error);
+    if (!(error instanceof ConnectError)) console.error(`[events] run ${run.runId}`, error);
+    report("event_run_start_failed", error, {
+      app: run.connectorId,
+      org: run.org,
+      agent: trigger.agentId,
+      runner: trigger.runner,
+    });
+    await events.updateRun(run.runId, { state: "failed", error: why.slice(0, 500) });
+    const after = attempts > 1 ? ` after ${attempts} attempts` : "";
+    const reason = `Run ${run.runId} could not start: ${why}${after}`;
+    await runAudit(run, trigger.agentId)("failed", reason);
+  }
+
+  const retries = drainer("events-retries", async () => {
+    const row = await events.claimRetry();
+    if (!row) return false;
+    await retry(row).catch((error) => console.error(`[events] retrying run ${row.id}`, error));
+    return true;
+  });
+
+  // The next hand-over of a run the runner did not take, as the trigger stands now.
+  async function retry(row: EventRetryRow) {
+    const sent = JSON.parse(
+      key.open({ ciphertext: row.delivery, keyId: row.deliveryKeyId }, deliveryAad(row.id))
+        .delivery,
+    ) as Delivery;
+    const [trigger, state] = await Promise.all([
+      events.triggerById(row.triggerId),
+      events.agentState(row.agentId, row.connectorId),
+    ]);
+    const run = {
+      runId: row.id,
+      org: row.organizationId,
+      agentName: state?.agentName ?? "",
+      connectorId: row.connectorId,
+      eventType: row.eventType,
+      deliveryId: row.deliveryId,
+    };
+    const runner = deps.runners.get(row.runner);
+    const fail = (why: string) => failStart(run, row, new ConnectError(why), row.attempts);
+    if (state?.agentStatus !== "active") return fail("The agent was turned off");
+    if (!trigger?.enabled || trigger.runner !== row.runner)
+      return fail("Its trigger was turned off or changed runner");
+    if (!runner?.startEvent) return fail(`This deployment cannot run ${row.runner}`);
+    await handOver(run, runner, trigger, sent, row.attempts + 1, Date.parse(row.startedAt));
   }
 
   // The runner's check of the trigger (for Claude: the agent uses this agent's own MCP address
@@ -573,9 +707,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     /** Drains the queue, watches runs and polls what is due, every few seconds. */
     start() {
       queue.start();
+      retries.start();
       timers = [
         setInterval(() => {
           queue.kick();
+          retries.kick();
           watch().catch((error) => console.error("[events] watch", error));
         }, 5000),
         setInterval(
@@ -592,7 +728,12 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     async stop() {
       for (const t of timers) clearInterval(t);
       await graph.settle();
-      await queue.stop();
+      await Promise.all([queue.stop(), retries.stop()]);
+    },
+    /** Hands over every run whose next attempt is due, now (tests). */
+    async retryDue() {
+      retries.kick();
+      await retries.idle();
     },
   };
 }

@@ -48,13 +48,44 @@ app ◀──poll─────  every interval, from a cursor ─────�
    Trigger runners section of CLAUDE.md), checked again before each run. The agent gets the
    trigger's instructions, then the event's kept fields as untrusted data. It acts with its own
    tools and limits through its own MCP address; nothing is replied to. A run ends when its
-   session goes idle, fails at its budget, and is stopped after 30 minutes.
+   session goes idle, fails at its budget, and is stopped after 30 minutes. A runner that does
+   not take the run yet is tried again (below, When the runner does not answer).
 
 Every delivery (received, refused for its signature, too old, a repeat, an undeclared type) is
 audited as `events:delivery`, every decision for every trigger (started, filtered, out of
 limits, capped, not started) as `events:run` under the agent, and failed polls as
 `events:poll`. `GET /orgs/{org}/audit?app=jira` reads them. Refused signatures are audited at most
 once a minute per subscription, since anyone can post to the address.
+
+## When the runner does not answer
+
+A run's hand-over to its runner (a Teams message, or an app's event) is tried again when the
+runner may take it later, so a receiver that restarts (a deploy) only delays messages:
+
+- **Tried again**: no answer within 10 seconds, a connection that fails, and the answers 5xx,
+  408, 409 and 429. Any other answer (400, 401 for a bad signature, 403, 404 for an unknown
+  agent, 422...) fails the run at once, as before.
+- **When**: 5 s, 15 s, 30 s, 1 min, 2 min, then every 4 min, each within 20% either way, and at
+  least the answer's `Retry-After` (seconds or a date; up to 4 minutes). Past the retry window
+  (`RUNNER_RETRY_SECONDS`, default 900 = 15 minutes from the first attempt, 0 to 3600; 0 never
+  tries again; option `runnerRetrySeconds`) the run fails with the last answer as its error.
+- **Durable**: a run waiting for its next attempt stays `starting` in Postgres, with when to try
+  again and what to send (the prompt, its reply token and the event's fields, sealed). Every
+  replica looks for due runs every 5 seconds and leases one at a time (`FOR UPDATE SKIP
+  LOCKED`, two minutes), so a restart picks them up and no two replicas send the same attempt.
+- **Teams order**: a run waiting to be tried again still holds its thread, so later messages
+  there stay held until it starts or fails. The person sees the usual "Sorry, I couldn't finish
+  this" only when it finally fails.
+- **One outcome**: the audit gets one `events:run` row per run, when it starts or finally fails
+  (`after N attempts` when it took more than one); Teams' `teams:run` row is written once, before
+  the first attempt. Sentry (`teams_run_start_failed`, `event_run_start_failed`) hears of the
+  final failure only.
+
+Every attempt of one hand-over carries the same id, a UUID, in the header
+`X-Agent-Connect-Delivery` and as `delivery` in the signed body (the signature covers the body,
+not the header). A receiver should dedupe on it: an attempt it took but answered with an error,
+or whose answer was lost, comes again with the same id. A new message, a continued session's
+next turn and each event get a new one. The signature's `t` is new on every attempt.
 
 ## Set up Jira
 
@@ -118,8 +149,9 @@ event's data never goes into the instructions; it follows them as quoted data. T
 condition can name are the app's `events.fields` (Jira: key, project, issue_type, status,
 priority, labels, summary, assignee, reporter, changed_by, changed, comment, comment_by,
 updated). With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
-each run is a signed POST of `{type: "event", run, agent, app, event, deliveryId, thread, data,
-text, mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams). `GET …/event-triggers` lists an
+each run is a signed POST of `{type: "event", run, delivery, agent, app, event, deliveryId, thread,
+data, text, mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams; `delivery` is this
+service's id for the hand-over, `deliveryId` the app's id for the event). `GET …/event-triggers` lists an
 agent's triggers, `DELETE …/event-triggers/jira` removes one (stopping its live runs), and `GET
 …/event-runs` shows what they started.
 

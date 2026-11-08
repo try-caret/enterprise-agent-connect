@@ -69,6 +69,14 @@ export type EventRunRow = {
   finishedAt: string | null;
 };
 
+// A run waiting to be handed to its runner again (migrations/0012_runner_retries.sql).
+export type EventRetryRow = EventRunRow & {
+  organizationId: string;
+  attempts: number;
+  delivery: Buffer;
+  deliveryKeyId: string;
+};
+
 export type QueuedEvent = {
   id: string;
   subscriptionId: string;
@@ -532,13 +540,17 @@ export function createEventsStore(sql: Sql, schema: string) {
       },
     ): Promise<void> {
       const finished = patch.state === "ended" || patch.state === "failed";
+      const delivered = Boolean(patch.state && patch.state !== "starting");
       await sql`
         update ${t.event_runs}
            set state = coalesce(${patch.state ?? null}, state),
                session_id = coalesce(${patch.sessionId ?? null}, session_id),
                error = coalesce(${patch.error ?? null}, error),
                cost_cents = coalesce(${patch.costCents ?? null}, cost_cents),
-               finished_at = case when ${finished} then now() else finished_at end
+               finished_at = case when ${finished} then now() else finished_at end,
+               next_attempt_at = case when ${delivered} then null else next_attempt_at end,
+               delivery = case when ${delivered} then null else delivery end,
+               delivery_key_id = case when ${delivered} then null else delivery_key_id end
          where id = ${id}`;
     },
 
@@ -548,8 +560,42 @@ export function createEventsStore(sql: Sql, schema: string) {
         update ${t.event_runs}
            set state = 'failed', error = 'Did not start', finished_at = now()
          where state = 'starting' and started_at < now() - interval '10 minutes'
+           and next_attempt_at is null
         returning id`;
       return rows.length;
+    },
+
+    // A start the runner did not take: tried again at `at` with what is sealed in `delivery`.
+    async scheduleRetry(
+      id: string,
+      attempts: number,
+      at: Date,
+      delivery: { ciphertext: Buffer; keyId: string },
+    ): Promise<void> {
+      await sql`
+        update ${t.event_runs}
+           set attempts = ${attempts}, next_attempt_at = ${at}, delivery = ${delivery.ciphertext},
+               delivery_key_id = ${delivery.keyId}
+         where id = ${id} and state = 'starting'`;
+    },
+
+    // A run due for its next hand-over, leased for two minutes (a worker that dies holding it
+    // leaves it due again). Never the same one to two workers.
+    async claimRetry(): Promise<EventRetryRow | null> {
+      const [row] = await sql.unsafe<EventRetryRow[]>(
+        `with claimed as (
+           update ${t.event_runs} set next_attempt_at = now() + interval '2 minutes'
+            where id = (
+              select id from ${t.event_runs}
+               where state = 'starting' and next_attempt_at <= now()
+               order by next_attempt_at for update skip locked limit 1)
+            returning *)
+         select ${RUN}, a.organization_id::text as "organizationId", r.attempts, r.delivery,
+                r.delivery_key_id as "deliveryKeyId"
+           from claimed r join ${t.event_triggers} t on t.id = r.trigger_id
+           join ${t.agents} a on a.id = r.agent_id`,
+      );
+      return row ?? null;
     },
 
     async runningRuns(): Promise<(EventRunRow & { organizationId: string })[]> {

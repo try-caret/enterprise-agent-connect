@@ -12,6 +12,9 @@ drop view if exists public.agent_connect_agents, public.agent_connect_providers,
   public.agent_connect_teams_conversations, public.agent_connect_teams_events,
   public.agent_connect_teams_triggers, public.agent_connect_teams_runs,
   public.agent_connect_teams_spend;
+-- 0012: runs waiting to be handed to their runner again (event_runs goes with 0007).
+alter table agent_connect.teams_runs drop column attempts, drop column next_attempt_at,
+  drop column delivery, drop column delivery_key_id;
 -- 0011: files offered in direct chats, waiting for an answer.
 drop table agent_connect.teams_file_offers;
 -- 0010: the files of each run's latest message.

@@ -41,9 +41,24 @@ import {
 } from "./offer.js";
 import { drainer } from "../queue.js";
 import { noReport, type Report } from "../report.js";
-import { openTriggerSecret, type TriggerRunner } from "./runner.js";
+import {
+  nextAttempt,
+  openTriggerSecret,
+  RETRY_WINDOW_MS,
+  RetryLater,
+  type RunInput,
+  type TriggerRunner,
+} from "./runner.js";
 import { Unauthorized, type BotAuth } from "./jwt.js";
-import type { BotRow, ConversationRow, EventRow, RunRow, TeamsStore, TriggerRow } from "./store.js";
+import type {
+  BotRow,
+  ConversationRow,
+  EventRow,
+  RetryRow,
+  RunRow,
+  TeamsStore,
+  TriggerRow,
+} from "./store.js";
 
 // Teams' requests to the agents' bots, the queue they feed, and the sessions that answer them
 // (Claude Managed Agents or another runner, runner.ts). docs/teams.md 6.
@@ -93,6 +108,16 @@ export const botAad = (org: string, botId: string) => credentialAad(org, `teams-
 const eventAad = (botId: string, activityId: string) =>
   `agent-connect:teams-event:${botId}:${activityId}`;
 const runFilesAad = (runId: string) => `agent-connect:teams-run-files:${runId}`;
+const deliveryAad = (runId: string) => `agent-connect:teams-delivery:${runId}`;
+
+// What a run's next hand-over to its runner sends again, sealed on the run meanwhile.
+type Delivery = {
+  deliveryId: string;
+  eventId: string;
+  requestedBy: string;
+  text: string;
+  replyToken: string;
+};
 
 /** The bot's sign-in: its app id, tenant, certificate and private key. */
 export function botCredential(key: CredentialKey, bot: BotRow): BotCredential {
@@ -131,12 +156,15 @@ export type TeamsRuntimeDeps = {
   // Fetches the files an agent sends and puts them in the recipient's OneDrive.
   fetch?: typeof fetch;
   report?: Report;
+  // How long a start the runner did not take is tried again (runner.ts nextAttempt).
+  retryWindowMs?: number;
 };
 
 export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
   const { teams, key, bots } = deps;
   const fetchImpl = deps.fetch ?? fetch;
   const report = deps.report ?? noReport;
+  const retryWindowMs = deps.retryWindowMs ?? RETRY_WINDOW_MS;
   const botTags = (bot: BotRow) => ({
     app: "teams",
     org: bot.organizationId,
@@ -557,11 +585,12 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       latest.sessionId &&
       latest.turns < SESSION_MAX_TURNS &&
       Date.now() - Date.parse(latest.startedAt) < SESSION_MAX_AGE_MS;
+    const since = Date.now();
     let run: RunRow | null = null;
     if (reusable) {
       if (!(await teams.continueRun(latest.id, a.id!, hashReplyToken(token))))
         return teams.finishEvent(event.id, "held", "conversation busy");
-      run = latest;
+      run = { ...latest, triggerActivityId: a.id! };
     } else {
       run = await teams.startRun({
         agentId: bot.agentId,
@@ -576,6 +605,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       if (!run) return teams.finishEvent(event.id, "held", "conversation busy");
     }
 
+    let input: RunInput;
     try {
       const secret = openTriggerSecret(key, bot.organizationId, trigger!);
       await verified(runner!, bot, state?.agentName ?? "", trigger!, secret);
@@ -610,7 +640,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         continuing: Boolean(reusable),
         files,
       });
-      const input = {
+      input = {
         org: bot.organizationId,
         agentId: bot.agentId,
         runId: run.id,
@@ -621,28 +651,126 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         budgetCents: trigger!.budgetCents,
         trigger: trigger!,
         secret,
+        deliveryId: randomUUID(),
       };
-      if (reusable) {
-        await runner!.continue(latest.sessionId!, input);
+    } catch (error) {
+      return failStart(bot, run, event.id, error, 0);
+    }
+    await deliver(bot, run, event.id, input, reusable ? latest.sessionId : null, 1, since);
+  }
+
+  /** Hands the message to the runner: started, or tried again later while the runner may yet
+   *  take it (RetryLater, within the retry window; the run stays starting, so the thread's
+   *  later messages stay held behind it), or failed. */
+  async function deliver(
+    bot: BotRow,
+    run: RunRow,
+    eventId: string,
+    input: RunInput,
+    sessionId: string | null,
+    attempt: number,
+    since: number,
+  ) {
+    const runner = deps.runners.get(run.runner)!;
+    try {
+      if (sessionId) {
+        await runner.continue(sessionId, input);
         await teams.updateRun(run.id, { state: "running" });
       } else {
-        const sessionId = await runner!.start(input);
-        await teams.updateRun(run.id, { state: "running", sessionId });
+        await teams.updateRun(run.id, { state: "running", sessionId: await runner.start(input) });
       }
-      await teams.finishEvent(event.id, "run", null);
+      await teams.finishEvent(eventId, "run", null);
     } catch (error) {
-      console.error(`[teams] run ${run.id} failed to start`, error);
-      report("teams_run_start_failed", error, { ...botTags(bot), runner: run.runner });
-      await teams.updateRun(run.id, {
-        state: "failed",
-        error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
-      });
-      await notice(bot, a.serviceUrl!, place.threadId, FAILED_NOTICE, a.id).catch((e) => {
-        console.error(`[teams] notice for run ${run.id}`, e);
-        report("teams_send_failed", e, { ...botTags(bot), what: "notice" });
-      });
-      await teams.finishEvent(event.id, "failed", "could not start the response");
+      const at =
+        error instanceof RetryLater
+          ? nextAttempt(attempt, since, retryWindowMs, error.retryAfterMs)
+          : null;
+      if (at === null) return failStart(bot, run, eventId, error, attempt);
+      const why = (error as Error).message;
+      console.warn(`[teams] run ${run.id} attempt ${attempt}: ${why}; again later`);
+      const delivery: Delivery = {
+        deliveryId: input.deliveryId,
+        eventId,
+        requestedBy: input.requestedBy,
+        text: input.text,
+        replyToken: input.replyToken,
+      };
+      await teams.scheduleRetry(
+        run.id,
+        attempt,
+        new Date(at),
+        key.seal({ delivery: JSON.stringify(delivery) }, deliveryAad(run.id)),
+      );
+      await teams.finishEvent(eventId, "run", "waiting to hand the message to the runner again");
     }
+  }
+
+  // The one place a response that could not start is told: the run fails with the reason, the
+  // person is told once, Sentry once.
+  async function failStart(
+    bot: BotRow,
+    run: RunRow,
+    eventId: string,
+    error: unknown,
+    attempts: number,
+  ) {
+    console.error(`[teams] run ${run.id} failed to start`, error);
+    report("teams_run_start_failed", error, { ...botTags(bot), runner: run.runner });
+    await teams.updateRun(run.id, {
+      state: "failed",
+      error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+    });
+    await runNotice(bot, run, FAILED_NOTICE);
+    await teams.finishEvent(eventId, "failed", "could not start the response");
+  }
+
+  const retries = drainer("teams-retries", async () => {
+    const row = await teams.claimRetry();
+    if (!row) return false;
+    await retry(row).catch((error) => console.error(`[teams] retrying run ${row.id}`, error));
+    return true;
+  });
+
+  // The next hand-over of a run the runner did not take, as the trigger stands now.
+  async function retry(row: RetryRow) {
+    const bot = await teams.botById(row.botId);
+    if (!bot) return;
+    const sent = JSON.parse(
+      key.open({ ciphertext: row.delivery, keyId: row.deliveryKeyId }, deliveryAad(row.id))
+        .delivery,
+    ) as Delivery;
+    const [state, trigger] = await Promise.all([
+      teams.agentState(row.agentId),
+      teams.trigger(row.agentId),
+    ]);
+    const runner = deps.runners.get(row.runner);
+    const fail = (why: string) =>
+      failStart(bot, row, sent.eventId, new ConnectError(why), row.attempts);
+    if (state?.agentStatus !== "active") return fail("The agent was turned off");
+    if (!trigger?.enabled || trigger.runner !== row.runner)
+      return fail("Its trigger was turned off or changed runner");
+    if (!runner) return fail(`Runner ${row.runner} is not offered by this deployment`);
+    const secret = openTriggerSecret(key, bot.organizationId, trigger);
+    try {
+      await verified(runner, bot, state.agentName, trigger, secret);
+    } catch (error) {
+      return failStart(bot, row, sent.eventId, error, row.attempts);
+    }
+    const input: RunInput = {
+      org: bot.organizationId,
+      agentId: row.agentId,
+      runId: row.id,
+      botId: bot.id,
+      requestedBy: sent.requestedBy,
+      text: sent.text,
+      replyToken: sent.replyToken,
+      budgetCents: trigger.budgetCents,
+      trigger,
+      secret,
+      deliveryId: sent.deliveryId,
+    };
+    const since = Date.parse(row.replyTokenAt);
+    await deliver(bot, row, sent.eventId, input, row.sessionId, row.attempts + 1, since);
   }
 
   // The trigger, checked again before each answer (e.g. the Claude agent and vaults, see
@@ -865,9 +993,11 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
      *  every few seconds. */
     start() {
       queue.start();
+      retries.start();
       timers = [
         setInterval(() => {
           kick();
+          retries.kick();
           watch().catch((error) => console.error("[teams] watch", error));
         }, 5000),
         setInterval(
@@ -881,7 +1011,12 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
      *  in 'processing' nor answers it twice. */
     async stop() {
       for (const t of timers) clearInterval(t);
-      await queue.stop();
+      await Promise.all([queue.stop(), retries.stop()]);
+    },
+    /** Hands over every run whose next attempt is due, now (tests). */
+    async retryDue() {
+      retries.kick();
+      await retries.idle();
     },
     /** What an agent's Teams tools reach: only its own bot. */
     access(bot: BotRow): TeamsAccess {

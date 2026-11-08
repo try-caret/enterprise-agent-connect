@@ -11,7 +11,13 @@ import { hashReplyToken } from "../src/teams/activity.ts";
 import { createTeamsAdmin } from "../src/teams/admin.ts";
 import type { BotClient } from "../src/teams/bot.ts";
 import type { BotAuth } from "../src/teams/jwt.ts";
-import type { RunInput, TriggerRunner } from "../src/teams/runner.ts";
+import type { Report } from "../src/report.ts";
+import {
+  DELIVERY_HEADER,
+  signedWebhook,
+  type RunInput,
+  type TriggerRunner,
+} from "../src/teams/runner.ts";
 import { botAad, createTeamsRuntime } from "../src/teams/runtime.ts";
 import { createTeamsStore } from "../src/teams/store.ts";
 import { ADMIN_TOKEN, teamsConnector } from "./helpers.ts";
@@ -78,7 +84,10 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
   return { runner, calls };
 }
 
-async function setup(runners: TriggerRunner[], opts: { fetch?: typeof fetch } = {}) {
+async function setup(
+  runners: TriggerRunner[],
+  opts: { fetch?: typeof fetch; retryWindowMs?: number; report?: Report } = {},
+) {
   const sent: Sent[] = [];
   const bots = fakeBots(sent);
   const store = createStore(sql!, SCHEMA);
@@ -104,17 +113,22 @@ async function setup(runners: TriggerRunner[], opts: { fetch?: typeof fetch } = 
                      ${sql!.json({ certificate: "cert" })}, ${sealed.ciphertext}, ${sealed.keyId})`;
   const byId = new Map(runners.map((r) => [r.id, r]));
   const publicUrl = "https://svc.example/agent-connect";
-  const runtime = createTeamsRuntime({
-    store,
-    teams,
-    key,
-    auth,
-    bots,
-    runners: byId,
-    connector: teamsConnector,
-    publicUrl,
-    fetch: opts.fetch,
-  });
+  // Another process of the service on the same database.
+  const newRuntime = () =>
+    createTeamsRuntime({
+      store,
+      teams,
+      key,
+      auth,
+      bots,
+      runners: byId,
+      connector: teamsConnector,
+      publicUrl,
+      fetch: opts.fetch,
+      retryWindowMs: opts.retryWindowMs,
+      report: opts.report,
+    });
+  const runtime = newRuntime();
   const admin = createTeamsAdmin({
     store,
     teams,
@@ -188,6 +202,7 @@ async function setup(runners: TriggerRunner[], opts: { fetch?: typeof fetch } = 
     sent,
     botAppId,
     store,
+    newRuntime,
   };
 }
 
@@ -391,6 +406,221 @@ test("stop waits for the event in hand before returning", { skip: !sql }, async 
     await sql!`select state from agent_connect.teams_events where bot_id = ${t.botId}`;
   assert.notEqual(event.state, "processing");
 });
+
+// ---- handing over again ----
+
+// A signed webhook whose receiver answers each post with the next status of `answers` (200 once
+// they run out; a number or "down" for no answer), recording each delivery.
+function flakyWebhook(answers: (number | "down")[]) {
+  const posts: { delivery: string; body: any }[] = [];
+  const fetch = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    if (body.type === "ping") return new Response(null, { status: 200 });
+    posts.push({ delivery: (init.headers as Record<string, string>)[DELIVERY_HEADER], body });
+    const answer = answers.shift() ?? 200;
+    if (answer === "down") throw new TypeError("fetch failed");
+    return new Response(null, { status: answer });
+  }) as never;
+  const ctx = { teams: { claudeKey: async () => null } as never, key, publicUrl: "x" };
+  return { runner: signedWebhook(fetch)(ctx), posts };
+}
+
+async function webhookTrigger(t: Awaited<ReturnType<typeof setup>>) {
+  await t.admin.setTrigger(t.org, t.agentId, {
+    enabled: true,
+    runner: "webhook",
+    settings: { url: "https://hooks.example/teams" },
+    signingSecret: "s".repeat(40),
+    budgetCents: 50,
+    allowedPeople: [PERSON],
+    by: "admin",
+  });
+}
+
+const due = (runId: string) =>
+  sql!`update agent_connect.teams_runs set next_attempt_at = now() where id = ${runId}`;
+const notices = (sent: Sent[]) =>
+  sent.filter((s) => s.method === "POST" && s.body?.text?.startsWith("Sorry, I couldn't finish"));
+
+test(
+  "a runner that answers 503, 409, 429 or nothing is handed the message again, the same delivery",
+  { skip: !sql },
+  async () => {
+    const hook = flakyWebhook([503, 409, 429, "down", 502, 408]);
+    const t = await setup([hook.runner]);
+    await webhookTrigger(t);
+    await t.message("hello");
+    const [run] = await t.runs();
+    assert.equal(run.state, "starting");
+    const [row] = await sql!`
+      select attempts, next_attempt_at > now() as later, delivery is not null as sealed
+        from agent_connect.teams_runs where id = ${run.id}`;
+    assert.deepEqual({ ...row }, { attempts: 1, later: true, sealed: true });
+    const [event] = await sql!`
+      select state, reason from agent_connect.teams_events where bot_id = ${t.botId}`;
+    assert.equal(event.state, "run");
+
+    // Not due yet: nothing is sent.
+    await t.runtime.retryDue();
+    assert.equal(hook.posts.length, 1);
+    for (let i = 2; i <= 7; i++) {
+      await due(run.id);
+      await t.runtime.retryDue();
+      assert.equal(hook.posts.length, i);
+    }
+    const [started] = await t.runs();
+    assert.equal(started.state, "running");
+    assert.equal(started.sessionId, `webhook:${run.id}`);
+    // Every attempt carried one delivery id, in the header and the signed body, and the same
+    // message and reply token.
+    const ids = new Set(hook.posts.map((p) => p.delivery));
+    assert.equal(ids.size, 1);
+    assert.match([...ids][0], /^[0-9a-f-]{36}$/);
+    assert.ok(hook.posts.every((p) => p.body.delivery === p.delivery));
+    assert.equal(new Set(hook.posts.map((p) => p.body.replyToken)).size, 1);
+    assert.equal(new Set(hook.posts.map((p) => p.body.text)).size, 1);
+    // Nothing is left to send again, and no one was told it failed.
+    const [after] = await sql!`
+      select next_attempt_at, delivery from agent_connect.teams_runs where id = ${run.id}`;
+    assert.deepEqual({ ...after }, { next_attempt_at: null, delivery: null });
+    assert.equal(notices(t.sent).length, 0);
+    assert.equal(
+      (await t.store.recentAudit(t.org, 50, { agentId: null, connectorId: null })).filter(
+        (a) => a.tool === "teams:run",
+      ).length,
+      1,
+    );
+  },
+);
+
+test(
+  "a runner that refuses with 401 or 404 is not handed the message again",
+  { skip: !sql },
+  async () => {
+    for (const status of [401, 404]) {
+      const reports: string[] = [];
+      const hook = flakyWebhook([status]);
+      const t = await setup([hook.runner], { report: (kind) => reports.push(kind) });
+      await webhookTrigger(t);
+      await t.message("hello");
+      const [run] = await t.runs();
+      assert.equal(run.state, "failed");
+      assert.equal(run.error, `The webhook answered ${status}`);
+      assert.equal(notices(t.sent).length, 1);
+      assert.deepEqual(reports, ["teams_run_start_failed"]);
+      await due(run.id);
+      await t.runtime.retryDue();
+      assert.equal(hook.posts.length, 1);
+    }
+  },
+);
+
+test(
+  "past the retry window the run fails with the last answer, told and reported once",
+  { skip: !sql },
+  async () => {
+    const reports: string[] = [];
+    // Room for the 5 s step, not the 15 s one after it.
+    const hook = flakyWebhook([503, 500]);
+    const t = await setup([hook.runner], {
+      retryWindowMs: 10_000,
+      report: (kind) => reports.push(kind),
+    });
+    await webhookTrigger(t);
+    await t.message("hello");
+    const [run] = await t.runs();
+    assert.equal(run.state, "starting");
+    assert.equal(notices(t.sent).length, 0);
+    assert.deepEqual(reports, []);
+    await due(run.id);
+    await t.runtime.retryDue();
+    const [failed] = await t.runs();
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.error, "The webhook answered 500");
+    assert.equal(notices(t.sent).length, 1);
+    assert.deepEqual(reports, ["teams_run_start_failed"]);
+    const [event] = await sql!`
+      select state from agent_connect.teams_events where bot_id = ${t.botId}`;
+    assert.equal(event.state, "failed");
+    // With no window at all, the first refusal is the last.
+    const once = flakyWebhook([503]);
+    const u = await setup([once.runner], { retryWindowMs: 0 });
+    await webhookTrigger(u);
+    await u.message("hello");
+    assert.equal((await u.runs())[0].state, "failed");
+  },
+);
+
+test(
+  "a pending hand-over survives a restart and is sent once across two workers",
+  { skip: !sql },
+  async () => {
+    const hook = flakyWebhook([503]);
+    const t = await setup([hook.runner]);
+    await webhookTrigger(t);
+    await t.message("hello");
+    const [run] = await t.runs();
+    await t.runtime.stop();
+    // Two new processes on the same database, due at once.
+    await due(run.id);
+    const a = t.newRuntime();
+    const b = t.newRuntime();
+    await Promise.all([a.retryDue(), b.retryDue(), a.retryDue(), b.retryDue()]);
+    assert.equal(hook.posts.length, 2);
+    assert.equal(hook.posts[0].delivery, hook.posts[1].delivery);
+    assert.equal((await t.runs())[0].state, "running");
+    // A run already started is never sent again, even if marked due.
+    await due(run.id);
+    await a.retryDue();
+    assert.equal(hook.posts.length, 2);
+  },
+);
+
+test(
+  "a later message in the thread waits for the earlier one's hand-overs",
+  { skip: !sql },
+  async () => {
+    const hook = flakyWebhook([503, 503]);
+    const t = await setup([hook.runner]);
+    await webhookTrigger(t);
+    await t.message("first");
+    await t.message("second");
+    const events = async () =>
+      (
+        await sql!`select activity_id, state from agent_connect.teams_events
+                    where bot_id = ${t.botId} order by id`
+      ).map((e) => `${e.activity_id} ${e.state}`);
+    assert.deepEqual(await events(), ["act-1 run", "act-2 held"]);
+    const [run] = await t.runs();
+    // The watcher leaves a run waiting to be handed over alone, and holds the next message.
+    await sql!`update agent_connect.teams_runs set reply_token_at = now() - interval '11 minutes'
+                where id = ${run.id}`;
+    await t.runtime.watch();
+    await t.runtime.idle();
+    assert.equal((await t.runs())[0].state, "starting");
+    assert.deepEqual(await events(), ["act-1 run", "act-2 held"]);
+    await due(run.id);
+    await t.runtime.retryDue();
+    await t.runtime.watch();
+    await t.runtime.idle();
+    assert.deepEqual(await events(), ["act-1 run", "act-2 held"]);
+    assert.deepEqual(
+      hook.posts.map((p) => p.body.text.includes("first")),
+      [true, true],
+    );
+    // The first is taken; once answered, the second goes.
+    await due(run.id);
+    await t.runtime.retryDue();
+    assert.equal((await t.runs())[0].state, "running");
+    await sql!`update agent_connect.teams_runs set reply_count = 1 where id = ${run.id}`;
+    await t.runtime.watch();
+    await t.runtime.idle();
+    assert.deepEqual(await events(), ["act-1 run", "act-2 run"]);
+    assert.equal(hook.posts.length, 4);
+    assert.ok(hook.posts[3].body.text.includes("second"));
+    assert.notEqual(hook.posts[3].delivery, hook.posts[0].delivery);
+  },
+);
 
 // ---- approval cards ----
 

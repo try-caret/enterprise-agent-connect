@@ -152,6 +152,8 @@ Branding), `BUILTIN_APPS` (comma-separated built-in app ids this deployment offe
 docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md, docs/sql-connector.md;
 any other needs a
 `ConnectorModule` passed to `createAgentConnect`).
+`RUNNER_RETRY_SECONDS` (900; 0 to 3600, 0 never retries; option `runnerRetrySeconds`): how long a
+run its runner did not take is handed over again (Trigger runners).
 `SENTRY_DSN` (+ optional `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`; option `errorReporting`):
 failures reported to Sentry as they happen (packages/server/src/report.ts, README "Error
 reporting": the kinds, ids and error class/code/status only, never a message; once a minute per
@@ -197,21 +199,32 @@ concurrency caps, the reply token and `teams_reply`, the watcher's timeouts.
 environmentId and vaultIds (unchanged). `webhook`: settings `{url}` (https), and a
 `signingSecret` (32+ chars, write-only, sealed under `teams-trigger:<agent id>`; the trigger
 shows `hasSigningSecret`). Saving pings it signed; each message is a POST of `{type: "message",
-run, agent, bot, requestedBy, text, replyToken, mcpUrl}` with
-`X-Agent-Connect-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">` (2xx accepts; anything
-else fails the run). The receiver answers with MCP `teams_reply` and that agent's own key; the
+run, delivery, agent, bot, requestedBy, text, replyToken, mcpUrl}` with
+`X-Agent-Connect-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">` (2xx accepts; no
+answer in 10 s, a failed connection, 5xx, 408, 409 or 429 throw `RetryLater`; anything else fails
+the run). Retries (docs/triggers.md, When the runner does not answer): the runtimes keep the run
+`starting` with `next_attempt_at`, `attempts` and the sealed `delivery` (Teams: prompt, reply
+token, requester, event id; events: prompt and event; AAD `agent-connect:teams-delivery:<run>` /
+`agent-connect:event-delivery:<run>`), schedule with `nextAttempt` (5 s, 15 s, 30 s, 1, 2, then 4
+min, ±20%, Retry-After up to 4 min, within `RUNNER_RETRY_SECONDS` of the first attempt) and a
+`retries` drainer per runtime claims due runs (`claimRetry`: SKIP LOCKED, 2 min lease), checks
+agent, trigger and runner again, and sends the same `deliveryId` (`RunInput`/`EventRunInput`;
+the webhook's `X-Agent-Connect-Delivery` header and body `delivery`). A Teams run waiting holds
+its thread (later messages stay held); `failStaleStarts` skips runs with `next_attempt_at`; the
+failure notice, Sentry report and (events) audit row come at the final outcome only. The receiver answers with MCP `teams_reply` and that agent's own key; the
 run is answered once a reply arrives, stopped after 30 min without one; it reports no cost (the
 caps still count each answer's budget). A run may reply while still `starting` (a receiver
 replying inside its POST handler). Each run records its runner (`teams_runs.runner`): only that
 runner continues, watches or stops it, and saving the trigger with another runner stops the old
 runner's live sessions. A run whose runner the deployment no longer offers is marked failed,
 but its session is left running (nothing here can stop it). The webhook URL is an admin-only capability: the service POSTs from its
-own network, so receivers check `t` freshness and dedupe on `replyToken` (`docs/teams.md`, As built).
+own network, so receivers check `t` freshness and dedupe on `delivery` (one per hand-over, the same
+on every attempt) and `replyToken` (`docs/teams.md`, As built).
 `createAgentConnect({runners})` takes runner factories. App events use the same runners through
 the optional `startEvent` (EventRunInput: no bot or reply token; `RunInput` is unchanged for
 existing runners): only a runner with it can be chosen for an event trigger. Claude: a session
-with `source: <prefix>-events` metadata (and `thread`); webhook: `{type: "event", run, agent, app, event,
-deliveryId, thread, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
+with `source: <prefix>-events` metadata (and `thread`); webhook: `{type: "event", run, delivery, agent, app,
+event, deliveryId, thread, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
 `thread` (null when the app declares no `events.thread` or the event has none): a
 32-hex id, sha256 of the trigger id and the thread field's value, the same for every event of
 one conversation on one trigger; `run` stays one per event. A host keys its session on `thread ??
@@ -242,7 +255,9 @@ rollback drops it), 0007 the app event tables (rollback drops them), 0008 `inter
 connector definitions; rollback drops it), 0009 the `graph` source (its check constraints),
 `event_watches` (one per Graph subscription and watched value: Graph's subscription id, expiry,
 catch-up delta link) and `event_runs.thread` (rollback drops `event_watches` first; the rest
-goes with the 0007 tables). The adopting run then makes simple views
+goes with the 0007 tables), and 0012 the retry columns on `teams_runs` and `event_runs`
+(`attempts`, `next_attempt_at`, sealed `delivery`; rollback drops them from `teams_runs`, the rest
+goes with 0007). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
