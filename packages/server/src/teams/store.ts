@@ -579,14 +579,21 @@ export function createTeamsStore(sql: Sql, schema: string) {
       continues: RunRow | null,
       caps: Caps,
     ): Promise<{ run: RunRow | null } | { cap: NonNullable<ReturnType<typeof capReached>> }> {
-      return withAdvisoryLock(sql, `${schema}.teams-runs:${input.agentId}`, async (tx) => {
-        const cap = capReached(await this.runCounts(input.agentId, input.botId, tx), caps);
-        if (cap) return { cap };
-        if (!continues) return { run: await this.startRun(input, tx) };
-        const { triggerActivityId, replyTokenHash } = input;
-        const free = await this.continueRun(continues, triggerActivityId, replyTokenHash, tx);
-        return { run: free ? { ...continues, triggerActivityId } : null };
-      });
+      try {
+        return await withAdvisoryLock(sql, `${schema}.teams-runs:${input.agentId}`, async (tx) => {
+          const cap = capReached(await this.runCounts(input.agentId, input.botId, tx), caps);
+          if (cap) return { cap };
+          if (!continues) return { run: await this.startRun(input, tx) };
+          const { triggerActivityId, replyTokenHash } = input;
+          const free = await this.continueRun(continues, triggerActivityId, replyTokenHash, tx);
+          return { run: free ? { ...continues, triggerActivityId } : null };
+        });
+      } catch (error) {
+        // During a rollout the previous image starts runs without the lock: the thread's
+        // one-active index then refuses this continued turn. Nothing else was written.
+        if ((error as { code?: string }).code === "23505") return { run: null };
+        throw error;
+      }
     },
 
     // A new session for the thread. Null when one is already active there (unique index).
@@ -615,8 +622,8 @@ export function createTeamsStore(sql: Sql, schema: string) {
     // session is no longer idle, or not at the turn read (another message got there first, and
     // its turn may have reached the session's last). It stays 'starting' until the message is
     // sent, so the watcher never reads the previous turn's idle as this one's.
-    // Checked here and not left to the one-active index: under admit() every writer of the
-    // thread waits, and a failed statement would fail admit()'s transaction.
+    // Checked here and not left to the one-active index: under admit() every writer of this
+    // image waits, and a failed statement fails admit()'s transaction (answered busy there).
     async continueRun(
       read: Pick<RunRow, "id" | "turns">,
       triggerActivityId: string,

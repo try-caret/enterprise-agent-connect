@@ -705,6 +705,55 @@ test(
   },
 );
 
+test(
+  "a continued turn is answered busy when the previous image starts one in the thread first",
+  { skip: !sql },
+  async () => {
+    const t = await teamsSetup();
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const read = await idleSession(t, 1);
+    // The previous image, during a rollout, takes no advisory lock: its start is in, not yet
+    // committed, when this image's continued turn is written.
+    const previous = gate();
+    const starting = sql!.begin(async (tx) => {
+      await tx`insert into ${name("teams_runs")}
+                 (agent_id, bot_id, conversation_id, thread_id, trigger_activity_id,
+                  reply_token_hash, requested_by_aad_id, runner, state)
+               values (${t.agentId}, ${t.botId}, ${read.conversationId}, ${read.threadId},
+                       'act-old', ${hashReplyToken("token-old")}, ${PERSON}, 'fake', 'starting')`;
+      await previous.pass();
+    });
+    await previous.entered;
+    const admitting = t.teams.admit(
+      {
+        agentId: t.agentId,
+        botId: t.botId,
+        conversationId: read.conversationId,
+        threadId: read.threadId,
+        triggerActivityId: "act-new",
+        replyTokenHash: hashReplyToken("token-new"),
+        requestedBy: PERSON,
+        runner: "fake",
+      },
+      read,
+      CAPS,
+    );
+    // Until the continued turn waits on the previous image's row.
+    for (let i = 0; i < 200; i++) {
+      const [{ waiting }] = await sql!`
+        select count(*)::int as waiting from pg_stat_activity
+         where wait_event_type = 'Lock' and query like ${`%${SCHEMA}%teams_runs%`}`;
+      if (waiting) break;
+      await sleep(10);
+    }
+    previous.open();
+    await starting;
+    assert.deepEqual(await admitting, { run: null });
+  },
+);
+
 test("an agent's last run slot goes to one process when both admit at once", { skip: !sql }, async () => {
   const t = await teamsSetup();
   // Each process's count waits for the other's, so without the lock both say there is room.
