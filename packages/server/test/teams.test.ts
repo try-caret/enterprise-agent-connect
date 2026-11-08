@@ -8,7 +8,8 @@ import { migrate } from "../src/migrate.ts";
 import { CredentialKey } from "../src/secrets.ts";
 import { connectDatabase, createStore } from "../src/store.ts";
 import { hashReplyToken } from "../src/teams/activity.ts";
-import { createTeamsAdmin } from "../src/teams/admin.ts";
+import { offerAad } from "../src/teams/offer.ts";
+import { createTeamsAdmin, resealTeamsCredentials } from "../src/teams/admin.ts";
 import type { BotClient } from "../src/teams/bot.ts";
 import type { BotAuth } from "../src/teams/jwt.ts";
 import type { RunInput, TriggerRunner } from "../src/teams/runner.ts";
@@ -36,10 +37,12 @@ const auth = { token: async () => () => {} } as unknown as BotAuth;
 type Sent = { method: string; path: string; body?: any };
 // A Bot Connector that records what was sent. A new channel post answers its thread and
 // activity id, any other post its activity id.
-function fakeBots(sent: Sent[]) {
+function fakeBots(sent: Sent[], refuse?: (req: Sent) => number | undefined) {
   return {
     connector: async (_bot: unknown, _url: string, req: Sent) => {
       sent.push(req);
+      const refused = refuse?.(req);
+      if (refused) return { status: refused, data: null };
       if (req.method === "POST" && req.path === "/v3/conversations")
         return {
           status: 201,
@@ -78,9 +81,12 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
   return { runner, calls };
 }
 
-async function setup(runners: TriggerRunner[], opts: { fetch?: typeof fetch } = {}) {
+async function setup(
+  runners: TriggerRunner[],
+  opts: { fetch?: typeof fetch; refuse?: (req: Sent) => number | undefined } = {},
+) {
   const sent: Sent[] = [];
-  const bots = fakeBots(sent);
+  const bots = fakeBots(sent, opts.refuse);
   const store = createStore(sql!, SCHEMA);
   const teams = createTeamsStore(sql!, SCHEMA);
   const org = randomUUID();
@@ -808,7 +814,16 @@ const DIRECT = "a:chat";
 const REPORT = "https://contoso.sharepoint.com/sites/T/_layouts/15/download.aspx?tempauth=t1";
 const UPLOAD = "https://contoso-my.sharepoint.com/personal/ann/_api/upload?session=s1";
 
-async function fileReplies(opts: { body?: string; length?: number } = {}) {
+async function fileReplies(
+  opts: {
+    body?: string;
+    length?: number;
+    // The upload's answers in turn (a function throws instead); 201 once they run out.
+    puts?: (number | (() => never))[];
+    refuse?: (req: Sent) => number | undefined;
+  } = {},
+) {
+  const putAnswers = [...(opts.puts ?? [])];
   const bytes = opts.body ?? "quarterly numbers";
   const puts: { url: string; headers: Headers; body: Buffer }[] = [];
   const gets: string[] = [];
@@ -825,13 +840,14 @@ async function fileReplies(opts: { body?: string; length?: number } = {}) {
       headers: new Headers(init!.headers),
       body: Buffer.from(init!.body as Uint8Array),
     });
-    return new Response("{}", { status: 201 });
+    const next = putAnswers.shift() ?? 201;
+    return new Response("{}", { status: typeof next === "number" ? next : next() });
   }) as unknown as typeof fetch;
   let replyToken = "";
   const { runner } = fakeRunner("fake-file-reply", async (input) => {
     replyToken = input.replyToken;
   });
-  const t = await setup([runner], { fetch: fakeFetch });
+  const t = await setup([runner], { fetch: fakeFetch, refuse: opts.refuse });
   await t.teams.upsertConversation({
     botId: t.botId,
     conversationId: DIRECT,
@@ -1027,3 +1043,139 @@ test(
     assert.equal(good.isError, false, good.text);
   },
 );
+
+const isFileCard = (kind: string) => (req: Sent) =>
+  req.method === "POST" &&
+  req.body?.attachments?.[0]?.contentType === `application/vnd.microsoft.teams.card.file.${kind}`;
+const texts = (sent: Sent[]) =>
+  sent.filter((s) => s.method === "POST" && s.body?.text).map((s) => s.body.text as string);
+
+test(
+  "an upload that fails or is not complete keeps the file for another accept, and says so",
+  { skip: !sql },
+  async () => {
+    const f = await fileReplies({
+      puts: [
+        503,
+        // 202 is not a finished upload in Teams' contract.
+        202,
+        () => {
+          throw new TypeError("fetch failed");
+        },
+      ],
+    });
+    await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    const [offer] = await f.offers();
+    for (let i = 0; i < 3; i++) {
+      await f.answer(offer.id);
+      assert.equal((await f.offers()).length, 1, `kept after failure ${i + 1}`);
+    }
+    assert.equal(f.t.sent.filter(isFileCard("info")).length, 0);
+    assert.ok(!f.t.sent.some((s) => s.method === "DELETE"));
+    assert.equal(
+      texts(f.t.sent).filter((x) => /couldn't save report\.xlsx.*Accept on it to try again/.test(x))
+        .length,
+      3,
+    );
+    // The next accept goes through.
+    await f.answer(offer.id);
+    assert.equal(f.puts.length, 4);
+    assert.equal(f.t.sent.filter(isFileCard("info")).length, 1);
+    assert.equal((await f.offers()).length, 0);
+    assert.deepEqual(
+      (await f.fileAudits()).map((a) => [a.decision, a.reason]),
+      [
+        ["denied", "report.xlsx: OneDrive answered 503"],
+        ["denied", "report.xlsx: OneDrive answered 202"],
+        ["denied", "report.xlsx: the upload failed: fetch failed"],
+        ["allowed", "report.xlsx saved to their OneDrive"],
+      ],
+    );
+  },
+);
+
+test(
+  "a saved file whose file card Teams refuses is told to the person and its consent card goes",
+  { skip: !sql },
+  async () => {
+    const f = await fileReplies({ refuse: (r) => (isFileCard("info")(r) ? 502 : undefined) });
+    await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    const [offer] = await f.offers();
+    await f.answer(offer.id);
+    assert.equal(f.puts.length, 1);
+    assert.ok(
+      texts(f.t.sent).includes("I saved report.xlsx to your OneDrive, but couldn't show it here."),
+    );
+    assert.ok(f.t.sent.some((s) => s.method === "DELETE"));
+    assert.equal((await f.offers()).length, 0);
+    assert.deepEqual(
+      (await f.fileAudits()).map((a) => a.decision),
+      ["denied"],
+    );
+  },
+);
+
+test(
+  "a file whose consent card fails after the text is told, not thrown, and the rest still go",
+  { skip: !sql },
+  async () => {
+    let cards = 0;
+    const f = await fileReplies({
+      refuse: (r) => (isFileCard("consent")(r) && ++cards === 2 ? 500 : undefined),
+    });
+    const r = await f.reply([
+      { name: "a.xlsx", download_url: REPORT },
+      { name: "b.xlsx", download_url: REPORT },
+      { name: "c.xlsx", download_url: REPORT },
+    ]);
+    assert.equal(r.isError, false, r.text);
+    const out = JSON.parse(r.text);
+    assert.equal(out.replied, true);
+    assert.equal(out.files_offered, 2);
+    assert.deepEqual(
+      out.files_not_sent.map((x: { name: string }) => x.name),
+      ["b.xlsx"],
+    );
+    assert.equal(out.person_told, true);
+    assert.ok(texts(f.t.sent).includes("I couldn't send b.xlsx."));
+    assert.deepEqual((await f.offers()).map((o) => o.name).sort(), ["a.xlsx", "c.xlsx"]);
+  },
+);
+
+test("expired file offers are pruned without waiting for a new offer", { skip: !sql }, async () => {
+  const f = await fileReplies();
+  await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+  const [offer] = await f.offers();
+  await sql!`update agent_connect.teams_file_offers set expires_at = now() - interval '1 minute'
+              where id = ${offer.id}`;
+  await f.t.teams.pruneFileOffers();
+  assert.equal((await f.offers()).length, 0);
+});
+
+test("a key rotation re-seals files still waiting to be accepted", { skip: !sql }, async () => {
+  const f = await fileReplies();
+  await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+  const [offer] = await f.offers();
+  const rotated = new CredentialKey(
+    Buffer.alloc(32, 9).toString("base64"),
+    Buffer.alloc(32, 7).toString("base64"),
+  );
+  // Only this test's offer: the other rows in the shared database stay on the test key.
+  const n = await resealTeamsCredentials(
+    {
+      ...f.t.teams,
+      staleSealed: async () => ({ bots: [], claudeKeys: [], triggers: [] }) as never,
+      staleFileOffers: async (ids) =>
+        (await f.t.teams.staleFileOffers(ids)).filter((id) => id === offer.id),
+    },
+    rotated,
+  );
+  assert.equal(n.fileOffers, 1);
+  const [row] = await sql!`select content, content_key_id as "keyId"
+                             from agent_connect.teams_file_offers where id = ${offer.id}`;
+  assert.notEqual(row.keyId, key.id);
+  // It opens with the new key alone.
+  const next = new CredentialKey(Buffer.alloc(32, 9).toString("base64"));
+  const opened = next.open({ ciphertext: row.content, keyId: row.keyId }, offerAad(offer.id));
+  assert.equal(Buffer.from(opened.content, "base64").toString(), f.bytes);
+});

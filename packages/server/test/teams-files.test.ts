@@ -7,7 +7,7 @@ import {
   promptText,
   type Activity,
 } from "../src/teams/activity.ts";
-import { fileStorageUrl, offerName } from "../src/teams/offer.ts";
+import { downloadFile, FileRefused, fileStorageUrl, offerName } from "../src/teams/offer.ts";
 
 // Files sent with a Teams message: what is kept of them and how the agent is told.
 
@@ -118,4 +118,12 @@ test("files are fetched from and saved to SharePoint and OneDrive only", () => {
     assert.equal(fileStorageUrl(bad), null, String(bad));
   assert.equal(offerName("../a/b:c?.xlsx"), ".._a_b_c_.xlsx");
   assert.equal(offerName("  "), "file");
+});
+
+test("a download with no body is refused as an empty file", async () => {
+  const empty = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+  await assert.rejects(
+    downloadFile(empty, "https://contoso.sharepoint.com/x", 1024),
+    (e: unknown) => e instanceof FileRefused && /empty/.test(e.message),
+  );
 });

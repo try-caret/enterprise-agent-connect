@@ -163,7 +163,7 @@ a deprecation line in the log (server.ts `renamed`; drop it in the release after
 recorded or read only (an app page or the Integrations tab; only over the credential it read, so a
 reconnect meanwhile wins). Teams bot credentials
 (`teams_bots`), Claude keys (`providers`, provider `anthropic`), trigger signing secrets
-(`teams_triggers.secret`) and app event webhook and trigger secrets (`event_subscriptions.secret`,
+(`teams_triggers.secret`), files waiting in `teams_file_offers` and app event webhook and trigger secrets (`event_subscriptions.secret`,
 `event_triggers.secret`) are re-sealed by a pass at startup while `CONNECT_ENCRYPTION_KEY_PREVIOUS` is set. Drop the
 previous key once every row's `credential_key_id` is the new one in `connections`,
 `providers` and `teams_bots`. Approvals in flight during a rotation must be restarted.

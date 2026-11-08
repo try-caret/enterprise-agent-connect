@@ -339,13 +339,18 @@ files, so `files` there is refused with a note to share a link instead.
   refused. Every file is fetched before anything is posted, so a bad link leaves the reply unused.
 - After the text, one consent card (`application/vnd.microsoft.teams.card.file.consent`) per
   file. The file waits sealed in `teams_file_offers` (one row per file, the chat's person as
-  recipient, gone after 24 h).
+  recipient; expired after 24 h and deleted by the hourly prune; re-sealed by the key rotation
+  pass). A card Teams refuses does not fail the reply, which is already used: the chat is told
+  `I couldn't send <names>.` and the tool answers `files_not_sent` and `person_told`.
 - Accept or Decline arrives as a `fileConsent/invoke`, after the same request checks as a card
   click (6.1). It counts once, only from the recipient, in that chat, unexpired (one `delete …
   returning`). On accept the bytes go by one `PUT` to `uploadInfo.uploadUrl` (their OneDrive,
   which must also be a SharePoint address), then a file card
   (`application/vnd.microsoft.teams.card.file.info`) is posted and the consent card is removed.
-  The upload runs after the invoke is answered. Every answer is audited (`teams:file`).
+  Only 200 or 201 is a finished upload; any other answer or a failed request puts the offer back
+  and tells the person to accept again. A file card Teams refuses after the upload tells the
+  person the file is in their OneDrive and removes the consent card. The upload runs after the
+  invoke is answered. Every answer and every failure is audited (`teams:file`).
 
 ### 6.5 Org Claude key
 
