@@ -663,11 +663,11 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   refused, "MA" taken), so a value must equal one piece; list_attributes gives the pieces. The
   workspace lookup's refusal gets no capability hint. Jira's `discover` names `limit: projects`,
   so a UI that reads it offers project keys only for that limit, never for `asset_schemas` (the
-  admin dashboard does not read it yet). No create or delete. Errors read through `answers.ts`,
-  shared with the issue tools. Checked live November 8, 2026 (with all 15 cmdb scopes, not only
-  the listed ones): a service account needs a JSM agent seat, no schema role; a partial PUT leaves
-  other attributes as they were. Source: developer.atlassian.com/cloud/assets/swagger.v3.json,
-  read November 7, 2026.
+  admin dashboard reads it from try-caret/pourly#1615). No create or delete. Errors read through
+  `answers.ts`, shared with the issue tools. Checked live November 8, 2026 (with all 15 cmdb
+  scopes, not only the listed ones): a service account needs a JSM agent seat, no schema role; a
+  partial PUT leaves other attributes as they were. Source:
+  developer.atlassian.com/cloud/assets/swagger.v3.json, read November 7, 2026.
 - Microsoft connection (provider `microsoft`, table `providers`, one per org):
   the apps with `"provider": "microsoft"` sign in through it, so its credentials are entered
   once; each app row keeps its own ceiling and settings (`provider_id`, no credential of its
