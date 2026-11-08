@@ -309,7 +309,6 @@
       "q": "SELECT id, name FROM subsidiary WHERE isinactive = 'F' ORDER BY id"
     },
     "label": "Subsidiaries the role can see",
-    "limit": "subsidiaries",
     "show": "items[].id",
     "name": "items[].name",
     "ifEmpty": "No subsidiaries were found. Either your account has none, or the role lacks Subsidiaries (View)."

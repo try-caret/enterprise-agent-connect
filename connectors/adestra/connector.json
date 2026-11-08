@@ -111,7 +111,6 @@
     "method": "GET",
     "path": "/projects",
     "label": "Projects",
-    "limit": "projects",
     "show": "projects[].id",
     "name": "projects[].name"
   },

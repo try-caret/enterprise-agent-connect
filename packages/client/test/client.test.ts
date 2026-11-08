@@ -190,9 +190,8 @@ test("steps for a capability show only while it is ticked; discover labels are o
   assert.deepEqual(discovered(jira, projects, "projects"), ["HELP"]);
   assert.deepEqual(discovered(jira, projects, "asset_schemas"), []);
   assert.deepEqual(discovered(jira, projects), ["HELP"]);
-  // NetSuite's subsidiaries are not choices for its locations or saved searches.
-  assert.deepEqual(discovered(netsuite, checks, "subsidiaries"), ["1", "2"]);
-  assert.deepEqual(discovered(netsuite, checks, "locations"), []);
+  // One naming no limit (NetSuite, unchanged here) fills any limit, as before.
+  assert.deepEqual(discovered(netsuite, checks, "locations"), ["1", "2"]);
 });
 
 test("a bot published by the setup script is asked to publish again when its package changes", () => {

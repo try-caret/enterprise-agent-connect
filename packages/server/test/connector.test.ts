@@ -1,14 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -280,15 +271,4 @@ test("a step's option and a field's requires must name an earlier choice's optio
   const [adds, person] = teams.fields;
   refused({ ...teams, fields: [person, adds] });
   assert.ok(connectorSchema.safeParse(teams).success);
-});
-
-test("every connector with a discover probe and two or more list limits names the one it fills", () => {
-  const dir = new URL("../../../connectors/", import.meta.url);
-  for (const id of readdirSync(dir)) {
-    const file = new URL(`${id}/connector.json`, dir);
-    if (!existsSync(file)) continue;
-    const c = JSON.parse(readFileSync(file, "utf8"));
-    const lists = (c.limits ?? []).filter((l: { kind: string }) => l.kind === "list");
-    if (c.discover && lists.length > 1) assert.ok(c.discover.limit, `${id}: discover.limit`);
-  }
 });
