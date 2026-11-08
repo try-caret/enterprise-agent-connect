@@ -216,6 +216,24 @@ test("the signed webhook fails at once on any other refusal", async () => {
   }
 });
 
+test("the signed webhook never follows a redirect, and fails at once on one", async () => {
+  for (const status of [301, 302, 307, 308]) {
+    const modes: (string | undefined)[] = [];
+    const hook = signedWebhook((async (_url: string, init: RequestInit) => {
+      modes.push(init.redirect);
+      return new Response(null, { status, headers: { location: "https://elsewhere.example/" } });
+    }) as never)(ctx);
+    await assert.rejects(hook.start(input()), (e: unknown) => {
+      return (
+        e instanceof ConnectError &&
+        !(e instanceof RetryLater) &&
+        e.message === `The webhook answered ${status}`
+      );
+    });
+    assert.deepEqual(modes, ["manual"]);
+  }
+});
+
 test("every attempt of one delivery carries its id, signed", async () => {
   const r = receiver(503);
   const hook = signedWebhook(r.fetch)(ctx);

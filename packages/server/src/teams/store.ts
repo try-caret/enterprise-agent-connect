@@ -630,6 +630,9 @@ export function createTeamsStore(sql: Sql, schema: string) {
                  note = coalesce(${patch.note ?? null}, note),
                  cost_cents = coalesce(${patch.costCents ?? null}, cost_cents),
                  finished_at = case when ${Boolean(finished)} then now() else finished_at end,
+                 -- The 30 minute stop counts from when the runner took the run.
+                 reply_token_at = case when state = 'starting' and ${patch.state ?? null} = 'running'
+                   then now() else reply_token_at end,
                  next_attempt_at = case when ${delivered} then null else next_attempt_at end,
                  delivery = case when ${delivered} then null else delivery end,
                  delivery_key_id = case when ${delivered} then null else delivery_key_id end

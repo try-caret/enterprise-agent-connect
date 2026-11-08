@@ -63,16 +63,26 @@ A run's hand-over to its runner (a Teams message, or an app's event) is tried ag
 runner may take it later, so a receiver that restarts (a deploy) only delays messages:
 
 - **Tried again**: no answer within 10 seconds, a connection that fails, and the answers 5xx,
-  408, 409 and 429. Any other answer (400, 401 for a bad signature, 403, 404 for an unknown
-  agent, 422...) fails the run at once, as before.
+  408, 409 and 429. Any other answer (a redirect, which is never followed, 400, 401 for a bad
+  signature, 403, 404 for an unknown agent, 422...) fails the run at once, as before.
 - **When**: 5 s, 15 s, 30 s, 1 min, 2 min, then every 4 min, each within 20% either way, and at
   least the answer's `Retry-After` (seconds or a date; up to 4 minutes). Past the retry window
   (`RUNNER_RETRY_SECONDS`, default 900 = 15 minutes from the first attempt, 0 to 3600; 0 never
-  tries again; option `runnerRetrySeconds`) the run fails with the last answer as its error.
+  tries again; option `runnerRetrySeconds`) the run fails with the last answer as its error. A
+  run whose attempt comes due only past the window (a long outage of the service itself) fails
+  without being sent.
+- **Access checked again**: before each attempt, as for a new message or event. A Teams message
+  is decided again on the saved message (the agent, its Teams grant and limits, the trigger's
+  allowed people and teams, membership of the organization); an event on the trigger (still on,
+  its event types and conditions), the agent's grant, the connection and limits. Refused, the run
+  fails with the reason. The trigger's caps are not counted again: a waiting run keeps its place
+  among them (it counts as running while it waits).
 - **Durable**: a run waiting for its next attempt stays `starting` in Postgres, with when to try
   again and what to send (the prompt, its reply token and the event's fields, sealed). Every
   replica looks for due runs every 5 seconds and leases one at a time (`FOR UPDATE SKIP
   LOCKED`, two minutes), so a restart picks them up and no two replicas send the same attempt.
+  An attempt that cannot be made at all (e.g. what was saved cannot be opened) fails the run.
+- **30 minutes**: a run's 30 minute limit counts from when the runner took it.
 - **Teams order**: a run waiting to be tried again still holds its thread, so later messages
   there stay held until it starts or fails. The person sees the usual "Sorry, I couldn't finish
   this" only when it finally fails.
@@ -86,6 +96,18 @@ Every attempt of one hand-over carries the same id, a UUID, in the header
 not the header). A receiver should dedupe on it: an attempt it took but answered with an error,
 or whose answer was lost, comes again with the same id. A new message, a continued session's
 next turn and each event get a new one. The signature's `t` is new on every attempt.
+
+An attempt that takes longer than 10 seconds is tried again while the receiver may still be
+working on it, so dedupe when the request arrives, not when the run has started:
+
+1. Claim the id atomically (e.g. insert it under a unique key) before starting anything.
+2. A repeat of an id whose run has started: answer 2xx, start nothing.
+3. A repeat while the first attempt is still starting: answer 409 or 503, which is tried again
+   later; any other 4xx fails the run.
+4. An attempt that fails before starting: release the claim, so the next attempt can.
+
+The same holds for a runner other than the webhook: an attempt that runs past its two-minute
+lease may be sent again by another replica, with the same `deliveryId`.
 
 ## Set up Jira
 

@@ -146,7 +146,9 @@ export interface TriggerRunner {
     when: "save" | "answer",
   ): Promise<void>;
   // Starts answering; the id later calls name the session by. Start, startEvent and continue
-  // throw RetryLater when a later attempt may succeed.
+  // throw RetryLater when a later attempt may succeed. A retried attempt is leased for two
+  // minutes: one that takes longer may be sent again by another replica, with the same
+  // deliveryId, so a runner that can be that slow must start once per deliveryId.
   start(input: RunInput): Promise<string>;
   // Starts a run for an app's event. A runner without it cannot be chosen for event triggers.
   startEvent?(input: EventRunInput): Promise<string>;
@@ -298,7 +300,9 @@ export const signedWebhook =
             ...(delivery ? { [DELIVERY_HEADER]: delivery } : {}),
           },
           body,
-          redirect: "error",
+          // Never followed. A redirect is an answer (it fails the run below), not a connection
+          // that failed (tried again).
+          redirect: "manual",
           signal: AbortSignal.timeout(10_000),
         });
       } catch (error) {

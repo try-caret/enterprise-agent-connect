@@ -35,6 +35,7 @@ import {
 import { createGraphSource } from "./graph.js";
 import { noReport, type Report } from "../report.js";
 import type {
+  AgentAppState,
   EventRetryRow,
   EventTriggerRow,
   EventsStore,
@@ -309,6 +310,37 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     return id;
   }
 
+  /** Why the event may not start a run of the trigger, as the agent's access and the trigger
+   *  stand now; null when it may. */
+  async function refusal(
+    org: string,
+    connector: Connector,
+    eventType: string,
+    data: EventData,
+    trigger: EventTriggerRow,
+    state: AgentAppState | null,
+  ): Promise<[AuditEntry["decision"], string] | null> {
+    if (!trigger.enabled) return ["denied", "Not started: the trigger is off"];
+    if (!trigger.eventTypes.includes(eventType))
+      return ["denied", "Filtered: not one of the trigger's event types"];
+    const capabilities =
+      state?.agentStatus === "active" && state.grant && state.connection?.connected
+        ? effectiveCapabilities(connector, state.grant.capabilities, state.connection.capabilities)
+        : [];
+    if (!capabilities.length)
+      return ["denied", `Not started: the agent has no access to ${connector.name}`];
+    const outside = outsideLimits(connector.events!.limits, data, state!.grant!.limits);
+    if (outside) return ["denied", `Out of limits: ${outside}`];
+    const failed = failedCondition(trigger.conditions, data);
+    if (failed) return ["denied", `Filtered: ${failed.field} does not match`];
+    const runner = deps.runners.get(trigger.runner);
+    if (!runner?.startEvent)
+      return ["failed", `Not started: this deployment cannot run ${trigger.runner}`];
+    const unready = await runner.unready(org);
+    if (unready) return ["failed", `Not started: ${unready}`];
+    return null;
+  }
+
   /** One trigger's decision on one event, audited whatever it is. True when a run started. */
   async function consider(
     event: QueuedEvent,
@@ -336,21 +368,10 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (fromSelf instanceof Error) return decide("failed", `Not started: ${fromSelf.message}`);
     if (fromSelf)
       return decide("denied", `Filtered: made by ${connector.name}'s own connection (an agent)`);
-    const capabilities =
-      state?.agentStatus === "active" && state.grant && state.connection?.connected
-        ? effectiveCapabilities(connector, state.grant.capabilities, state.connection.capabilities)
-        : [];
-    if (!capabilities.length)
-      return decide("denied", `Not started: the agent has no access to ${connector.name}`);
-    const outside = outsideLimits(connector.events!.limits, data, state!.grant!.limits);
-    if (outside) return decide("denied", `Out of limits: ${outside}`);
-    const failed = failedCondition(trigger.conditions, data);
-    if (failed) return decide("denied", `Filtered: ${failed.field} does not match`);
-    const runner = deps.runners.get(trigger.runner);
-    if (!runner?.startEvent)
-      return decide("failed", `Not started: this deployment cannot run ${trigger.runner}`);
-    const unready = await runner.unready(event.organizationId);
-    if (unready) return decide("failed", `Not started: ${unready}`);
+    const org = event.organizationId;
+    const refused = await refusal(org, connector, event.eventType, data, trigger, state);
+    if (refused) return decide(...refused);
+    const runner = deps.runners.get(trigger.runner)!;
     const cap = capReached(await events.runCounts(trigger.id), trigger);
     if (cap)
       return decide(
@@ -488,8 +509,20 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   const retries = drainer("events-retries", async () => {
     const row = await events.claimRetry();
     if (!row) return false;
-    await retry(row).catch((error) => console.error(`[events] retrying run ${row.id}`, error));
+    // Whatever stops a hand-over fails its run: left starting, it would be claimed again forever.
+    await retry(row)
+      .catch((error) => failStart(runOf(row, ""), row, error, row.attempts))
+      .catch((error) => console.error(`[events] retrying run ${row.id}`, error));
     return true;
+  });
+
+  const runOf = (row: EventRetryRow, agentName: string): RunContext => ({
+    runId: row.id,
+    org: row.organizationId,
+    agentName,
+    connectorId: row.connectorId,
+    eventType: row.eventType,
+    deliveryId: row.deliveryId,
   });
 
   // The next hand-over of a run the runner did not take, as the trigger stands now.
@@ -502,21 +535,21 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       events.triggerById(row.triggerId),
       events.agentState(row.agentId, row.connectorId),
     ]);
-    const run = {
-      runId: row.id,
-      org: row.organizationId,
-      agentName: state?.agentName ?? "",
-      connectorId: row.connectorId,
-      eventType: row.eventType,
-      deliveryId: row.deliveryId,
-    };
-    const runner = deps.runners.get(row.runner);
+    const run = runOf(row, state?.agentName ?? "");
     const fail = (why: string) => failStart(run, row, new ConnectError(why), row.attempts);
-    if (state?.agentStatus !== "active") return fail("The agent was turned off");
-    if (!trigger?.enabled || trigger.runner !== row.runner)
+    const since = Date.parse(row.startedAt);
+    if (Date.now() > since + retryWindowMs) return fail("The runner did not take it in time");
+    const connector = connectors.get(row.connectorId);
+    if (!connector?.events) return fail(`${row.connectorId} is no longer offered`);
+    if (!trigger || trigger.runner !== row.runner)
       return fail("Its trigger was turned off or changed runner");
-    if (!runner?.startEvent) return fail(`This deployment cannot run ${row.runner}`);
-    await handOver(run, runner, trigger, sent, row.attempts + 1, Date.parse(row.startedAt));
+    // Access may have changed while it waited. The caps were checked when it first came, and it
+    // has held its place among them since, so they are not counted again.
+    const data = sent.event.data as EventData;
+    const refused = await refusal(run.org, connector, row.eventType, data, trigger, state);
+    if (refused) return fail(`No longer allowed: ${refused[1]}`);
+    const runner = deps.runners.get(row.runner)!;
+    await handOver(run, runner, trigger, sent, row.attempts + 1, since);
   }
 
   // The runner's check of the trigger (for Claude: the agent uses this agent's own MCP address

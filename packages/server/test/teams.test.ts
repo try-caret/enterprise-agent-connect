@@ -1257,3 +1257,94 @@ test(
     assert.equal(good.isError, false, good.text);
   },
 );
+
+test(
+  "a hand-over is decided again: a sender taken off the allowed people is not handed over",
+  { skip: !sql },
+  async () => {
+    const hook = flakyWebhook([503]);
+    const t = await setup([hook.runner]);
+    await webhookTrigger(t);
+    await t.message("hello");
+    const [run] = await t.runs();
+    assert.equal(run.state, "starting");
+    await sql!`update agent_connect.teams_triggers
+                  set allowed_people = '{55555555-5555-5555-5555-555555555555}'
+                where agent_id = ${t.agentId}`;
+    await due(run.id);
+    await t.runtime.retryDue();
+    const [failed] = await t.runs();
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.error, "No longer allowed: sender not allowed");
+    assert.equal(hook.posts.length, 1);
+    assert.equal(notices(t.sent).length, 1);
+    // The Teams grant taken away does the same.
+    const again = flakyWebhook([503]);
+    const u = await setup([again.runner]);
+    await webhookTrigger(u);
+    await u.message("hello");
+    const [held] = await u.runs();
+    await sql!`delete from agent_connect.grants where agent_id = ${u.agentId}`;
+    await due(held.id);
+    await u.runtime.retryDue();
+    assert.equal((await u.runs())[0].error, "No longer allowed: agent may not respond in real time");
+    assert.equal(again.posts.length, 1);
+  },
+);
+
+test(
+  "a hand-over that cannot be made, or comes due past the window, fails its run once",
+  { skip: !sql },
+  async () => {
+    const hook = flakyWebhook([503, 503]);
+    const t = await setup([hook.runner]);
+    await webhookTrigger(t);
+    await t.message("hello");
+    const [run] = await t.runs();
+    // What was saved no longer opens.
+    await sql!`update agent_connect.teams_runs set delivery = '\\x00'::bytea where id = ${run.id}`;
+    await due(run.id);
+    await t.runtime.retryDue();
+    const [broken] = await t.runs();
+    assert.equal(broken.state, "failed");
+    assert.equal(notices(t.sent).length, 1);
+    const [row] = await sql!`
+      select next_attempt_at, delivery from agent_connect.teams_runs where id = ${run.id}`;
+    assert.deepEqual({ ...row }, { next_attempt_at: null, delivery: null });
+
+    // The service was down past the window: the run fails without being sent.
+    const u = await setup([hook.runner]);
+    await webhookTrigger(u);
+    await u.message("hello");
+    const [late] = await u.runs();
+    await sql!`update agent_connect.teams_runs set reply_token_at = now() - interval '16 minutes'
+                where id = ${late.id}`;
+    await due(late.id);
+    await u.runtime.retryDue();
+    const [over] = await u.runs();
+    assert.equal(over.state, "failed");
+    assert.equal(over.error, "The runner did not take it in time");
+    assert.equal(hook.posts.length, 2);
+  },
+);
+
+test(
+  "a run taken on a late attempt has its full 30 minutes",
+  { skip: !sql },
+  async () => {
+    const hook = flakyWebhook([503]);
+    const t = await setup([hook.runner], { retryWindowMs: 3600_000 });
+    await webhookTrigger(t);
+    await t.message("hello");
+    const [run] = await t.runs();
+    await sql!`update agent_connect.teams_runs set reply_token_at = now() - interval '40 minutes'
+                where id = ${run.id}`;
+    await due(run.id);
+    await t.runtime.retryDue();
+    assert.equal((await t.runs())[0].state, "running");
+    await t.runtime.watch();
+    const [still] = await t.runs();
+    assert.equal(still.state, "running");
+    assert.equal(notices(t.sent).length, 0);
+  },
+);

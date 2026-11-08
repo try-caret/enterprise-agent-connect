@@ -205,14 +205,18 @@ run, delivery, agent, bot, requestedBy, text, replyToken, mcpUrl}` with
 answer in 10 s, a failed connection, 5xx, 408, 409 or 429 throw `RetryLater`; anything else fails
 the run). Retries (docs/triggers.md, When the runner does not answer): the runtimes keep the run
 `starting` with `next_attempt_at`, `attempts` and the sealed `delivery` (Teams: prompt, reply
-token, requester, event id; events: prompt and event; AAD `agent-connect:teams-delivery:<run>` /
+token, requester, event id and the Teams activity; events: prompt and event; AAD `agent-connect:teams-delivery:<run>` /
 `agent-connect:event-delivery:<run>`), schedule with `nextAttempt` (5 s, 15 s, 30 s, 1, 2, then 4
 min, ±20%, Retry-After up to 4 min, within `RUNNER_RETRY_SECONDS` of the first attempt) and a
-`retries` drainer per runtime claims due runs (`claimRetry`: SKIP LOCKED, 2 min lease), checks
-agent, trigger and runner again, and sends the same `deliveryId` (`RunInput`/`EventRunInput`;
+`retries` drainer per runtime claims due runs (`claimRetry`: SKIP LOCKED, 2 min lease), fails
+one past the window, decides access again (Teams: `authorize`, i.e. `decide()` on the saved
+activity with zero counts, then `member()`; events: `refusal()`, the gates of `consider` but the
+caps), fails the run when the retry throws, and sends the same `deliveryId` (`RunInput`/`EventRunInput`;
 the webhook's `X-Agent-Connect-Delivery` header and body `delivery`). A Teams run waiting holds
 its thread (later messages stay held); `failStaleStarts` skips runs with `next_attempt_at`; the
-failure notice, `onError` report and (events) audit row come at the final outcome only. The receiver answers with MCP `teams_reply` and that agent's own key; the
+failure notice, `onError` report and (events) audit row come at the final outcome only. Going
+`starting` → `running` resets `reply_token_at` (Teams) / `started_at` (events), which the 30 min
+stop counts from. The webhook posts with `redirect: "manual"`: a 3xx fails the run. The receiver answers with MCP `teams_reply` and that agent's own key; the
 run is answered once a reply arrives, stopped after 30 min without one; it reports no cost (the
 caps still count each answer's budget). A run may reply while still `starting` (a receiver
 replying inside its POST handler). Each run records its runner (`teams_runs.runner`): only that

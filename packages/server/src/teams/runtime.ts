@@ -46,11 +46,13 @@ import {
   openTriggerSecret,
   RETRY_WINDOW_MS,
   RetryLater,
+  type RunCounts,
   type RunInput,
   type TriggerRunner,
 } from "./runner.js";
 import { Unauthorized, type BotAuth } from "./jwt.js";
 import type {
+  AgentTeamsState,
   BotRow,
   ConversationRow,
   EventRow,
@@ -114,6 +116,8 @@ const deliveryAad = (runId: string) => `agent-connect:teams-delivery:${runId}`;
 type Delivery = {
   deliveryId: string;
   eventId: string;
+  // The message, so each hand-over decides on it again as the agent and trigger stand then.
+  activity: Activity;
   requestedBy: string;
   text: string;
   replyToken: string;
@@ -528,11 +532,15 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     });
   }
 
-  async function respond(bot: BotRow, event: EventRow, a: Activity, place: Place) {
-    const [state, trigger] = await Promise.all([
-      teams.agentState(bot.agentId),
-      teams.trigger(bot.agentId),
-    ]);
+  /** decide() on the message as the agent, its grant and its trigger stand now. */
+  async function authorize(
+    bot: BotRow,
+    a: Activity,
+    place: Place,
+    state: AgentTeamsState | null,
+    trigger: TriggerRow | null,
+    counts: RunCounts,
+  ) {
     const runner = trigger ? deps.runners.get(trigger.runner) : undefined;
     const runnerUnready = !trigger?.enabled
       ? null
@@ -552,7 +560,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       place.teamGroupId =
         (await teams.conversations(bot.id)).find((c) => c.conversationId === place.conversationId)
           ?.teamGroupId ?? null;
-    const decision = decide({
+    return decide({
       activity: a,
       place,
       botAppId: bot.botAppId!,
@@ -562,8 +570,18 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       limits: state?.grant?.limits ?? {},
       trigger,
       runnerUnready,
-      counts: await teams.runCounts(bot.agentId, bot.id),
+      counts,
     });
+  }
+
+  async function respond(bot: BotRow, event: EventRow, a: Activity, place: Place) {
+    const [state, trigger] = await Promise.all([
+      teams.agentState(bot.agentId),
+      teams.trigger(bot.agentId),
+    ]);
+    const runner = trigger ? deps.runners.get(trigger.runner) : undefined;
+    const counts = await teams.runCounts(bot.agentId, bot.id);
+    const decision = await authorize(bot, a, place, state, trigger, counts);
     if (decision.action === "ignore")
       return teams.finishEvent(event.id, "ignored", decision.reason);
     if (decision.action === "limit") {
@@ -656,7 +674,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     } catch (error) {
       return failStart(bot, run, event.id, error, 0);
     }
-    await deliver(bot, run, event.id, input, reusable ? latest.sessionId : null, 1, since);
+    await deliver(bot, run, event.id, a, input, reusable ? latest.sessionId : null, 1, since);
   }
 
   /** Hands the message to the runner: started, or tried again later while the runner may yet
@@ -666,6 +684,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     bot: BotRow,
     run: RunRow,
     eventId: string,
+    activity: Activity,
     input: RunInput,
     sessionId: string | null,
     attempt: number,
@@ -691,6 +710,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       const delivery: Delivery = {
         deliveryId: input.deliveryId,
         eventId,
+        activity,
         requestedBy: input.requestedBy,
         text: input.text,
         replyToken: input.replyToken,
@@ -710,7 +730,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
   async function failStart(
     bot: BotRow,
     run: RunRow,
-    eventId: string,
+    eventId: string | null,
     error: unknown,
     attempts: number,
   ) {
@@ -721,13 +741,20 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
     });
     await runNotice(bot, run, FAILED_NOTICE);
-    await teams.finishEvent(eventId, "failed", "could not start the response");
+    if (eventId) await teams.finishEvent(eventId, "failed", "could not start the response");
   }
 
   const retries = drainer("teams-retries", async () => {
     const row = await teams.claimRetry();
     if (!row) return false;
-    await retry(row).catch((error) => console.error(`[teams] retrying run ${row.id}`, error));
+    // Whatever stops a hand-over fails its run: left starting, it would be claimed again forever
+    // and hold its thread.
+    await retry(row)
+      .catch(async (error) => {
+        const bot = await teams.botById(row.botId);
+        if (bot) await failStart(bot, row, null, error, row.attempts);
+      })
+      .catch((error) => console.error(`[teams] retrying run ${row.id}`, error));
     return true;
   });
 
@@ -746,10 +773,19 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     const runner = deps.runners.get(row.runner);
     const fail = (why: string) =>
       failStart(bot, row, sent.eventId, new ConnectError(why), row.attempts);
-    if (state?.agentStatus !== "active") return fail("The agent was turned off");
-    if (!trigger?.enabled || trigger.runner !== row.runner)
+    const since = Date.parse(row.replyTokenAt);
+    if (Date.now() > since + retryWindowMs) return fail("The runner did not take it in time");
+    if (!trigger || trigger.runner !== row.runner)
       return fail("Its trigger was turned off or changed runner");
-    if (!runner) return fail(`Runner ${row.runner} is not offered by this deployment`);
+    // Access may have changed while it waited. The caps were checked when it first came, and it
+    // has held its place among them since, so they are not counted again.
+    const place = placeOf(sent.activity)!;
+    const none = { active: 0, lastHour: 0, spentToday: 0 };
+    const decision = await authorize(bot, sent.activity, place, state, trigger, none);
+    if (decision.action !== "respond") return fail(`No longer allowed: ${decision.reason}`);
+    if (decision.checkMember && !(await member(bot, sent.activity, place)))
+      return fail("No longer allowed: sender is not a member of the organization");
+    if (!runner || !state) return fail(`Runner ${row.runner} is not offered by this deployment`);
     const secret = openTriggerSecret(key, bot.organizationId, trigger);
     try {
       await verified(runner, bot, state.agentName, trigger, secret);
@@ -769,8 +805,8 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       secret,
       deliveryId: sent.deliveryId,
     };
-    const since = Date.parse(row.replyTokenAt);
-    await deliver(bot, row, sent.eventId, input, row.sessionId, row.attempts + 1, since);
+    const attempt = row.attempts + 1;
+    await deliver(bot, row, sent.eventId, sent.activity, input, row.sessionId, attempt, since);
   }
 
   // The trigger, checked again before each answer (e.g. the Claude agent and vaults, see
