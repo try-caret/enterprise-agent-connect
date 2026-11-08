@@ -662,37 +662,40 @@ export function createTeamsStore(sql: Sql, schema: string) {
       // A run that started or ended has nothing left to hand over.
       const delivered = Boolean(patch.state && patch.state !== "starting");
       // cost_cents is the session's total so far; its increase is this turn's spend, logged.
-      // prev reads the row as the statement began, so two writers of a cost would both log its
-      // increase: the only writer of one is the watcher, which names `from`, and of two such
-      // statements the second finds the state changed and writes nothing.
-      const [{ changed }] = await sql<{ changed: number }[]>`
-        with prev as (
-          select cost_cents as old from ${t.teams_runs} where id = ${id}
-        ), updated as (
-          update ${t.teams_runs}
-             set state = coalesce(${patch.state ?? null}, state),
-                 session_id = coalesce(${patch.sessionId ?? null}, session_id),
-                 error = coalesce(${patch.error ?? null}, error),
-                 note = coalesce(${patch.note ?? null}, note),
-                 cost_cents = coalesce(${patch.costCents ?? null}, cost_cents),
-                 finished_at = case when ${Boolean(finished)} then now() else finished_at end,
-                 -- The 30 minute stop counts from when the runner took the run.
-                 reply_token_at = case when state = 'starting' and ${patch.state ?? null} = 'running'
-                   then now() else reply_token_at end,
-                 next_attempt_at = case when ${delivered} then null else next_attempt_at end,
-                 delivery = case when ${delivered} then null else delivery end,
-                 delivery_key_id = case when ${delivered} then null else delivery_key_id end
-           where id = ${id}
-             and (${from?.state ?? null}::text is null
-                  or (state = ${from?.state ?? null} and turns = ${from?.turns ?? null}))
-          returning agent_id, cost_cents
-        ), spent as (
-          insert into ${t.teams_spend} (agent_id, run_id, cents)
-          select u.agent_id, ${id}, u.cost_cents - coalesce(p.old, 0)
-            from updated u, prev p
-           where u.cost_cents > coalesce(p.old, 0)
-        )
-        select count(*)::int as changed from updated`;
+      // prev reads the row as the statement began, so the row is locked first, in the same
+      // transaction: a cost another writer (recordCost) set meanwhile is then the one read, and
+      // its increase is not logged twice.
+      const [{ changed }] = await sql.begin(async (tx) => {
+        await tx`select 1 from ${t.teams_runs} where id = ${id} for update`;
+        return tx<{ changed: number }[]>`
+          with prev as (
+            select cost_cents as old from ${t.teams_runs} where id = ${id}
+          ), updated as (
+            update ${t.teams_runs}
+               set state = coalesce(${patch.state ?? null}, state),
+                   session_id = coalesce(${patch.sessionId ?? null}, session_id),
+                   error = coalesce(${patch.error ?? null}, error),
+                   note = coalesce(${patch.note ?? null}, note),
+                   cost_cents = coalesce(${patch.costCents ?? null}, cost_cents),
+                   finished_at = case when ${Boolean(finished)} then now() else finished_at end,
+                   -- The 30 minute stop counts from when the runner took the run.
+                   reply_token_at = case when state = 'starting' and ${patch.state ?? null} = 'running'
+                     then now() else reply_token_at end,
+                   next_attempt_at = case when ${delivered} then null else next_attempt_at end,
+                   delivery = case when ${delivered} then null else delivery end,
+                   delivery_key_id = case when ${delivered} then null else delivery_key_id end
+             where id = ${id}
+               and (${from?.state ?? null}::text is null
+                    or (state = ${from?.state ?? null} and turns = ${from?.turns ?? null}))
+            returning agent_id, cost_cents
+          ), spent as (
+            insert into ${t.teams_spend} (agent_id, run_id, cents)
+            select u.agent_id, ${id}, u.cost_cents - coalesce(p.old, 0)
+              from updated u, prev p
+             where u.cost_cents > coalesce(p.old, 0)
+          )
+          select count(*)::int as changed from updated`;
+      });
       return changed > 0;
     },
 

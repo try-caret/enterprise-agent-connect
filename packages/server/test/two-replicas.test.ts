@@ -1012,3 +1012,46 @@ test(
     );
   },
 );
+
+test(
+  "a finish racing another writer of the session's cost logs only its own increase",
+  { skip: !sql },
+  async () => {
+    const t = await teamsSetup();
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const [run] = await sql!`
+      update ${name("teams_runs")} set cost_cents = 10 where agent_id = ${t.agentId}
+      returning id::text, turns`;
+    // A stale pass's recordCost, mid-transaction: the session's cost raised to 20, its 10 logged.
+    const other = gate();
+    const recording = sql!.begin(async (tx) => {
+      await tx`select 1 from ${name("teams_runs")} where id = ${run.id} for update`;
+      await tx`update ${name("teams_runs")} set cost_cents = 20 where id = ${run.id}`;
+      await tx`insert into ${name("teams_spend")} (agent_id, run_id, cents)
+               values (${t.agentId}, ${run.id}, 10)`;
+      await other.pass();
+    });
+    await other.entered;
+    // The current pass finishes the turn at 30 meanwhile.
+    const finishing = t.teams.updateRun(
+      run.id,
+      { state: "idle", costCents: 30 },
+      { state: "running", turns: run.turns },
+    );
+    for (let i = 0; i < 200; i++) {
+      const [{ waiting }] = await sql!`
+        select count(*)::int as waiting from pg_stat_activity
+         where wait_event_type = 'Lock' and query like ${`%${SCHEMA}%teams_runs%`}`;
+      if (waiting) break;
+      await sleep(10);
+    }
+    other.open();
+    await recording;
+    assert.equal(await finishing, true);
+    const [{ total }] = await sql!`
+      select sum(cents)::int as total from ${name("teams_spend")} where run_id = ${run.id}`;
+    assert.equal(total, 20, "30 spent since the 10 recorded before");
+  },
+);
