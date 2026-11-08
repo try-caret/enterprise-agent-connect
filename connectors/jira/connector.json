@@ -3,7 +3,7 @@
   "name": "Jira",
   "description": "Let agents search, read and work on issues in the Jira projects you choose, and find and update Jira Assets objects in the object schemas you choose.",
   "logo": "/brand/jira.svg",
-  "identity": "An Atlassian service account named \"{brand.microsoft.appName}\". It uses no Jira seat.",
+  "identity": "An Atlassian service account named \"{brand.microsoft.appName}\". It uses no Jira seat, except for Assets: reading or updating Assets needs a Jira Service Management agent seat for it.",
   "accountKey": "cloudId",
   "connectionKind": "guided",
   "setup": [

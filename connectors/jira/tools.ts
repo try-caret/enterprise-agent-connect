@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { answerOf, atlassianError } from "./answers.js";
 import { assetsTools } from "./assets.js";
 import { isProjectKey, JqlRejected, scopeJql } from "./jql.js";
 import {
@@ -43,22 +44,8 @@ const serviceProject = (issue: Issue) => issue.fields.project?.projectTypeKey ==
 
 type Issue = { key: string; fields: Record<string, any> };
 
-async function ok(
-  ctx: ToolContext,
-  mark: (s: number) => void,
-  req: Parameters<ToolContext["call"]>[0],
-) {
-  const res = await ctx.call(req);
-  mark(res.status);
-  if (res.status < 200 || res.status >= 300) throw new VendorFailed(res.status, jiraError(res));
-  return res.data as any;
-}
-
-function jiraError(res: { status: number; data: unknown }): string {
-  const d = res.data as { errorMessages?: string[]; errors?: Record<string, string> } | null;
-  const detail = [...(d?.errorMessages ?? []), ...Object.values(d?.errors ?? {})].join("; ");
-  return `Jira answered ${res.status}${detail ? `: ${detail}` : ""}`;
-}
+const ok = answerOf("Jira");
+const jiraError = (res: { status: number; data: unknown }) => atlassianError("Jira", res);
 
 // Atlassian Document Format to plain text, enough for an agent to read.
 export function adfText(node: any): string {

@@ -86,6 +86,16 @@ const ATTRS = [
     minimumCardinality: 0,
   },
   {
+    id: "9",
+    name: "Condition",
+    type: 7,
+    typeValueMulti: ["30", "31"],
+    editable: true,
+    system: false,
+    maximumCardinality: 1,
+    minimumCardinality: 0,
+  },
+  {
     id: "8",
     name: "Owner",
     type: 1,
@@ -97,6 +107,11 @@ const ATTRS = [
 ].map((a) => ({ ...a, objectType: LAPTOP }));
 
 const value = (v: string, extra: object = {}) => ({ value: v, displayValue: v, ...extra });
+// Status ids by attribute and name, as objects hold them.
+const STATUSES: Record<string, Record<string, string>> = {
+  "3": { "In stock": "20", "In use": "21", Retired: "22" },
+  "9": { Good: "30", Damaged: "31" },
+};
 const laptop = (id: string, status: string, received: string, embed: boolean, type = LAPTOP) => ({
   id,
   objectKey: `IT-${id}`,
@@ -107,7 +122,9 @@ const laptop = (id: string, status: string, received: string, embed: boolean, ty
     { objectTypeAttributeId: "2", objectAttributeValues: [value(`LT-${id}`)] },
     {
       objectTypeAttributeId: "3",
-      objectAttributeValues: [{ displayValue: status, status: { id: "20", name: status } }],
+      objectAttributeValues: [
+        { displayValue: status, status: { id: STATUSES["3"][status] ?? "20", name: status } },
+      ],
     },
     {
       objectTypeAttributeId: "4",
@@ -119,7 +136,9 @@ const laptop = (id: string, status: string, received: string, embed: boolean, ty
   ),
 });
 
-type Options = { fail?: number; statusRefused?: boolean };
+// held: the status names some object of the type holds (default all); readBackFail: the GET
+// after a PUT answers that status.
+type Options = { fail?: number; held?: string[]; readBackFail?: number };
 
 function assets(h: ReturnType<typeof harness>, options: Options = {}) {
   const sent: VendorRequest[] = [];
@@ -134,6 +153,31 @@ function assets(h: ReturnType<typeof harness>, options: Options = {}) {
       return { status: options.fail, data: { errorMessages: ["No access to this schema"] } };
     assert.ok(req.path.startsWith(WS), req.path);
     const [p] = req.path.slice(WS.length).split("?");
+    // A status name looked up on an object of the type that holds it.
+    const lookup = /AND "([^"]+)" = "([^"]+)"$/.exec(String((req.body as any)?.qlQuery ?? ""));
+    if (p === "object/aql" && req.method === "POST" && lookup) {
+      const def = ATTRS.find((a) => a.name === lookup[1])!;
+      const name = Object.keys(STATUSES[def.id]).find(
+        (n) => n.toLowerCase() === lookup[2].toLowerCase(),
+      );
+      const held = !name || (options.held && !options.held.includes(name)) ? [] : [name];
+      return {
+        status: 200,
+        data: {
+          isLast: true,
+          values: held.map((n) => ({
+            id: "50",
+            objectType: LAPTOP,
+            attributes: [
+              {
+                objectTypeAttributeId: def.id,
+                objectAttributeValues: [{ status: { id: STATUSES[def.id][n], name: n } }],
+              },
+            ],
+          })),
+        },
+      };
+    }
     if (p === "object/aql" && req.method === "POST")
       return {
         status: 200,
@@ -151,6 +195,8 @@ function assets(h: ReturnType<typeof harness>, options: Options = {}) {
         },
       };
     const object = /^object\/(\d+)$/.exec(p);
+    if (object && req.method === "GET" && options.readBackFail && sent.some((s) => s.method === "PUT"))
+      return { status: options.readBackFail, data: { errorMessages: ["Try again later"] } };
     if (object && req.method === "GET")
       return objects[object[1]]
         ? { status: 200, data: objects[object[1]] }
@@ -162,14 +208,12 @@ function assets(h: ReturnType<typeof harness>, options: Options = {}) {
         const at = o.attributes.find(
           (x: any) => x.objectTypeAttributeId === a.objectTypeAttributeId,
         );
-        const vals = a.objectAttributeValues.map((v: any) =>
-          a.objectTypeAttributeId === "3"
-            ? {
-                displayValue: v.value === "21" ? "In use" : "?",
-                status: { id: v.value, name: v.value === "21" ? "In use" : "?" },
-              }
-            : value(v.value),
-        );
+        const vals = a.objectAttributeValues.map((v: any) => {
+          const names = STATUSES[a.objectTypeAttributeId];
+          if (!names) return value(v.value);
+          const n = Object.keys(names).find((k) => names[k] === v.value) ?? "?";
+          return { displayValue: n, status: { id: v.value, name: n } };
+        });
         if (at) at.objectAttributeValues = vals;
         else
           o.attributes.push({
@@ -183,17 +227,6 @@ function assets(h: ReturnType<typeof harness>, options: Options = {}) {
     if (p === "objecttype/505/attributes") return { status: 200, data: ATTRS };
     if (p === "objecttype/77/attributes")
       return { status: 200, data: ATTRS.map((a) => ({ ...a, objectType: OTHER })) };
-    if (p === "config/statustype" && options.statusRefused)
-      return { status: 401, data: { code: 401, message: "Unauthorized; scope does not match" } };
-    if (p === "config/statustype")
-      return {
-        status: 200,
-        data: [
-          { id: "20", name: "In stock" },
-          { id: "21", name: "In use" },
-          { id: "22", name: "Retired" },
-        ],
-      };
     return { status: 404, data: { errorMessages: ["Not found"] } };
   };
   return { sent, objects };
@@ -318,8 +351,10 @@ test("jira_assets_update_object sends only the named attributes, resolves a stat
       ],
     },
   });
-  // The statuses are read for the object's own schema.
-  assert.ok(sent.some((s) => s.path === `${WS}config/statustype?objectSchemaId=137`));
+  // The status id is looked up on an object of the type, in the object's own schema.
+  assert.deepEqual(sent.find((s) => s.method === "POST")!.body, {
+    qlQuery: 'objectSchemaId = 137 AND objectTypeId = 505 AND "Status" = "in use"',
+  });
   // Read back after the PUT.
   assert.equal(sent.at(-1)!.method, "GET");
   assert.equal(sent.at(-1)!.path, `${WS}object/11`);
@@ -339,7 +374,9 @@ test("jira_assets_update_object refuses before any write: other schema, unknown,
     [{ object_id: "11", attributes: { Colour: "red" } }, /no attribute Colour/],
     [{ object_id: "11", attributes: { Key: "IT-1" } }, /Key cannot be edited/],
     // Retired exists but this Status attribute allows only 20 and 21.
-    [{ object_id: "11", attributes: { Status: "Retired" } }, /no status Retired/],
+    [{ object_id: "11", attributes: { Status: "Retired" } }, /does not allow status Retired/],
+    [{ object_id: "11", attributes: { Status: "22" } }, /does not allow status 22/],
+    [{ object_id: "11", attributes: { Status: 'In "use' } }, /Give Status's status by its id/],
     [{ object_id: "11", attributes: { Notes: ["a", "b"] } }, /takes one value/],
     [{ object_id: "11", attributes: {} }, /at least one/],
   ];
@@ -352,28 +389,60 @@ test("jira_assets_update_object refuses before any write: other schema, unknown,
   assert.equal(sent.filter((s) => s.method === "PUT").length, 0);
 });
 
-test("without the status list (service accounts get no read:cmdb-config) statuses come from the type's objects", async () => {
+test("a status no object holds yet is refused by name and taken by id; each Status attribute on its own", async () => {
   const h = harness();
   const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
-  const { sent } = assets(h, { statusRefused: true });
-  const held = await call(h, key, "jira_assets_update_object", {
-    object_id: "11",
-    attributes: { Status: "In stock" },
-  });
-  assert.equal(held.isError, false, held.text ?? "");
-  const put = sent.filter((s) => s.method === "PUT");
-  assert.deepEqual((put[0].body as any).attributes, [
-    { objectTypeAttributeId: "3", objectAttributeValues: [{ value: "20" }] },
-  ]);
-  const aql = sent.find((s) => s.method === "POST");
-  assert.deepEqual(aql!.body, { qlQuery: "objectSchemaId = 137 AND objectTypeId = 505" });
+  const { sent } = assets(h, { held: ["In stock", "Damaged"] });
   const unheld = await call(h, key, "jira_assets_update_object", {
     object_id: "11",
     attributes: { Status: "In use" },
   });
   assert.equal(unheld.isError, true);
-  assert.match(unheld.text!, /no status In use\. Use one of: In stock\. Only statuses some object/);
+  assert.match(unheld.text!, /no status In use on any object.*Give the status id instead\. Ids it allows: 20, 21\./);
+  const byId = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Status: "21", Condition: "damaged" },
+  });
+  assert.equal(byId.isError, false, byId.text ?? "");
+  assert.deepEqual((sent.find((s) => s.method === "PUT")!.body as any).attributes, [
+    { objectTypeAttributeId: "3", objectAttributeValues: [{ value: "21" }] },
+    { objectTypeAttributeId: "9", objectAttributeValues: [{ value: "31" }] },
+  ]);
+  // Condition's name was looked up as Condition, not with Status's list.
+  assert.ok(
+    sent.some((s) => String((s.body as any)?.qlQuery).endsWith('AND "Condition" = "damaged"')),
+  );
+  // The status list (read:cmdb-config) is never asked for.
+  assert.ok(!sent.some((s) => s.path.includes("config/statustype")));
+});
+
+test("a failed read-back after the change answers the change, with a warning, audited as allowed", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
+  const { sent } = assets(h, { readBackFail: 503 });
+  const r = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Notes: "x" },
+  });
+  assert.equal(r.isError, false, r.text ?? "");
+  assert.deepEqual(r.data.updated, ["Notes"]);
+  assert.equal(r.data.object, null);
+  assert.match(r.data.warning, /saved, but reading the object back failed: do not repeat it/);
+  assert.equal(h.state.audit.at(-1)!.decision, "allowed");
   assert.equal(sent.filter((s) => s.method === "PUT").length, 1);
+});
+
+test("more than 20 attributes are refused before the tool, with a short audit target", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
+  const { sent } = assets(h);
+  const attributes = Object.fromEntries(
+    Array.from({ length: 500 }, (_, i) => [`${"x".repeat(190)}${i}`, "v"]),
+  );
+  const r = await call(h, key, "jira_assets_update_object", { object_id: "11", attributes });
+  assert.equal(r.isError, true);
+  assert.equal(sent.length, 0);
+  assert.ok(String(h.state.audit.at(-1)!.target ?? "").length <= 400);
 });
 
 test("Assets 401, 403 and 404 come back as Jira errors do, 403 with the capability's hint", async () => {
@@ -463,12 +532,20 @@ test("scopeAql refuses, for a limited agent, AQL that looks through references o
     ['Owner.2FA = "a"', /dot notation/],
     ["Owner1.Name = x", /dot notation/],
     ['connectedTickets(project = SECRET AND summary ~ "merger")', /connected tickets/],
+    [
+      'Name = "a\\\n" AND object HAVING outboundReferences(objectSchemaId = 5 AND Name = "x")',
+      /References/,
+    ],
+    ['2024.Name = "x"', /dot notation/],
+    ['Owner-1.Name = "x"', /dot notation/],
+    ['Bürö2.Name = "x"', /dot notation/],
+    ['Owner .2FA = "x"', /dot notation/],
   ] as [string, RegExp][])
     assert.throws(() => scopeAql(aql, ["137"]), message, aql);
   // Inside double quotes the same characters are plain text; numbers keep their decimal point.
   assert.equal(
-    scopeAql('Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5', ["137"]),
-    'objectSchemaId = 137 AND (Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5)',
+    scopeAql('Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5 AND Gain > -1.5', ["137"]),
+    'objectSchemaId = 137 AND (Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5 AND Gain > -1.5)',
   );
 });
 
@@ -507,13 +584,18 @@ test("a referenced object outside the agent's schemas is not named", async () =>
   });
   objects["11"].attributes.push({
     objectTypeAttributeId: "8",
-    objectAttributeValues: [ref("12", LAPTOP), ref("99", OTHER)],
+    objectAttributeValues: [
+      ref("12", LAPTOP),
+      ref("99", OTHER),
+      // referencedObject is optional in the OpenAPI: a reference without it is not named either.
+      { displayValue: "Secret server", referencedType: true },
+      { displayValue: "Secret too" },
+    ],
     objectTypeAttribute: ATTRS.find((d) => d.id === "8"),
   } as any);
   const r = await call(h, key, "jira_assets_get_object", { object_id: "11" });
   assert.equal(r.isError, false, r.text ?? "");
-  assert.deepEqual(r.data.attributes.Owner, [
-    "Owner 12",
-    "(an object in a schema this agent may not use)",
-  ]);
+  const hidden = "(an object in a schema this agent may not use)";
+  // The last value has no reference marks at all: Owner's definition (type 1) hides it.
+  assert.deepEqual(r.data.attributes.Owner, ["Owner 12", hidden, hidden, hidden]);
 });

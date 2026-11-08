@@ -5,6 +5,12 @@ import { JqlRejected, ORDER_BY, splitOrderBy } from "./jql.js";
 // double-quoted. The tools also drop any answer outside the schemas.
 
 const SCHEMA_ID = /^[1-9][0-9]{0,17}$/;
+// A double-quoted string, its backslash escaping any character (line breaks too), as
+// splitOrderBy reads it, so both see the same strings.
+const STRING = /"(?:\\[\s\S]|[^"\\])*"/g;
+// A number with a decimal point, standing alone: not part of a name (letters of any script,
+// digits, _, a quote, a dot, or a hyphen inside a name) on either side.
+const DECIMAL = /(?<![\p{L}\p{N}_".])(?<![\p{L}\p{N}_]-)(?:\d*\.\d+|\d+\.)(?![\p{L}\p{N}_.])/gu;
 
 export function isSchemaId(id: string): boolean {
   return SCHEMA_ID.test(id);
@@ -12,7 +18,7 @@ export function isSchemaId(id: string): boolean {
 
 export function scopeAql(aql: string, schemas: string[] | null): string {
   const { where, orderBy } = splitOrderBy(aql, '"');
-  if (orderBy && !ORDER_BY.test(orderBy.replace(/"(?:\\.|[^"\\])*"/g, '""')))
+  if (orderBy && !ORDER_BY.test(orderBy.replace(STRING, '""')))
     throw new JqlRejected("ORDER BY must be the last part of the query and name only an attribute");
   if (schemas === null) {
     if (!where) throw new JqlRejected("Give an AQL condition, e.g. objectType = Laptop");
@@ -22,9 +28,7 @@ export function scopeAql(aql: string, schemas: string[] | null): string {
   // Looking through references (HAVING, ...References(, Owner.Name, also in ORDER BY) could test
   // objects in other schemas, connectedTickets( runs JQL no project limit holds, and a single
   // quote might start a string this check does not know: all refused. Numbers keep their dot.
-  const bare = aql
-    .replace(/"(?:\\.|[^"\\])*"/g, '""')
-    .replace(/(?<![\w"])(?:\d*\.\d+|\d+\.)/g, "0");
+  const bare = aql.replace(STRING, '""').replace(DECIMAL, "0");
   if (/'/.test(bare))
     throw new JqlRejected('Quote values with double quotes ("), not single quotes');
   if (/\bhaving\b|references\s*\(|connectedtickets\s*\(/i.test(bare))

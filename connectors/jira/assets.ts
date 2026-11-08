@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isSchemaId, scopeAql } from "./aql.js";
 import { JqlRejected } from "./jql.js";
+import { answerOf } from "./answers.js";
 import { ASSETS_PATH } from "./vendor.js";
 import {
   audited,
@@ -35,28 +36,7 @@ const REFERENCE = 1;
 const STATUS = 7;
 const SELECT = 10; // defaultType.id of a plain Select value
 
-function assetsError(res: { status: number; data: unknown }): string {
-  const d = res.data as {
-    errorMessages?: unknown[];
-    errors?: Record<string, unknown>;
-    message?: unknown;
-  } | null;
-  const detail = [
-    ...(Array.isArray(d?.errorMessages) ? d.errorMessages : []),
-    ...Object.values(d?.errors ?? {}),
-    ...(typeof d?.message === "string" ? [d.message] : []),
-  ]
-    .filter((m) => typeof m === "string" && m)
-    .join("; ");
-  return `Jira Assets answered ${res.status}${detail ? `: ${detail}` : ""}`;
-}
-
-async function ok(ctx: ToolContext, mark: Mark, req: Parameters<ToolContext["call"]>[0]) {
-  const res = await ctx.call(req);
-  mark(res.status);
-  if (res.status < 200 || res.status >= 300) throw new VendorFailed(res.status, assetsError(res));
-  return res.data as any;
-}
+const ok = answerOf("Jira Assets");
 
 function allowedSchema(schemas: string[] | null, id: unknown): boolean {
   return schemas === null || (id !== undefined && id !== null && schemas.includes(String(id)));
@@ -65,9 +45,10 @@ function allowedSchema(schemas: string[] | null, id: unknown): boolean {
 // One value as an agent reads it: a reference, status, user or group by its name (a referenced
 // object outside the agent's schemas is not named), any other value as stored (ISO dates).
 const HIDDEN_REFERENCE = "(an object in a schema this agent may not use)";
-function shownValue(v: Obj, schemas: string[] | null = null): unknown {
-  if (v?.referencedObject) {
-    if (!allowedSchema(schemas, v.referencedObject.objectType?.objectSchemaId))
+function shownValue(v: Obj, schemas: string[] | null, reference: boolean): unknown {
+  // `referencedObject` is optional in the OpenAPI, so a reference without it is hidden too.
+  if (reference || v?.referencedObject || v?.referencedType === true) {
+    if (!allowedSchema(schemas, v?.referencedObject?.objectType?.objectSchemaId))
       return HIDDEN_REFERENCE;
     return v.displayValue ?? v.referencedObject.label ?? null;
   }
@@ -77,14 +58,18 @@ function shownValue(v: Obj, schemas: string[] | null = null): unknown {
   return v?.value ?? v?.displayValue ?? null;
 }
 
-// An object with its attributes by name. `names`: attribute id to name, for answers (AQL)
+// An object with its attributes by name. `defs`: attribute id to definition, for answers (AQL)
 // whose attributes carry only their objectTypeAttributeId.
-function shownObject(o: Obj, schemas: string[] | null, names: Map<string, string> = new Map()) {
+function shownObject(o: Obj, schemas: string[] | null, defs: Map<string, Obj> = new Map()) {
   const attributes: Record<string, unknown> = {};
   for (const a of (o.attributes ?? []) as Obj[]) {
     const id = String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "");
-    const name = a.objectTypeAttribute?.name ?? names.get(id) ?? `attribute ${id}`;
-    const values = ((a.objectAttributeValues ?? []) as Obj[]).map((v) => shownValue(v, schemas));
+    const def = a.objectTypeAttribute ?? defs.get(id);
+    const name = def?.name ?? `attribute ${id}`;
+    const reference = def?.type === REFERENCE;
+    const values = ((a.objectAttributeValues ?? []) as Obj[]).map((v) =>
+      shownValue(v, schemas, reference),
+    );
     attributes[name] = values.length === 0 ? null : values.length === 1 ? values[0] : values;
   }
   return {
@@ -134,42 +119,62 @@ async function typeAttributes(
   return attrs;
 }
 
-// The statuses a Status attribute can take: global plus the schema's own (one call each). That
-// needs read:cmdb-config:jira, which service accounts are not offered (401, checked November 8,
-// 2026), so on 401/403 the choices are the statuses objects of the type already hold.
-async function statusChoices(
+// A Status value's id. An id the attribute allows (`typeValueMulti`) is taken as given. A name
+// is looked up on an object of the type that already holds it: the status list needs
+// read:cmdb-config:jira, which service accounts are not offered (401, checked November 8, 2026).
+async function statusId(
   ctx: ToolContext,
   mark: Mark,
   schemaId: string,
   typeId: string,
-  attributeId: string,
-): Promise<{ list: Obj[]; partial: boolean }> {
-  const found = new Map<string, Obj>();
-  let refused = false;
-  for (const query of ["", `?objectSchemaId=${schemaId}`]) {
-    const res = await ctx.call({ method: "GET", path: path(`config/statustype${query}`) });
-    mark(res.status);
-    if (res.status === 401 || res.status === 403) {
-      refused = true;
-      break;
-    }
-    if (res.status < 200 || res.status >= 300) throw new VendorFailed(res.status, assetsError(res));
-    for (const s of (res.data ?? []) as Obj[]) found.set(String(s.id), s);
+  def: Obj,
+  value: string,
+): Promise<string> {
+  const allowed = ((def.typeValueMulti ?? []) as unknown[]).map(String);
+  const want = value.trim();
+  const ids = allowed.length ? ` Ids it allows: ${allowed.join(", ")}.` : "";
+  if (OBJECT_ID.test(want)) {
+    if (allowed.length && !allowed.includes(want))
+      throw new Denied(`${def.name} does not allow status ${want}.${ids}`);
+    return want;
   }
-  if (!refused) return { list: [...found.values()], partial: false };
-  found.clear();
+  if (/["\\]/.test(want) || /["\\]/.test(String(def.name)))
+    throw new Denied(`Give ${def.name}'s status by its id`);
   const data = await ok(ctx, mark, {
     method: "POST",
-    path: path("object/aql?startAt=0&maxResults=200&includeAttributes=true"),
-    body: { qlQuery: `objectSchemaId = ${schemaId} AND objectTypeId = ${typeId}` },
+    path: path("object/aql?startAt=0&maxResults=1&includeAttributes=true"),
+    body: {
+      qlQuery:
+        `objectSchemaId = ${schemaId} AND objectTypeId = ${typeId} ` +
+        `AND "${def.name}" = "${want}"`,
+    },
   });
   for (const o of (data?.values ?? []) as Obj[])
     for (const a of (o.attributes ?? []) as Obj[])
-      if (String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "") === attributeId)
-        for (const v of (a.objectAttributeValues ?? []) as Obj[])
-          if (v?.status?.id !== undefined) found.set(String(v.status.id), v.status);
-  return { list: [...found.values()], partial: true };
+      if (String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "") === String(def.id))
+        for (const v of (a.objectAttributeValues ?? []) as Obj[]) {
+          const id = v?.status?.id === undefined ? null : String(v.status.id);
+          if (id && String(v.status.name ?? "").toLowerCase() === want.toLowerCase()) {
+            if (allowed.length && !allowed.includes(id))
+              throw new Denied(`${def.name} does not allow status ${value}.${ids}`);
+            return id;
+          }
+        }
+  throw new Denied(
+    `${def.name} has no status ${value} on any object of this type, so its id cannot be ` +
+      `looked up (Atlassian does not let a service account read the status list). ` +
+      `Give the status id instead.${ids}`,
+  );
 }
+
+// A vendor's or a refusal's message is written for people; anything else stays in the log.
+const shownError = (error: unknown) =>
+  error instanceof VendorFailed || error instanceof Denied ? error.message : "";
+
+const selectOptions = (def: Obj): string[] =>
+  typeof def.options === "string" && def.options
+    ? def.options.split(",").map((o: string) => o.trim())
+    : [];
 
 const attributeKind = (a: Obj) =>
   a.type === 0 || a.type === undefined
@@ -223,13 +228,13 @@ export const assetsTools: Toolset = {
               ),
               body: { qlQuery: scoped },
             });
-            const names = new Map<string, string>(
-              ((data?.objectTypeAttributes ?? []) as Obj[]).map((a) => [String(a.id), a.name]),
+            const defs = new Map<string, Obj>(
+              ((data?.objectTypeAttributes ?? []) as Obj[]).map((a) => [String(a.id), a]),
             );
             const values = (data?.values ?? []) as Obj[];
             const objects = values
               .filter((o) => allowedSchema(schemas, o.objectType?.objectSchemaId))
-              .map((o) => shownObject(o, schemas, names));
+              .map((o) => shownObject(o, schemas, defs));
             // isLast comes as a string in Atlassian's own example.
             const last = data?.isLast === true || data?.isLast === "true";
             return json({
@@ -286,10 +291,7 @@ export const assetsTools: Toolset = {
                 editable: a.editable === true && a.system !== true,
                 required: (a.minimumCardinality ?? 0) > 0,
                 multiple: a.maximumCardinality !== 1,
-                options:
-                  typeof a.options === "string" && a.options
-                    ? a.options.split(",").map((o: string) => o.trim())
-                    : null,
+                options: selectOptions(a).length ? selectOptions(a) : null,
                 description: a.description ?? null,
               })),
             ),
@@ -303,8 +305,8 @@ export const assetsTools: Toolset = {
           description:
             "Change named attributes of one existing Jira Assets object; every other attribute " +
             "is left as it is. Values are text: dates as YYYY-MM-DD, a Select its option, a " +
-            "Status its name, a User the " +
-            "Atlassian account id. A list sets several values; null clears the attribute. " +
+            "Status its name or id, a User the Atlassian account id. A list sets several " +
+            "values; null clears the attribute. " +
             "Answers with the object read back after the change.",
           inputSchema: z.object({
             object_id: objectId,
@@ -313,6 +315,7 @@ export const assetsTools: Toolset = {
                 z.string().min(1).max(200),
                 z.union([z.string().max(10000), z.array(z.string().max(10000)).max(50), z.null()]),
               )
+              .refine((a) => Object.keys(a).length <= 20, "Change at most 20 attributes at a time")
               .describe('Attribute name to new value, e.g. {"Status": "In use"}.'),
           }),
           annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -321,7 +324,7 @@ export const assetsTools: Toolset = {
           audited(
             ctx,
             "jira_assets_update_object",
-            `${object_id} (${Object.keys(attributes).join(", ")})`,
+            `${object_id} (${Object.keys(attributes).slice(0, 20).join(", ")})`.slice(0, 300),
             async (mark) => {
               const changes = Object.entries(attributes);
               if (changes.length === 0) throw new Denied("Name at least one attribute to change");
@@ -332,7 +335,6 @@ export const assetsTools: Toolset = {
               const defs = await typeAttributes(ctx, mark, typeId, true);
               const byName = new Map(defs.map((a) => [String(a.name).toLowerCase(), a]));
               const editable = defs.filter((a) => a.editable === true && a.system !== true);
-              let statuses: { list: Obj[]; partial: boolean } | null = null;
               const body = [];
               const named = new Set<string>();
               for (const [name, value] of changes) {
@@ -356,42 +358,16 @@ export const assetsTools: Toolset = {
                   throw new Denied(`${def.name} takes one value`);
                 if (def.type === STATUS && values.length) {
                   if (!isSchemaId(schemaId)) throw new Error("Object has no schema id");
-                  statuses ??= await statusChoices(ctx, mark, schemaId, typeId, String(def.id));
-                  // A Status attribute may allow only some statuses (typeValueMulti, ids).
-                  const allowedIds = ((def.typeValueMulti ?? []) as unknown[]).map(String);
-                  const usable = statuses.list.filter(
-                    (s) => !allowedIds.length || allowedIds.includes(String(s.id)),
-                  );
-                  values = values.map((v) => {
-                    const want = v.trim().toLowerCase();
-                    const found = usable.find(
-                      (s) =>
-                        String(s.id) === want ||
-                        String(s.name ?? "").toLowerCase() === want ||
-                        String(s.displayName ?? "").toLowerCase() === want,
-                    );
-                    if (!found)
-                      throw new Denied(
-                        `${def.name} has no status ${v}. Use one of: ${usable
-                          .map((s) => s.name)
-                          .join(", ")}${
-                          statuses!.partial
-                            ? ". Only statuses some object of this type already has can " +
-                              "be set: Atlassian does not let a service account read the full list."
-                            : ""
-                        }`,
-                      );
-                    return String(found.id);
-                  });
+                  const resolved = [];
+                  for (const v of values)
+                    resolved.push(await statusId(ctx, mark, schemaId, typeId, def, v));
+                  values = resolved;
                 }
                 if (def.type === 0 && def.defaultType?.id === SELECT && values.length) {
-                  const options =
-                    typeof def.options === "string" && def.options
-                      ? def.options.split(",").map((o: string) => o.trim())
-                      : [];
+                  const options = selectOptions(def);
                   values = values.map((v) => {
                     const want = v.trim().toLowerCase();
-                    const found = options.find((o: string) => o.toLowerCase() === want);
+                    const found = options.find((o) => o.toLowerCase() === want);
                     if (!found)
                       throw new Denied(
                         `${def.name} has no option ${v}. Use one of: ${options.join(", ")}`,
@@ -409,11 +385,25 @@ export const assetsTools: Toolset = {
                 path: path(`object/${object_id}`),
                 body: { objectTypeId: typeId, attributes: body },
               });
-              const after = await fetchObject(ctx, mark, object_id);
-              return json({
-                updated: changes.map(([name]) => byName.get(name.trim().toLowerCase())!.name),
-                object: shownObject(after, listLimit(ctx.limits, "asset_schemas")),
-              });
+              const updated = changes.map(([name]) => byName.get(name.trim().toLowerCase())!.name);
+              // The change is made: a failed read-back must not tell the agent it failed (it
+              // would retry), so it is reported beside the result and the row stays the write's.
+              try {
+                const after = await fetchObject(ctx, mark, object_id);
+                return json({
+                  updated,
+                  object: shownObject(after, listLimit(ctx.limits, "asset_schemas")),
+                });
+              } catch (error) {
+                mark(200);
+                return json({
+                  updated,
+                  object: null,
+                  warning:
+                    "The change was saved, but reading the object back failed: do not repeat " +
+                    `it. ${shownError(error)}`.trim(),
+                });
+              }
             },
           ),
       );
