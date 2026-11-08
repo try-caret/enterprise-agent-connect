@@ -8,14 +8,17 @@ import {
   type ToolContext,
   type Toolset,
 } from "../../packages/connector-kit/src/common.js";
+import { escapeHtml, sanitizeHtml } from "./html.js";
 
 // Every call goes to the mailbox in the agent's grant. No tool takes a mailbox argument, so
 // an agent cannot name another one.
 
 const MOVE_TO = ["inbox", "archive"];
 const MESSAGE_ID = /^[A-Za-z0-9_=-]{1,1024}$/;
-const LIST_FIELDS = "id,subject,from,toRecipients,receivedDateTime,isRead,bodyPreview";
-const MESSAGE_FIELDS = `${LIST_FIELDS},ccRecipients,body,conversationId,hasAttachments`;
+const LIST_FIELDS =
+  "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,bodyPreview,conversationId,internetMessageId";
+const MESSAGE_FIELDS = `${LIST_FIELDS},body,uniqueBody,hasAttachments`;
+const CONVERSATION_ID = /^[A-Za-z0-9_=+/-]{1,1024}$/;
 
 // Where a listing continues: Graph pages a folder or calendar with $skip and a search with $skiptoken, so
 // the cursor says which ("s" or "t") and carries only that value, never a path.
@@ -43,15 +46,35 @@ type Message = {
   isRead?: boolean;
   bodyPreview?: string;
   body?: { content?: string };
+  uniqueBody?: { content?: string };
   conversationId?: string;
+  internetMessageId?: string;
   hasAttachments?: boolean;
 };
 
-export function mailboxPath(ctx: ToolContext): string {
-  const mailbox = textLimit(ctx.limits, "mailbox");
-  if (!mailbox)
+function mailbox(ctx: ToolContext): string {
+  const address = textLimit(ctx.limits, "mailbox");
+  if (!address)
     throw new Denied("No mailbox is set for this agent. Ask an administrator to set one.");
-  return `/v1.0/users/${encodeURIComponent(mailbox)}`;
+  return address;
+}
+
+export function mailboxPath(ctx: ToolContext): string {
+  return `/v1.0/users/${encodeURIComponent(mailbox(ctx))}`;
+}
+
+/** Microsoft's itemBody for a body given as text or as HTML (sanitized); exactly one of them. */
+export function itemBody(
+  body: string | undefined,
+  html: string | undefined,
+): { contentType: "Text" | "HTML"; content: string } | undefined {
+  if (body !== undefined && html !== undefined)
+    throw new Denied("Give body or body_html, not both");
+  if (html === undefined)
+    return body === undefined ? undefined : { contentType: "Text", content: body };
+  const content = sanitizeHtml(html);
+  if (!content.trim()) throw new Denied("body_html has nothing left that can be sent");
+  return { contentType: "HTML", content };
 }
 
 function messagePath(ctx: ToolContext, id: string): string {
@@ -79,15 +102,24 @@ export async function ok(
 const address = (a?: Address) => a?.emailAddress?.address ?? null;
 const recipients = (list: string[]) => list.map((address) => ({ emailAddress: { address } }));
 
-function summary(m: Message) {
+function summary(m: Message, self: string) {
+  const to = (m.toRecipients ?? []).map(address);
+  const cc = (m.ccRecipients ?? []).map(address);
   return {
     id: m.id,
     subject: m.subject ?? "",
     from: address(m.from),
-    to: (m.toRecipients ?? []).map(address),
+    to,
+    cc,
+    // Nobody but this mailbox among the recipients: a message to the agent alone, not one it is copied on
+    // (and not a draft addressed to nobody yet).
+    only_to_me:
+      to.length + cc.length > 0 && [...to, ...cc].every((a) => a?.toLowerCase() === self.toLowerCase()),
     received: m.receivedDateTime ?? null,
     read: m.isRead ?? null,
     preview: m.bodyPreview ?? "",
+    conversation: m.conversationId ?? null,
+    internet_message_id: m.internetMessageId ?? null,
   };
 }
 
@@ -107,6 +139,15 @@ export const microsoftTools: Toolset = {
     const readOnly = { readOnlyHint: true, openWorldHint: true } as const;
     const sends = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
     const emails = z.array(z.email()).max(50);
+    const text = z.string().min(1).max(100000);
+    const html = z
+      .string()
+      .min(1)
+      .max(100000)
+      .optional()
+      .describe(
+        "HTML instead of body. Kept: text formatting, lists, tables, https links and https images; scripts, forms and other active content are removed.",
+      );
 
     if (allowed.has("mail_list_messages"))
       server.registerTool(
@@ -118,31 +159,44 @@ export const microsoftTools: Toolset = {
             folder: z.enum(["inbox", "sentitems", "drafts", "archive"]).default("inbox"),
             search: z.string().max(200).optional().describe("Words to search for."),
             unread_only: z.boolean().default(false),
+            conversation: z
+              .string()
+              .max(1100)
+              .optional()
+              .describe("Only messages in this conversation (a message's `conversation`)."),
             max_results: z.number().int().min(1).max(50).default(20),
             cursor: z
               .string()
               .max(4000)
               .optional()
               .describe(
-                "The `next` value from the previous call with the same folder, search and unread_only: the following page.",
+                "The `next` value from the previous call with the same folder, search, unread_only and conversation: the following page.",
               ),
           }),
           annotations: readOnly,
         },
-        ({ folder, search, unread_only, max_results, cursor }) =>
+        ({ folder, search, unread_only, conversation, max_results, cursor }) =>
           audited(ctx, "mail_list_messages", folder, async (mark) => {
             const query = [`$top=${max_results}`, `$select=${LIST_FIELDS}`, ...pageParam(cursor)];
             // Microsoft does not combine $search with $filter on messages.
             const words = search?.replaceAll('"', "").trim();
+            if (words && conversation !== undefined)
+              throw new Denied("Give search or conversation, not both");
+            if (conversation !== undefined && !CONVERSATION_ID.test(conversation))
+              throw new Denied("Give conversation as a message's conversation value");
+            const filter = [
+              ...(conversation !== undefined ? [`conversationId eq '${conversation}'`] : []),
+              ...(unread_only ? ["isRead eq false"] : []),
+            ].join(" and ");
             if (words) query.push(`$search=${encodeURIComponent(`"${words}"`)}`);
-            else if (unread_only) query.push(`$filter=${encodeURIComponent("isRead eq false")}`);
+            else if (filter) query.push(`$filter=${encodeURIComponent(filter)}`);
             const data = await ok(ctx, mark, {
               method: "GET",
               path: `${mailboxPath(ctx)}/mailFolders/${folder}/messages?${query.join("&")}`,
             });
             const messages = (data.value as Message[])
               .filter((m) => !unread_only || m.isRead === false)
-              .map(summary);
+              .map((m) => summary(m, mailbox(ctx)));
             return json({ messages, more: Boolean(data["@odata.nextLink"]), next: nextPage(data) });
           }),
       );
@@ -151,7 +205,8 @@ export const microsoftTools: Toolset = {
       server.registerTool(
         "mail_get_message",
         {
-          description: "Read one message in this agent's mailbox, with its body as plain text.",
+          description:
+            "Read one message in this agent's mailbox, with its body as plain text. `new_text` is only what this message adds, without the earlier messages it quotes.",
           inputSchema: z.object({ message_id: z.string().describe("Id from mail_list_messages.") }),
           annotations: readOnly,
         },
@@ -163,11 +218,10 @@ export const microsoftTools: Toolset = {
               headers: { prefer: 'outlook.body-content-type="text"' },
             });
             return json({
-              ...summary(m),
-              cc: (m.ccRecipients ?? []).map(address),
-              conversation: m.conversationId ?? null,
+              ...summary(m, mailbox(ctx)),
               attachments: m.hasAttachments ?? false,
               body: m.body?.content ?? "",
+              new_text: m.uniqueBody?.content ?? null,
             });
           }),
       );
@@ -176,24 +230,28 @@ export const microsoftTools: Toolset = {
       server.registerTool(
         "mail_send",
         {
-          description: "Send a plain-text email from this agent's mailbox.",
+          description:
+            "Send an email from this agent's mailbox, as plain text (`body`) or as HTML (`body_html`).",
           inputSchema: z.object({
             to: emails.min(1),
             cc: emails.default([]),
             subject: z.string().min(1).max(255),
-            body: z.string().min(1).max(100000),
+            body: text.optional().describe("Plain text. Give this or body_html."),
+            body_html: html,
           }),
           annotations: sends,
         },
-        ({ to, cc, subject, body }) =>
+        ({ to, cc, subject, body, body_html }) =>
           audited(ctx, "mail_send", [...to, ...cc].join(", "), async (mark) => {
+            const content = itemBody(body, body_html);
+            if (!content) throw new Denied("Give body or body_html");
             await ok(ctx, mark, {
               method: "POST",
               path: `${mailboxPath(ctx)}/sendMail`,
               body: {
                 message: {
                   subject,
-                  body: { contentType: "Text", content: body },
+                  body: content,
                   toRecipients: recipients(to),
                   ccRecipients: recipients(cc),
                 },
@@ -208,21 +266,32 @@ export const microsoftTools: Toolset = {
       server.registerTool(
         "mail_reply",
         {
-          description: "Reply to the sender of a message in this agent's mailbox.",
+          description:
+            "Reply to a message in this agent's mailbox, in the same conversation, above the quoted message. Goes to the sender, or with reply_all to the sender and every other recipient.",
           inputSchema: z.object({
             message_id: z.string().describe("Id from mail_list_messages."),
-            body: z.string().min(1).max(100000),
+            body: text.optional().describe("Plain text. Give this or body_html."),
+            body_html: html,
+            reply_all: z.boolean().default(false),
           }),
           annotations: sends,
         },
-        ({ message_id, body }) =>
+        ({ message_id, body, body_html, reply_all }) =>
           audited(ctx, "mail_reply", message_id, async (mark) => {
+            const content = itemBody(body, body_html);
+            if (!content) throw new Denied("Give body or body_html");
+            // Microsoft reads the comment as HTML and puts it above the quoted message (a message
+            // body instead would drop the quote), so plain text is escaped and keeps its lines.
+            const comment =
+              content.contentType === "HTML"
+                ? content.content
+                : escapeHtml(content.content).replaceAll("\n", "<br>");
             await ok(ctx, mark, {
               method: "POST",
-              path: `${messagePath(ctx, message_id)}/reply`,
-              body: { comment: body },
+              path: `${messagePath(ctx, message_id)}/${reply_all ? "replyAll" : "reply"}`,
+              body: { comment },
             });
-            return json({ sent: true });
+            return json({ sent: true, reply_all });
           }),
       );
 

@@ -3,9 +3,11 @@ import { isIP } from "node:net";
 import { z } from "zod";
 import {
   audited,
+  binary,
   Denied,
   json,
   listLimit,
+  MAX_BINARY_BYTES,
   VendorFailed,
   type Toolset,
 } from "../../packages/connector-kit/src/common.js";
@@ -56,15 +58,24 @@ async function refuseLinkLocal(hostname: string) {
     throw new ConnectError(`${hostname} is a link-local address, which no app is reached at`);
 }
 
+export type AnswerRules = {
+  types?: RegExp;
+  // What `types` lets through, for the refusal.
+  passed?: string;
+  maxBytes?: number;
+};
+
 // fetch that reaches only `allowed` origins, follows no redirect, gives up after TIMEOUT_MS and
-// reads at most MAX_RESPONSE_BYTES of JSON or text (or what `types` matches). Its refusals are
-// ConnectError.
+// reads at most `maxBytes` (MAX_RESPONSE_BYTES) of JSON or text (or what `types` matches). Its
+// refusals are ConnectError.
 export function guardedFetch(
   allowed: string[],
   fetchImpl: Fetch = fetch,
-  types = /^(application\/([\w.+-]*\+)?json|text\/)/i,
-  // What `types` lets through, for the refusal.
-  passed = "JSON or text",
+  {
+    types = /^(application\/([\w.+-]*\+)?json|text\/)/i,
+    passed = "JSON or text",
+    maxBytes = MAX_RESPONSE_BYTES,
+  }: AnswerRules = {},
 ): Fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -92,9 +103,9 @@ export function guardedFetch(
     const reader = res.body?.getReader();
     for (let r = await reader?.read(); r && !r.done; r = await reader!.read()) {
       size += r.value.byteLength;
-      if (size > MAX_RESPONSE_BYTES) {
+      if (size > maxBytes) {
         await reader!.cancel();
-        throw new ConnectError(`The app's answer is larger than ${MAX_RESPONSE_BYTES / 1024} KB`);
+        throw new ConnectError(`The app's answer is larger than ${maxBytes / 1024} KB`);
       }
       chunks.push(r.value);
     }
@@ -147,8 +158,7 @@ export function connectionAddress(
   allowedHosts: string[] | undefined,
   tokenUrl: string | null,
   fetchImpl: Fetch,
-  types?: RegExp,
-  passed?: string,
+  rules?: AnswerRules,
 ) {
   const label = (id: string) => connector.fields.find((f) => f.id === id)?.label ?? id;
   const fetches = new Map<string, Fetch>();
@@ -161,7 +171,7 @@ export function connectionAddress(
     let safe = fetches.get(key);
     if (!safe) {
       const origins = [url.origin, ...(token ? [token.origin] : [])];
-      safe = guardedFetch(origins, fetchImpl, types, passed);
+      safe = guardedFetch(origins, fetchImpl, rules);
       fetches.set(key, safe);
     }
     return { url, safe, key, tokenUrl: token?.href ?? null };
@@ -177,6 +187,15 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
     http.allowedHosts,
     "tokenUrl" in auth ? auth.tokenUrl : null,
     fetchImpl,
+  );
+  // A binary tool's answer: any type, never parsed, up to the size a tool hands back.
+  const bytesAddressOf = connectionAddress(
+    connector,
+    http.baseUrl,
+    http.allowedHosts,
+    null,
+    fetchImpl,
+    { types: /(?:)/, maxBytes: MAX_BINARY_BYTES },
   );
   const clients = new Map<string, ReturnType<typeof clientCredentials>>();
   const oauthFor = (key: string, safe: Fetch) => {
@@ -238,9 +257,32 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
       method: request.method,
       path: `${url.pathname}${url.search}`,
       body: request.body,
+      ...(request.responseType ? { responseType: request.responseType } : {}),
       ...(request.body === undefined ? {} : { headers: { "content-type": contentType(request) } }),
     };
     const headers = { ...fixed, ...fieldHeaders(c) };
+    if (request.responseType === "bytes") {
+      const download = bytesAddressOf(c).safe;
+      const send = async (signed: Record<string, string>) => {
+        const res = await download(`${base.origin}${req.path}`, {
+          method: req.method,
+          headers: { accept: "*/*", ...headers, ...signed },
+        });
+        if (!res.ok) {
+          const raw = await res.text();
+          return { status: res.status, data: raw ? parse(raw) : null };
+        }
+        const data = new Uint8Array(await res.arrayBuffer());
+        return { status: res.status, data, headers: Object.fromEntries(res.headers) };
+      };
+      if (!oauth) return send(authHeaders(auth, c));
+      const creds = oauthCreds(c, tokenUrl);
+      const bearer = async () => ({ authorization: `Bearer ${await oauth.token(creds)}` });
+      const res = await send(await bearer());
+      if (res.status !== 401) return res;
+      oauth.forget(creds);
+      return send(await bearer());
+    }
     if (oauth) return oauth.call(oauthCreds(c, tokenUrl), base.origin, req, headers);
     const res = await safe(`${base.origin}${req.path}`, {
       method: req.method,
@@ -255,7 +297,7 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
     const raw = await res.text();
     return {
       status: res.status,
-      data: raw ? parse(raw) : null,
+      data: request.responseType === "text" && res.ok ? raw : raw ? parse(raw) : null,
       headers: Object.fromEntries(res.headers),
     };
   };
@@ -369,7 +411,8 @@ export const zodType = {
 };
 
 function paramType(p: HttpParam) {
-  const one = (type: keyof typeof zodType) => (p.enum ? z.literal(p.enum) : zodType[type]);
+  const one = (type: keyof typeof zodType) =>
+    p.enum ? z.literal(p.enum) : p.pattern ? z.string().regex(new RegExp(p.pattern)) : zodType[type];
   const type: z.ZodType = (p.type === "array" ? z.array(one(p.items!)) : one(p.type)).describe(
     p.description,
   );
@@ -432,6 +475,8 @@ export function httpTools(http: HttpApp): Toolset {
                 res = await ctx.call({
                   method: tool.method,
                   path: target,
+                  ...(tool.binary ? { responseType: "bytes" as const } : {}),
+                  ...(tool.text ? { responseType: "text" as const } : {}),
                   ...(hasBody ? { body } : {}),
                   ...(hasBody && tool.contentType
                     ? { headers: { "content-type": tool.contentType } }
@@ -454,6 +499,12 @@ export function httpTools(http: HttpApp): Toolset {
                 if (values && !answerWithin(res.data, a.field, values))
                   throw new Denied(`The answer's ${a.field} is outside this agent's limits`);
               }
+              if (tool.binary)
+                return binary(
+                  res.data as Uint8Array,
+                  res.headers?.["content-type"] || "application/octet-stream",
+                  target,
+                );
               if (!tool.result && !tool.paging)
                 return typeof res.data === "string"
                   ? { content: [{ type: "text", text: res.data }] }

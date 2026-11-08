@@ -370,6 +370,15 @@ const fitsType = (type: string, v: unknown) =>
       ? typeof v === type
       : false;
 
+const validRegex = (r: string) => {
+  try {
+    new RegExp(r);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const httpParamSchema = z
   .object({
     type: z.enum(["string", "number", "integer", "boolean", "array"]),
@@ -396,8 +405,17 @@ const httpParamSchema = z
     // Filled from this plain connect form field, not by the agent, e.g. the company's own
     // address an app wants in every request.
     field: slug.optional(),
+    // A string's value (each item's, for an array of strings) must match this regular
+    // expression, e.g. a full commit SHA.
+    pattern: z
+      .string()
+      .refine(validRegex, "A pattern is a valid regular expression")
+      .optional(),
   })
   .strict()
+  .refine((p) => !p.pattern || ((p.items ?? p.type) === "string" && !p.enum), {
+    message: "A pattern is for string params without an enum",
+  })
   .refine((p) => (p.type === "array") === Boolean(p.items), {
     message: "An array param names its item type (items), and only an array param",
   })
@@ -522,8 +540,24 @@ const httpToolSchema = z
     nestedBody: z.boolean().default(false),
     // A read sent as POST (a search with a body): told to clients as read-only.
     readOnly: z.boolean().default(false),
+    // The answer is a file (e.g. an archive), handed back whole as kit `binary`: any content
+    // type, up to MAX_BINARY_BYTES, never parsed.
+    binary: z.boolean().default(false),
+    // The answer is text handed back as the app sent it (e.g. a file's content), never parsed as
+    // JSON.
+    text: z.boolean().default(false),
   })
   .strict()
+  .refine(
+    (t) => !t.binary || (t.method === "GET" && !t.result && !t.paging && !t.answerLimits.length),
+    { message: "A binary tool is a GET with no result, paging or answerLimits" },
+  )
+  .refine(
+    (t) =>
+      !t.text ||
+      (t.method === "GET" && !t.binary && !t.result && !t.paging && !t.answerLimits.length),
+    { message: "A text tool is a GET, not binary, with no result, paging or answerLimits" },
+  )
   .refine(
     (t) => {
       const inPath = [...t.path.matchAll(/\{([a-z][a-z0-9_]*)\}/g)].map((m) => m[1]);
@@ -1073,15 +1107,63 @@ const eventsSchema = z
       })
       .strict()
       .optional(),
+    // Microsoft Graph change notifications (packages/server/src/events/graph.ts): one Graph
+    // subscription on `resource` per distinct value of the agents' `per` limit (e.g. a
+    // mailbox) among agents with an enabled trigger, renewed before `maxMinutes` runs out. A
+    // notification names only the item: `read` fetches it ({value} {id}); `delta` catches up
+    // on what notifications missed ({value}, {since}: when the watch started), deduplicated
+    // with them by `deliveryId`. Each item is kept under `wrap`, with the watched value under
+    // the `per` limit's id; it is news only when `received` is after the watch started and
+    // within 7 days. `own`: fields that, equal to the watched value, make it the watched
+    // account's own (it starts nothing); `only`: boolean fields added to the event, true when
+    // every value of the listed fields is the watched value.
+    graph: z
+      .object({
+        per: slug,
+        resource: z.string().min(1).includes("{value}"),
+        changeType: z.string().regex(/^(created|updated|deleted)(,(created|updated|deleted))*$/),
+        type: eventId,
+        maxMinutes: z.number().int().min(45).max(43200),
+        read: eventRequest,
+        delta: eventRequest,
+        wrap: slug,
+        deliveryId: eventPath,
+        received: eventPath,
+        own: z.array(slug).default([]),
+        only: z.record(slug, z.array(slug).min(1)).default({}),
+      })
+      .strict()
+      .optional(),
+    // The field naming the conversation an event belongs to (a mail thread, an issue): events
+    // of one thread carry the same `thread` id to the runner, per trigger.
+    thread: slug.optional(),
   })
   .strict()
-  .refine((e) => e.webhook || e.poll, { message: "Events come from a webhook, a poll or both" })
+  .refine((e) => e.webhook || e.poll || e.graph, {
+    message: "Events come from a webhook, a poll or Graph notifications",
+  })
   .refine(
     (e) =>
       Object.values(e.limits).every((f) => f in e.fields) &&
       (e.self?.fields ?? []).every((f) => f in e.fields) &&
-      (e.poll?.types ?? []).every((t) => e.types.some((x) => x.id === t.type)),
-    { message: "Event limits and self name fields, and a poll's types are declared types" },
+      (e.poll?.types ?? []).every((t) => e.types.some((x) => x.id === t.type)) &&
+      (e.thread === undefined || e.thread in e.fields),
+    { message: "Event limits, self and thread name fields, and a poll's types are declared types" },
+  )
+  .refine(
+    (e) =>
+      !e.graph ||
+      // Without that limit, one agent's trigger would start on another agent's mailbox.
+      (e.graph.per in e.limits &&
+        e.types.some((x) => x.id === e.graph!.type) &&
+        e.graph.own.every((f) => f in e.fields) &&
+        Object.entries(e.graph.only).every(
+          ([name, from]) => !(name in e.fields) && from.every((f) => f in e.fields),
+        )),
+    {
+      message:
+        "Graph events need an event limit on `per`, a declared type, and own and only naming fields (only's own names new)",
+    },
   );
 export type ConnectorEvents = z.infer<typeof eventsSchema>;
 

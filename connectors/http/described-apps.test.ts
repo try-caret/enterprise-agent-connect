@@ -81,6 +81,51 @@ test("each described built-in app loads, is offered and runs on the generic modu
   }
 });
 
+test("GitLab code: a branch resolves to its commit, and the archive takes only that SHA", async () => {
+  const conn = { config: { host: "gitlab.example.com" }, secret: { token: "glpat" } };
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  let fake = fakeApp({ id: sha, short_id: "0123456", title: "Ship it", web_url: "w", extra: 1 });
+  let out = await run(app("gitlab"), conn, "gitlab_resolve_ref", { project: "g/p", ref: "release/1.2" }, fake);
+  assert.equal(
+    fake.seen[0].url,
+    "https://gitlab.example.com/api/v4/projects/g%2Fp/repository/commits/release%2F1.2",
+  );
+  assert.equal(JSON.parse(out.text).id, sha);
+
+  fake = fakeApp("export const x = 1;\n");
+  out = await run(app("gitlab"), conn, "gitlab_read_file", { project: "g/p", file_path: "src/a.ts", ref: sha }, fake);
+  assert.equal(
+    fake.seen[0].url,
+    `https://gitlab.example.com/api/v4/projects/g%2Fp/repository/files/src%2Fa.ts/raw?ref=${sha}`,
+  );
+  // A JSON file comes back as its own text, formatting and all, not re-serialized.
+  const file = '{"name":"p",  "version": "1.0.0"}\n';
+  const raw = {
+    seen: [] as Seen[],
+    fetchImpl: (async () => new Response(file, { headers: { "content-type": "text/plain" } })) as typeof fetch,
+  };
+  out = await run(app("gitlab"), conn, "gitlab_read_file", { project: "g/p", file_path: "package.json", ref: sha }, raw);
+  assert.equal(out.isError, false, out.text);
+  assert.equal(out.text, file);
+
+  const archive = Buffer.from([0x1f, 0x8b, 1, 2, 3]);
+  const seen: string[] = [];
+  const vendorFetch = (async (input: string | URL) => {
+    seen.push(String(input));
+    return new Response(archive, { headers: { "content-type": "application/octet-stream" } });
+  }) as typeof fetch;
+  const archiveApp = { seen: [], fetchImpl: vendorFetch };
+  out = await run(app("gitlab"), conn, "gitlab_download_archive", { project: "g/p", sha }, archiveApp, {
+    projects: ["g/p"],
+  });
+  assert.equal(seen[0], `https://gitlab.example.com/api/v4/projects/g%2Fp/repository/archive.tar.gz?sha=${sha}`);
+  assert.equal(JSON.parse(out.text).size, archive.length);
+  await assert.rejects(
+    run(app("gitlab"), conn, "gitlab_download_archive", { project: "g/p", sha: "main" }, archiveApp),
+  );
+  assert.equal(seen.length, 1);
+});
+
 test("devops apps: one tool each, against a fake app", async () => {
   // GitLab: a namespaced project path is one encoded segment, and X-Next-Page pages.
   let fake = fakeApp([{ id: 7, status: "failed", ref: "main", extra: "x" }], { "x-next-page": "2" });

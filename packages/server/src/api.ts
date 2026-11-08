@@ -226,14 +226,14 @@ export const schemas = (() => {
     z.strictObject({
       id: z.string(),
       connectorId: z.string(),
-      source: z.enum(["webhook", "poll"]),
+      source: z.enum(["webhook", "poll", "graph"]),
       filter: z.string(),
       intervalSeconds: z.number(),
       cursor: z.string().nullable(),
       polledAt: iso.nullable(),
       lastError: z.string().nullable(),
       registered: z.string().nullable(),
-      // Where the app sends a webhook's events; null for a poll.
+      // Where the app sends a webhook's events or Graph its notifications; null for a poll.
       url: z.string().nullable(),
       createdBy: z.string(),
       createdAt: iso,
@@ -277,6 +277,8 @@ export const schemas = (() => {
       connectorId: z.string(),
       eventType: z.string(),
       deliveryId: z.string(),
+      // The same for every run of one thread of the app (a mail conversation) on this trigger.
+      thread: z.string().nullable(),
       runner: z.string(),
       sessionId: z.string().nullable(),
       state: z.enum(["starting", "running", "ended", "failed"]),
@@ -284,6 +286,20 @@ export const schemas = (() => {
       costCents: z.number().nullable(),
       startedAt: iso,
       finishedAt: iso.nullable(),
+    }),
+  );
+  const EventWatch = named(
+    "EventWatch",
+    z.strictObject({
+      // The watched value, e.g. an agent's mailbox.
+      value: z.string(),
+      // Graph holds a live subscription for it.
+      subscribed: z.boolean(),
+      expiresAt: iso.nullable(),
+      lastNotificationAt: iso.nullable(),
+      caughtUpAt: iso.nullable(),
+      lastError: z.string().nullable(),
+      createdAt: iso,
     }),
   );
   const keySet = z.strictObject({
@@ -408,7 +424,8 @@ export const schemas = (() => {
       "EventSubscribed",
       z.strictObject({
         subscription: EventSubscription,
-        // Shown once: what the app signs deliveries with. Null for a poll.
+        // Shown once: what the app signs webhook deliveries with. Null for a poll, and for
+        // Graph, whose clientState the service hands Microsoft itself.
         secret: z.string().nullable(),
         // Where to paste the address and secret in the app ({url} filled in).
         setup: z.array(setupStep),
@@ -418,6 +435,7 @@ export const schemas = (() => {
     ),
     EventTrigger,
     EventRun,
+    EventWatch,
     ClaudeKey,
     ClaudeKeySaved,
     ClaudeAgent,
@@ -952,6 +970,14 @@ export const routes = {
       200: z.strictObject({ subscription: s.EventSubscription, secret: z.string() }),
       ...notFound,
     },
+    events: true,
+  },
+  eventWatches: {
+    method: "GET",
+    path: `${ORG}/event-subscriptions/{subscription}/watches`,
+    summary:
+      "A Microsoft Graph subscription's watched values (each agent's mailbox): live, expiry, last notification and catch-up",
+    responses: { 200: z.array(s.EventWatch), ...notFound },
     events: true,
   },
   unsubscribeEvents: {

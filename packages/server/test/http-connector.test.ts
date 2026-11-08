@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { generateKeyPairSync, verify } from "node:crypto";
+import { createHash, generateKeyPairSync, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -14,7 +14,7 @@ import {
   fillAddress,
   type Connector,
 } from "../../connector-kit/src/connector.ts";
-import type { ToolContext } from "../../connector-kit/src/common.ts";
+import { MAX_BINARY_BYTES, type ToolContext } from "../../connector-kit/src/common.ts";
 import { assertToolsImplemented } from "../src/service.ts";
 import {
   guardedFetch,
@@ -547,6 +547,117 @@ test("redirects, large answers and binary answers are refused", async () => {
     assert.match(text, why);
     assert.equal(audit[0].decision, "failed");
   }
+});
+
+// The example app with a tool answering an order's archived receipt as a file.
+function withReceipt(tool: Record<string, unknown> = {}) {
+  return orders(
+    {
+      tools: [
+        ...example.http.tools,
+        {
+          name: "orders_receipt",
+          description: "Download an order's receipt archive",
+          method: "GET",
+          path: "/orders/{id}/receipt",
+          params: {
+            id: { type: "string", description: "The order id", in: "path", pattern: "^[0-9]+$" },
+          },
+          binary: true,
+          ...tool,
+        },
+      ],
+    },
+    {
+      capabilities: example.capabilities.map((c: { id: string; tools: string[] }) =>
+        c.id === "read" ? { ...c, tools: [...c.tools, "orders_receipt"] } : c,
+      ),
+    },
+  );
+}
+
+test("a binary tool hands back the file's bytes, size and sha256, whatever its type", async () => {
+  const bytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0x00, 0x10]);
+  respond = (_q, res) => (res.writeHead(200, { "content-type": "application/x-gzip" }), res.end(bytes));
+  seen.length = 0;
+  const { result, audit } = await run(withReceipt(), "orders_receipt", { id: "42" });
+  assert.equal(result.isError, undefined);
+  assert.equal(seen[0].url, "/api/orders/42/receipt");
+  assert.equal(seen[0].headers["x-api-key"], "k1");
+  assert.equal(seen[0].headers.accept, "*/*");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    uri: "/orders/42/receipt",
+    mimeType: "application/x-gzip",
+    size: bytes.length,
+    sha256,
+  });
+  const file = (result.content as unknown as { resource: { blob: string; mimeType: string } }[])[1];
+  assert.equal(file.resource.mimeType, "application/x-gzip");
+  assert.deepEqual(Buffer.from(file.resource.blob, "base64"), bytes);
+  assert.equal(audit[0].decision, "allowed");
+
+  // A param's pattern is checked before any call.
+  seen.length = 0;
+  await assert.rejects(run(withReceipt(), "orders_receipt", { id: "main" }));
+  assert.equal(seen.length, 0);
+
+  // Larger than the cap: refused, read no further. A refusal from the app reads as usual.
+  respond = (_q, res) => (
+    res.writeHead(200, { "content-type": "application/octet-stream" }),
+    res.end(Buffer.alloc(MAX_BINARY_BYTES + 1))
+  );
+  let out = await run(withReceipt(), "orders_receipt", { id: "42" });
+  assert.equal(out.result.isError, true);
+  assert.match(out.text, /larger than 8192 KB/);
+  respond = (_q, res) => (
+    res.writeHead(404, { "content-type": "application/json" }),
+    res.end(JSON.stringify({ message: "No such order" }))
+  );
+  out = await run(withReceipt(), "orders_receipt", { id: "42" });
+  assert.equal(out.result.isError, true);
+  assert.match(out.text, /404: No such order/);
+});
+
+test("a binary tool signs with an OAuth token and mints a new one after a 401", async () => {
+  const connector = withReceipt();
+  connector.fields = [
+    { id: "cid", label: "cid", secret: false, optional: false },
+    { id: "csecret", label: "csecret", secret: true, optional: false },
+  ];
+  connector.http!.auth = { type: "oauth2", tokenUrl: `${origin}/token`, clientId: "cid", clientSecret: "csecret" };
+  let minted = 0;
+  respond = (req, res) => {
+    if (req.url === "/token") return ok({ access_token: `t${++minted}`, expires_in: 3600 })(req, res);
+    if (req.headers.authorization === "Bearer t1") return (res.writeHead(401), res.end());
+    res.writeHead(200, { "content-type": "application/gzip" });
+    res.end("zz");
+  };
+  const { result } = await run(connector, "orders_receipt", { id: "7" }, {
+    secret: { csecret: "s" },
+    config: { cid: "c" },
+  });
+  assert.equal(minted, 2);
+  assert.equal(JSON.parse(result.content[0].text).size, 2);
+});
+
+test("a binary tool is a plain GET, and a pattern is a valid regular expression on a string", () => {
+  assert.throws(() => withReceipt({ method: "POST" }), /binary tool/);
+  assert.throws(() => withReceipt({ result: { fields: ["id"] } }), /binary tool/);
+  assert.throws(
+    () =>
+      withReceipt({
+        params: { id: { type: "integer", description: "x", in: "path", pattern: "^1$" } },
+      }),
+    /pattern is for string params/,
+  );
+  assert.throws(
+    () =>
+      withReceipt({
+        params: { id: { type: "string", description: "x", in: "path", pattern: "(" } },
+      }),
+    /valid regular expression/,
+  );
 });
 
 test("a refusal from the app reaches the agent without the credentials", async () => {

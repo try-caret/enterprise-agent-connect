@@ -41,6 +41,7 @@ const TABLES = [
   "app_events",
   "event_triggers",
   "event_runs",
+  "event_watches",
   "internal_apps",
 ] as const;
 

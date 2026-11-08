@@ -52,6 +52,7 @@ export type EventSubscribed = S["EventSubscribed"];
 export type EventTrigger = S["EventTrigger"];
 export type EventTriggerInput = Body<"setEventTrigger">;
 export type EventRun = S["EventRun"];
+export type EventWatch = S["EventWatch"];
 export type ClaudeKey = S["ClaudeKey"];
 export type ClaudeAgent = S["ClaudeAgent"];
 export type InternalApp = S["InternalApp"];

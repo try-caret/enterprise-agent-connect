@@ -49,6 +49,8 @@ export type RunInput = {
 
 // A run started by an app's event (events/runtime.ts). Nothing is replied to: the agent acts
 // with its tools. `data`: the event's kept fields, written by people in the app (untrusted).
+// `thread`: the same for every event of one conversation (a mail thread, an issue) on one
+// trigger, null when the app declares no thread or the event has none.
 export type EventRunInput = {
   org: string;
   agentId: string;
@@ -57,7 +59,13 @@ export type EventRunInput = {
   budgetCents: number;
   trigger: RunnerTrigger;
   secret: string | null;
-  event: { app: string; type: string; deliveryId: string; data: Record<string, unknown> };
+  event: {
+    app: string;
+    type: string;
+    deliveryId: string;
+    thread: string | null;
+    data: Record<string, unknown>;
+  };
 };
 
 // A run as runner.state reads it. An event run awaits no reply: once started it is answered.
@@ -187,6 +195,9 @@ export const claudeManagedAgents =
             run: input.runId,
             app: input.event.app,
             event: input.event.type,
+            // A session per event: a busy session cannot take the next one, and the app's
+            // thread itself holds what came before (docs/triggers.md, Threads).
+            ...(input.event.thread ? { thread: input.event.thread } : {}),
           },
           text: input.text,
         });
@@ -267,6 +278,7 @@ export const signedWebhook =
           app: input.event.app,
           event: input.event.type,
           deliveryId: input.event.deliveryId,
+          thread: input.event.thread,
           data: input.event.data,
           text: input.text,
           mcpUrl: mcpUrl(input.agentId),

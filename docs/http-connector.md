@@ -114,6 +114,9 @@ A connector with an `http` block is like any other connector (name, setup steps,
     is not offered to the agent at all), for a value the app wants in every request, such as
     the company's own server address. A `string` in the query or body, with no `default`,
     `enum` or `limit`.
+  - `"pattern": "^[0-9a-f]{40}$"`: a regular expression a `string` (or each item of an array of
+    strings) must match, checked before any call, e.g. to take only a full commit SHA. Not with
+    `enum`.
 - **Nested bodies**: with `"nestedBody": true` on a tool, a body param's `name` is a dot path
   into the body, so `"name": "data.attributes.firstName"` sends
   `{"data": {"attributes": {"firstName": …}}}` and a number indexes a list
@@ -136,6 +139,17 @@ A connector with an `http` block is like any other connector (name, setup steps,
 - **readOnly**: `true` on a tool that only reads but is not a GET, such as a search sent as
   POST with its filters in the body, so agents' clients see it as read-only. It cannot be
   destructive or a DELETE.
+- **binary**: `true` on a `GET` tool whose answer is a file, such as an archive or a document.
+  The answer is passed back whole and never read: any content type, up to 8 MB (larger ones are
+  refused as they download). The agent gets two parts: a JSON text part
+  `{"uri", "mimeType", "size", "sha256"}` (the request sent, the app's content type, the byte
+  count and the SHA-256 of the bytes) and an MCP embedded resource `{"type": "resource",
+  "resource": {"uri", "mimeType", "blob"}}` whose `blob` is the bytes in base64. It is meant for
+  a program calling the tool, which should check the SHA-256 before using the bytes. A binary
+  tool has no `result`, `paging` or `answerLimits`.
+- **text**: `true` on a `GET` tool whose answer is text to hand back exactly as the app sent it,
+  such as a file's content: it is never read as JSON, so a JSON file keeps its own formatting.
+  A text tool is not `binary` and has no `result`, `paging` or `answerLimits`.
 - **contentType** (on the `http` block or a tool, the tool's winning): the JSON body's content
   type when the app wants one other than `application/json`, such as
   `"application/vnd.api+json"`. Only `application/json` or a `+json` type. The app's `Accept`
@@ -188,8 +202,9 @@ A connector with an `http` block is like any other connector (name, setup steps,
   capabilities is ticked, e.g. a script only one feature needs.
 
 What the service enforces on every call: path values are encoded and `.`/`..` are refused,
-addresses stay under 8 KB and request bodies under 256 KB, answers under 1 MB and 30 seconds, only JSON or text answers
-are passed back, and the agent's own headers are never sent to your app.
+addresses stay under 8 KB and request bodies under 256 KB, answers under 1 MB (8 MB for a
+binary tool) and 30 seconds, only JSON or text answers are passed back (any type for a binary
+tool), and the agent's own headers are never sent to your app.
 
 A SOAP service or an OData service (SAP, Dynamics, SuccessFactors) is described the same way,
 with a `soap` or `odata` block instead: see [soap-connector.md](soap-connector.md) and

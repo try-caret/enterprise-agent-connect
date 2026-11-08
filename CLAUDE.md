@@ -1,7 +1,7 @@
 # Enterprise Agent Connect
 
 Lets a company admin connect Jira, Outlook mail and calendar, SharePoint (files, Excel
-spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, Zip, UKG Pro, iCIMS, ZoomInfo, DocuSign and Axonius) once, from the admin UI, and lets Claude Managed Agents use those
+spreadsheets and the directory), Teams, Microsoft Entra ID, Microsoft Intune, Dynamics 365, Jamf Pro, Okta, Slack, Salesforce, Gong, Oracle NetSuite, SAP S/4HANA, ServiceNow, Workday, FedEx, Dell TechDirect, GitHub, and the JSON-only apps (GitLab, Argo CD, SonarQube, Datadog, PagerDuty, Grafana, Zephyr, Confluence, Lusha, ChurnZero, Adestra, Cvent, Forsta Surveys (Decipher), Intercom, Sprout Social, Synthesia, WordPress, Automox, Qualys, Druva, Drata, SafeBase, Adobe Admin Console, Ironclad, OneStream, Zip, UKG Pro, iCIMS, ZoomInfo, DocuSign and Axonius) once, from the admin UI, and lets Claude Managed Agents use those
 apps through the service with per-agent limits. An agent is an API key made through the admin
 API. Plain Node (`@hono/node-server` + `@modelcontextprotocol/server` v2), no UI: a host app
 builds its admin pages on `packages/client`. Served under `/agent-connect` on the deployment's
@@ -93,17 +93,28 @@ orgs/:org/teams/publish/callback` {state, nonce, params, by} (the administrator'
 …/agents/:id/teams-runs?limit`; the organization's Claude API key at `GET/PUT/DELETE
 orgs/:org/claude-key` (write-only, shown as its last four characters) and `GET
 orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in openapi.json):
-  `GET/POST orgs/:org/event-subscriptions` (POST {app, source webhook|poll, filter, intervalSeconds,
-  register, by}: one per org and app; answers the address, the secret once, the setup steps with
+  `GET/POST orgs/:org/event-subscriptions` (POST {app, source webhook|poll|graph, filter, intervalSeconds,
+  register, by}: one per org and app; answers the address, the secret once (a webhook's; Graph's
+  clientState is never shown), the setup steps with
   {url} filled and, with `register`, whether the app's API took it), `POST …/:subscription/secret`
-  {by} (a new secret, once), `DELETE …/:subscription` {by}; per agent `GET …/event-triggers`,
-  `PUT/DELETE …/event-triggers/:app` and `GET …/event-runs?limit`.
+  {by} (a new webhook secret, once), `GET …/:subscription/watches` (a Graph subscription's watched
+  values, each agent's mailbox: subscribed, expiresAt, lastNotificationAt, caughtUpAt, lastError),
+  `DELETE …/:subscription` {by} (deletes Graph's subscriptions first); per agent `GET …/event-triggers`,
+  `PUT/DELETE …/event-triggers/:app` (a Graph subscription's watches follow at once) and `GET
+  …/event-runs?limit` (each with `thread`).
 - `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
   cap, the connector's proof (HMAC-SHA256 of the raw body or a token header, constant time) checked
   before the body is parsed (401; audited at most once a minute per subscription), then type,
   delivery id (else the body's SHA-256) and replay window; a repeated delivery id or an
   undeclared type is audited and ignored. Accepted: the kept fields sealed into `app_events`,
-  answered 200 at once.
+  answered 200 at once. For a `graph` subscription (events/graph.ts): `?validationToken=` is
+  echoed as text/plain (Graph's handshake, sent before Graph has the subscription, so it proves
+  nothing and starts nothing); otherwise a `value[]` batch, each notification's `clientState`
+  compared in constant time to the subscription's sealed secret (none matching: 401; any not
+  matching audited at most once a minute), answered 202 at once and worked on after: the
+  message read with the connection (`graph.read`), or a lifecycle event
+  (`reauthorizationRequired` renews, `subscriptionRemoved` subscribes again and catches up,
+  `missed` catches up).
 - `POST /agent-connect/teams/bots/:botAppId/messages`: public, for Teams. Every request carries
   Microsoft's Bot Framework token, checked by hand (packages/server/src/teams/jwt.ts): signature from
   login.botframework.com keys, issuer, audience = this bot, 5 min skew, serviceUrl claim,
@@ -192,8 +203,13 @@ own network, so receivers check `t` freshness and dedupe on `replyToken` (`docs/
 `createAgentConnect({runners})` takes runner factories. App events use the same runners through
 the optional `startEvent` (EventRunInput: no bot or reply token; `RunInput` is unchanged for
 existing runners): only a runner with it can be chosen for an event trigger. Claude: a session
-with `source: <prefix>-events` metadata; webhook: `{type: "event", run, agent, app, event,
-deliveryId, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
+with `source: <prefix>-events` metadata (and `thread`); webhook: `{type: "event", run, agent, app, event,
+deliveryId, thread, data, text, mcpUrl}`, answered on 2xx (`state` with `awaitsReply: false`).
+`thread` (null when the app declares no `events.thread` or the event has none): a
+32-hex id, sha256 of the trigger id and the thread field's value, the same for every event of
+one conversation on one trigger; `run` stays one per event. A host keys its session on `thread ??
+run`. Claude starts a session per event (a busy session cannot take the next, and the thread
+itself, read with the agent's tools, holds what came before), with `thread` in its metadata.
 `capReached` is the one cap rule for both (hour, then day with live budgets, then concurrency).
 
 ## Database
@@ -216,7 +232,10 @@ the org ids already in them, 0003 drops two never-used columns, 0004 gives trigg
 records each run's runner (a trigger moved to another runner stops the old runner's live
 sessions and never reuses them), 0006 makes `approvals` (Teams approval cards; the
 rollback drops it), 0007 the app event tables (rollback drops them), 0008 `internal_apps` (organizations' own
-connector definitions; rollback drops it). The adopting run then makes simple views
+connector definitions; rollback drops it), 0009 the `graph` source (its check constraints),
+`event_watches` (one per Graph subscription and watched value: Graph's subscription id, expiry,
+catch-up delta link) and `event_runs.thread` (rollback drops `event_watches` first; the rest
+goes with the 0007 tables). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -255,7 +274,7 @@ connectors/<id>/connector.json # one per app: logo (admin /brand path), setup st
                       # capabilities → tools + vendor scopes (+ token `roles` when they differ;
                       # connector-level `scopes`: needed whatever is ticked, e.g. Teams' target search)
                       # + in-app permissions + step fills, value limits, `events` (types, kept
-                      # fields, limit fields, self, webhook proof and steps, poll; docs/triggers.md), verify/discover
+                      # fields, limit fields, self, webhook proof and steps, poll, graph, thread; docs/triggers.md), verify/discover
                       # probes, optional `provider`, `siteAccess` (grant steps and a note to
                       # IT per added site). Fields may be choices (`options`, the first the
                       # default; an option's `scopes` add to the token roles expected, and the
@@ -305,6 +324,9 @@ packages/connector-kit/src/ # what a connector builds on: connector.ts (connecto
                       # schemas, ConnectorModule, loading connectors/), common.ts (Toolset,
                       # audited: the audit row for every call), types.ts (Vendor, ConnectError),
                       # oauth.ts (client credentials with a cached token, vendor error text),
+                      # common.ts `binary` (a file as a tool answer: {uri, mimeType, size,
+                      # sha256} as JSON text, then the bytes as a base64 MCP embedded resource,
+                      # refused over MAX_BINARY_BYTES, 8 MB),
                       # fetch.ts (vendorFetch: every coded app's calls, redirects refused as a
                       # ConnectError, a 429 with Retry-After up to 10 s sent again twice;
                       # vendorUrl: base + path refused when it leaves base's origin; the
@@ -371,7 +393,10 @@ connectors/http/      # the generic module for a connector.json `http` block; ex
                       # one key as before; clashes, a place both list and object, and prototype
                       # keys are refused at parse, and setPath follows only own keys;
                       # `contentType` (block or tool) is application/json or +json; `readOnly`
-                      # marks a POST search read-only to clients. Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # marks a POST search read-only to clients; a param's `pattern` (a string's
+                      # regex, checked by the tool's schema); a tool's `binary` (a GET answering
+                      # a file: any type, read up to MAX_BINARY_BYTES by a second guarded fetch,
+                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls); a tool's `text` (a GET whose answer, e.g. a file, is handed back as the app sent it, never parsed as JSON: request `responseType: "text"`). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
                       # connector-kit oauth.ts jwtAssertion, http blocks only);
                       # openapi.ts: draftConnector (the OpenAPI drafter the script and the
                       # admin API's internal app drafts share)
@@ -406,7 +431,7 @@ connectors/*/vendor.ts # per-app auth + HTTP (jira: Atlassian service account cl
                       # private_key_jwt, a token per scope;
                       # workday: an API client for integrations' refresh token;
                       # dynamics-365: the Microsoft connection signing in to one Dataverse
-                      # environment)
+                      # environment; github: a GitHub App's installation token)
 connectors/churnzero/ # JSON only, on the odata block (v4, host from the connect form's instance
                       # field); not a built-in until address placeholders land. Its test loads it
                       # and calls a tool against a local fake
@@ -428,7 +453,9 @@ docs/inside-your-network.md # internal certificate authorities (NODE_EXTRA_CA_CE
 docs/triggers.md      # app events that start agents: how it works, Jira webhook and poll, how a
                       # connector declares `events`, security
 packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window, paths, kept
-                      # fields, limits, conditions, request templates, the prompt), runtime.ts
+                      # fields, limits, conditions, request templates, the prompt, thread ids),
+                      # graph.ts (Microsoft Graph notifications: watches, renewal, lifecycle,
+                      # delta catch-up), runtime.ts
                       # (public inbound, queue, decisions per trigger, polls, run watcher),
                       # admin.ts (subscriptions, triggers, runs, secret re-seal), store.ts
 packages/server/src/queue.ts # the one-process queue worker Teams and app events share
@@ -467,6 +494,10 @@ packages/server/test/ # node:test, fakes for store and vendors; typechecked by t
                       # events.test.ts: app events on a made-up app (signatures, replays,
                       # repeats, limits, conditions, own changes, caps, poll cursor, the signed
                       # webhook runner end to end, admin); deliver.test.ts its pure rules
+                      # graph-events.test.ts: Graph notifications on a made-up mail app against
+                      # a fake Graph (handshake, clientState, batches, watches following
+                      # triggers, renewal, lifecycle events, delta catch-up deduplicated with
+                      # notifications, own and old mail, thread ids to the signed webhook)
                       # teams.test.ts: the Teams runtime and trigger admin with fake runners
                       # (replies while starting, sessions kept to their runner) and approval
                       # card clicks (approver only, once, unexpired, this bot's, this place's,
@@ -610,9 +641,36 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   only to inbox or archive: Deleted Items and Junk Email (purged automatically) would be
   deleting, a separate capability. `mail_delete` moves the message to Deleted Items (a Graph
   DELETE skips it and lands in Recoverable Items, which only an administrator reaches). The check runs inside `audited()` so the refusal is logged;
-  refusals belong there, not in a zod enum, which the SDK rejects before any audit row. The
+  refusals belong there, not in a zod enum, which the SDK rejects before any audit row.
+  Events (`message_received`, docs/triggers.md "Set up Outlook mail"): a `graph` subscription
+  watches each mailbox (the `mailbox` limit) of agents with an enabled trigger, on
+  `users/{mailbox}/mailFolders('inbox')/messages`, changeType created, 10070 minutes (Graph's
+  maximum for messages is 10080, read November 5, 2026), renewed past half its life by the
+  scheduler (the subscription's interval, 5 minutes by default, which also follows grant and
+  agent changes); a delta on the inbox (`changeType=created`, `$filter=receivedDateTime ge`
+  the watch's start) catches up each interval and on `missed`. Mail is news only when received
+  after the watch started and within 7 days (deliveries are kept 30). Mail from the mailbox
+  itself starts nothing; `only_mailbox` is true when every To and Cc address is the mailbox;
+  `thread` is the conversation id. Needs only the Mail.Read role the read capability already
+  has; whether Exchange RBAC for Applications covers Graph subscriptions and delta is not yet
+  run against a real tenant. The
   admin app fills `{<config key>}` in steps from the provider's and app's config (e.g.
   `{clientId}`, `{servicePrincipalId}`) and `{scope}`/`{scopes}` from the chosen ceiling.
+  `mail_send` and `mail_reply` take `body` (plain text) or `body_html`, never both;
+  `body_html` goes through `connectors/outlook-mail/html.ts` `sanitizeHtml` (the one sanitizer,
+  also for event descriptions): rebuilt from an allowlist of tags (text formatting, lists,
+  tables, links, images), attributes and layout/colour style properties, values decoded before
+  they are checked and escaped again; `href` and `src` only `https://` (an image without one is
+  dropped); script, style, frames, forms, svg and the like go with their content. `mail_reply`
+  with `reply_all` posts `replyAll`; both send the text as Graph's `comment`, which Microsoft reads
+  as HTML and puts above the quoted message in the same conversation (a `message.body` would drop
+  the quote), so plain text is HTML-escaped with newlines as `<br>`. Messages (list and get) carry
+  `to`, `cc`, `conversation`, `internet_message_id` and `only_to_me` (no recipient but this
+  mailbox, compared without case); `mail_get_message` adds `new_text`, Graph's `uniqueBody` (the
+  message without the earlier ones it quotes), as text. `mail_list_messages` takes `conversation`
+  (`$filter=conversationId eq`, with unread_only joined by `and`; not with search). Tests:
+  `connectors/outlook-mail/*.test.ts`, fake Graph only. Sources: learn.microsoft.com/graph/api/
+  message-reply, message-replyall, resources/message (uniqueBody, internetMessageId).
 
 - Salesforce: client credentials against the customer's My Domain (an External Client App
   running as an integration user). The token response gives `instance_url` (must be an
@@ -811,9 +869,36 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   look the id up first: an occurrence's id changes that occurrence only, `series: true` sends
   the change to its series master, and a master's own id is refused without `series: true`,
   so a whole series is never changed or deleted by accident (deleting stays the delete
-  capability). Sources: learn.microsoft.com/graph/api/event-accept, event-tentativelyaccept,
-  event-decline, event-update, event-delete, resources/event and
-  learn.microsoft.com/graph/outlook-schedule-recurring-events.
+  capability). Attendees are addresses (required) or `{email, type: required | optional}`, and
+  events carry each attendee's `type`. Create and update take `body_html` (the mail sanitizer)
+  instead of `body`, and `online_meeting: true` (`isOnlineMeeting` with provider
+  `teamsForBusiness`; the link comes back as `join_url`). Microsoft cannot turn a Teams meeting
+  off, so update refuses `false`. Microsoft saves the event without a link when the mailbox
+  cannot host Teams meetings (no error); the tool then answers the event with a `warning` not to
+  create it again, never an error an agent would retry into a second invitation. Create takes
+  `transaction_id` (Graph's `transactionId`, letters, digits and `._:-` up to 100). Microsoft
+  documents that a retried create with the same id makes no second event but not what it answers;
+  on a 409 or an error code naming the transaction, the tool lists the mailbox's events with the
+  same subject (`$filter=subject eq`, `$top=100`) and answers the one carrying that id with
+  `existing: true`, else the refusal. Not yet seen against a real tenant.
+  Capability `availability` (`calendar_get_availability`, role `Application Calendars.Read`
+  like read, since Exchange's RBAC for Applications has no Calendars.ReadBasic role; Graph's
+  least permission for getSchedule is Calendars.ReadBasic) posts `getSchedule` as the agent's
+  own mailbox, so the RBAC scope only needs that mailbox and the people's own free/busy sharing
+  decides what it sees (not yet confirmed against a real tenant). Up to 100 people
+  (`MAX_PEOPLE`) and the 62-day window of `calendar_list_events`, asked for and checked in UTC (a
+  time in another zone fails the call). Per person: `busy` (every item but `free`: start, end,
+  status), `slots` (Graph's availabilityView digits at `interval_minutes`), `working_hours`
+  (days, HH:MM start and end, Microsoft's zone name and `time_zone_iana` from
+  `connectors/outlook-calendar/windows-zones.ts`, CLDR's windowsZones territory 001 rows; an IANA
+  name passes as is; a custom zone gives null), or `error` (Graph's per-person error message) with
+  busy and slots null, never read as free. Subjects, locations and privacy flags Graph may send are
+  never returned (`availability()`). Tests: `connectors/outlook-calendar/tools.test.ts`, fake
+  Graph only. Sources: learn.microsoft.com/graph/api/event-accept, event-tentativelyaccept,
+  event-decline, event-update, event-delete, calendar-getschedule, resources/event (transactionId,
+  isOnlineMeeting, onlineMeeting) and learn.microsoft.com/graph/outlook-schedule-recurring-events;
+  learn.microsoft.com/exchange/permissions-exo/application-rbac (supported application roles),
+  read November 5, 2026.
 - SharePoint spreadsheets (excel_* tools, `read_sheets` / `write_sheets`): the files tools'
   site and folder limits apply. Every workbook tool reads the item back with the files tools'
   site, library and folder checks, and only opens `.xlsx` files.
@@ -1274,8 +1359,14 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
     (`/changes` is deprecated since 15.7), notes, pipelines, jobs (`scope[]`), a job's `/trace`
     (text, over 1 MB refused) and commits; paging from `X-Next-Page`. Limit `projects` by full
     path, sent as one encoded segment (GitLab takes `group%2Fproject`). Retrying jobs is left
-    out: a retried deploy job deploys. Sources: docs.gitlab.com api/rest, merge_requests,
-    pipelines, jobs, notes, project_access_tokens.
+    out: a retried deploy job deploys. Capability `read_code` (not required, `read_api`):
+    `gitlab_resolve_ref` (`repository/commits/{ref}`, a ref with slashes as one encoded segment),
+    `gitlab_list_tree` (`repository/tree`, X-Next-Page), `gitlab_read_file`
+    (`repository/files/{path}/raw`, text only, 1 MB) and `gitlab_download_archive`
+    (`repository/archive.tar.gz?sha=`, `binary`; `sha` must match a full SHA-1 or SHA-256 commit
+    id, so a branch name is refused before any call). Sources: docs.gitlab.com api/rest,
+    merge_requests, pipelines, jobs, notes, project_access_tokens, commits, repositories,
+    repository_files.
   - Argo CD (`argo-cd`): `https://{host}`, bearer token of a local `apiKey` account bound to
     `role:readonly` (argocd-cm, argocd-rbac-cm; `argocd account generate-token`). Reads only:
     applications, one application (answer limit `spec.project`), resource tree, events and revision
@@ -1323,6 +1414,27 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
     the Link header. CQL search and writes are left out: CQL cannot be held to spaces, and page
     and comment bodies are nested objects the http block does not send. Sources: Atlassian
     create-oauth-2-0-credential-for-service-accounts, Confluence openapi-v2.v3.json.
+- GitHub (`github`, coded: connectors/github; read November 5, 2026, tested only against a fake
+  api.github.com and codeload, never a live app): a GitHub App the organization owns (fields
+  `client_id`, `installation_id`, secret `private_key`, the .pem GitHub downloads, PKCS#1 or 8,
+  line breaks restored by the kit's `rsaKey`). Chosen over a fine-grained personal access token:
+  it belongs to the organization rather than a person, tokens last an hour and reach only the
+  repositories it is installed on, and the key never leaves the service. A JWT (RS256, `iss` the
+  client ID, `iat` 60 s back, 10 minutes) reads `GET /app/installations/{id}` at connect (the
+  account login is `owner`, the `accountKey`; Contents must be read or write, else a plain
+  refusal) and mints installation tokens at `POST /app/installations/{id}/access_tokens`, kept
+  until a minute before `expires_at`, re-minted once on a 401. GitHub.com only. Capability
+  `read_code` (required): `github_resolve_ref` (`commits/{ref}` with Accept
+  `application/vnd.github.sha`, read as text), `github_list_tree` (`git/trees/{ref}?recursive=1`,
+  filtered to a folder here, at most 10,000 entries, `truncated`), `github_read_file`
+  (`contents/{path}?ref=`, base64 decoded as strict UTF-8, 1 MB; folders, symlinks and binary
+  files refused) and `github_download_archive` (a 40-hex `commit` only, checked in the tool;
+  `tarball/{sha}` answers 302 to codeload.github.com with its own token in the address, followed
+  through `guardedFetch` held to that origin, without the installation token, read up to
+  MAX_BINARY_BYTES; any other location is refused). Refs and paths go as encoded segments with
+  no empty, `.` or `..` one. Limit `repositories` (owner/name, compared ignoring case). Verify
+  lists `/installation/repositories`. Sources: docs.github.com apps (generating a JWT,
+  installation access tokens), rest/apps/apps, rest/commits, rest/git/trees, rest/repos/contents.
 - Ironclad (`ironclad`, JSON only, `describedApp`; read November 1, 2026, tested only against
   fakes): `https://{host}/public/api/v1` and token `https://{host}/oauth/token`, host held to
   `ironcladapp.com` and `*.ironcladapp.com` (US, eu1, demo); client credentials with no `scope`
