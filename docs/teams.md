@@ -871,8 +871,9 @@ Teams sends in it (`from.aadObjectId`).
   the answer's status shown back to the admin. Anyone holding the admin token can therefore
   reach https hosts the service can reach; only redirects are refused. Keep the admin token as
   guarded as the database. Receivers must check the signature, reject a `t` more than a few
-  minutes old, and dedupe on `replyToken` (new for every message; `run` repeats across a
-  continued session's turns).
+  minutes old, and dedupe on `delivery` (the `X-Agent-Connect-Delivery` header and body field:
+  the same on every attempt of one hand-over, docs/triggers.md, When the runner does not answer)
+  and `replyToken` (new for every message; `run` repeats across a continued session's turns).
 - Messages from `teams_read_messages` and `teams_read_thread` carry `from` (the display name,
   which anyone can set), `from_id` (the sender's Entra object id, Graph's `from.user.id`) and
   `from_kind` (`user` or `application`) [26][27]. `from_id` is null for apps, for deleted or

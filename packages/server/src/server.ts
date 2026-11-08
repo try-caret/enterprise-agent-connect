@@ -61,6 +61,10 @@ export async function serveFromEnv(overrides: Partial<AgentConnectOptions> = {})
     return value;
   };
 
+  const retrySeconds = process.env.RUNNER_RETRY_SECONDS?.trim();
+  if (retrySeconds && !/^\d+$/.test(retrySeconds))
+    throw new Error("RUNNER_RETRY_SECONDS must be a whole number of seconds from 0 to 3600");
+
   const service = await createAgentConnect({
     database: { url: required("DATABASE_URL") },
     schema,
@@ -72,6 +76,7 @@ export async function serveFromEnv(overrides: Partial<AgentConnectOptions> = {})
     branding: process.env.BRANDING?.trim() ? JSON.parse(process.env.BRANDING) : undefined,
     connectors: builtinApps(),
     extraConnectorDirs: (process.env.CONNECTOR_DIRS ?? "").split(":").filter(Boolean),
+    runnerRetrySeconds: retrySeconds ? Number(retrySeconds) : undefined,
     microsoftSharedApp:
       sharedApp === "enabled"
         ? {

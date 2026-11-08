@@ -45,6 +45,9 @@ export type RunInput = {
   trigger: TriggerRow;
   // The trigger's signing secret, opened; null when it has none.
   secret: string | null;
+  // The same for every attempt to hand over this message (RetryLater), for the receiver to
+  // dedupe on.
+  deliveryId: string;
 };
 
 // A run started by an app's event (events/runtime.ts). Nothing is replied to: the agent acts
@@ -59,6 +62,7 @@ export type EventRunInput = {
   budgetCents: number;
   trigger: RunnerTrigger;
   secret: string | null;
+  deliveryId: string;
   event: {
     app: string;
     type: string;
@@ -87,6 +91,46 @@ export function capReached(counts: RunCounts, caps: Caps): "hour" | "day" | "con
   return null;
 }
 
+/** A hand-over the runner may take later (it did not answer, or answered 5xx, 408, 409 or
+ *  429): the runtimes keep the run starting and try again, the same delivery id each time. */
+export class RetryLater extends ConnectError {
+  constructor(
+    message: string,
+    readonly retryAfterMs: number | null = null,
+  ) {
+    super(message);
+  }
+}
+
+const RETRY_STEPS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 240_000];
+export const RETRY_WINDOW_MS = 15 * 60_000;
+export const MAX_RETRY_WINDOW_MS = 3600_000;
+
+/** When to try again after `attempts` failed hand-overs that began at `since`: the step's delay
+ *  (5 s, 15 s, 30 s, 1 min, 2 min, then 4 min) within 20% either way, at least Retry-After up
+ *  to the 4 minute step, or null once that would pass the window. */
+export function nextAttempt(
+  attempts: number,
+  since: number,
+  windowMs: number,
+  retryAfterMs: number | null,
+  now = Date.now(),
+  random = Math.random,
+): number | null {
+  const cap = RETRY_STEPS_MS.at(-1)!;
+  const step = RETRY_STEPS_MS[Math.min(attempts, RETRY_STEPS_MS.length) - 1];
+  const delay = Math.min(cap, Math.max(step * (0.8 + 0.4 * random()), retryAfterMs ?? 0));
+  const at = now + Math.round(delay);
+  return at <= since + windowMs ? at : null;
+}
+
+/** Retry-After in seconds or as a date, in ms from now; null when absent or unreadable. */
+export function retryAfter(header: string | null, now = Date.now()): number | null {
+  if (!header) return null;
+  const ms = /^\d+$/.test(header.trim()) ? Number(header) * 1000 : Date.parse(header) - now;
+  return Number.isFinite(ms) ? Math.max(0, ms) : null;
+}
+
 export interface TriggerRunner {
   id: string;
   // The trigger body's `settings` for this runner, stored as they are (so never a secret).
@@ -101,7 +145,10 @@ export interface TriggerRunner {
     secret: string | null,
     when: "save" | "answer",
   ): Promise<void>;
-  // Starts answering; the id later calls name the session by.
+  // Starts answering; the id later calls name the session by. Start, startEvent and continue
+  // throw RetryLater when a later attempt may succeed. A retried attempt is leased for two
+  // minutes: one that takes longer may be sent again by another replica, with the same
+  // deliveryId, so a runner that can be that slow must start once per deliveryId.
   start(input: RunInput): Promise<string>;
   // Starts a run for an app's event. A runner without it cannot be chosen for event triggers.
   startEvent?(input: EventRunInput): Promise<string>;
@@ -218,6 +265,9 @@ export const claudeManagedAgents =
   };
 
 export const SIGNATURE_HEADER = "x-agent-connect-signature";
+// Also the body's `delivery`, which the signature covers.
+export const DELIVERY_HEADER = "x-agent-connect-delivery";
+const RETRY_STATUSES = new Set([408, 409, 429]);
 
 /** `t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">`; receivers reject an old `t`. */
 export function signature(secret: string, body: string, t = Math.floor(Date.now() / 1000)) {
@@ -232,26 +282,50 @@ export function signature(secret: string, body: string, t = Math.floor(Date.now(
 export const signedWebhook =
   (fetchImpl: Fetch = fetch): RunnerFactory =>
   (ctx) => {
-    async function post(trigger: RunnerTrigger, secret: string | null, payload: unknown) {
+    async function post(
+      trigger: RunnerTrigger,
+      secret: string | null,
+      payload: Record<string, unknown>,
+    ) {
       if (!secret) throw new InvalidInput("Give the webhook a signing secret");
       const body = JSON.stringify(payload);
-      const res = await fetchImpl(String(trigger.settings.url), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [SIGNATURE_HEADER]: signature(secret, body),
-        },
-        body,
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!res.ok) throw new ConnectError(`The webhook answered ${res.status}`);
+      const delivery = typeof payload.delivery === "string" ? payload.delivery : null;
+      let res: Response;
+      try {
+        res = await fetchImpl(String(trigger.settings.url), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [SIGNATURE_HEADER]: signature(secret, body),
+            ...(delivery ? { [DELIVERY_HEADER]: delivery } : {}),
+          },
+          body,
+          // Never followed. A redirect is an answer (it fails the run below), not a connection
+          // that failed (tried again).
+          redirect: "manual",
+          signal: AbortSignal.timeout(10_000),
+        });
+      } catch (error) {
+        const timedOut = (error as Error).name === "TimeoutError";
+        throw new RetryLater(
+          timedOut
+            ? "The webhook did not answer within 10 seconds"
+            : "The webhook could not be reached",
+        );
+      }
+      await res.body?.cancel();
+      if (res.ok) return;
+      const why = `The webhook answered ${res.status}`;
+      if (res.status >= 500 || RETRY_STATUSES.has(res.status))
+        throw new RetryLater(why, retryAfter(res.headers.get("retry-after")));
+      throw new ConnectError(why);
     }
     const mcpUrl = (agentId: string) =>
       ctx.publicUrl ? agentMcpUrl(ctx.publicUrl, agentId) : null;
     const message = (input: RunInput) => ({
       type: "message",
       run: input.runId,
+      delivery: input.deliveryId,
       agent: input.agentId,
       bot: input.botId,
       requestedBy: input.requestedBy,
@@ -274,6 +348,7 @@ export const signedWebhook =
         await post(input.trigger, input.secret, {
           type: "event",
           run: input.runId,
+          delivery: input.deliveryId,
           agent: input.agentId,
           app: input.event.app,
           event: input.event.type,

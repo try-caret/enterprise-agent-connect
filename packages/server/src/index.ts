@@ -32,7 +32,13 @@ import { botClient } from "./teams/bot.js";
 import { claudeClient } from "./teams/claude.js";
 import { botFrameworkAuth } from "./teams/jwt.js";
 import { LIVE_CHECKS } from "./teams/provision.js";
-import { claudeManagedAgents, signedWebhook, type RunnerFactory } from "./teams/runner.js";
+import {
+  claudeManagedAgents,
+  MAX_RETRY_WINDOW_MS,
+  RETRY_WINDOW_MS,
+  signedWebhook,
+  type RunnerFactory,
+} from "./teams/runner.js";
 import { createTeamsRuntime } from "./teams/runtime.js";
 import { createTeamsStore } from "./teams/store.js";
 import { microsoftClient } from "../../../connectors/microsoft/client.js";
@@ -43,7 +49,13 @@ export type { ConnectorJson } from "../../connector-kit/src/connector.js";
 export type { AgentConnectError, OnError } from "./report.js";
 export { builtinConnectors } from "./builtin.js";
 export type { EventRunInput, RunInput, RunnerFactory, TriggerRunner } from "./teams/runner.js";
-export { claudeManagedAgents, signature, signedWebhook } from "./teams/runner.js";
+export {
+  claudeManagedAgents,
+  DELIVERY_HEADER,
+  RetryLater,
+  signature,
+  signedWebhook,
+} from "./teams/runner.js";
 
 export type AgentConnectOptions = {
   // A postgres.js instance (left open on stop), or how to make one.
@@ -74,6 +86,9 @@ export type AgentConnectOptions = {
   // What answers Teams triggers and app events (default: Claude Managed Agents and the signed
   // webhook).
   runners?: RunnerFactory[];
+  // How long a run its runner did not take (no answer, 5xx, 408, 409, 429) is handed over again,
+  // in seconds: 0 to 3600, default 900; 0 never tries again.
+  runnerRetrySeconds?: number;
   log?: Pick<Console, "log" | "error">;
   // Called once per failure as it happens, ids and codes only (README "Error reporting"); at most
   // once a minute per kind and app; what it throws is logged, never passed on.
@@ -87,6 +102,9 @@ export async function createAgentConnect(options: AgentConnectOptions) {
   setBranding(parseBranding(options.branding));
   const schema = options.schema ?? "agent_connect";
   assertSchemaName(schema);
+  const retryWindowMs = (options.runnerRetrySeconds ?? RETRY_WINDOW_MS / 1000) * 1000;
+  if (!Number.isInteger(retryWindowMs) || retryWindowMs < 0 || retryWindowMs > MAX_RETRY_WINDOW_MS)
+    throw new Error("runnerRetrySeconds must be a whole number of seconds from 0 to 3600");
 
   const microsoft = microsoftClient({ sharedApp: options.microsoftSharedApp ?? null });
   const modules = new Map<string, BuiltinModule>();
@@ -191,6 +209,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
     connector: teamsConnector,
     publicUrl,
     report,
+    retryWindowMs,
   });
   const service = createService({
     apps,
@@ -217,6 +236,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
     runners,
     publicUrl,
     report,
+    retryWindowMs,
   };
   const events = createEventsRuntime(eventDeps);
   const app = createApp({

@@ -279,6 +279,13 @@ The event (`AgentConnectError`):
 Never the error's message, a message body, a token or a person's details: a message can hold a
 vendor's or a person's words. The log lines stay as they were.
 
+## When a runner does not answer
+
+A Teams message or app event whose runner does not answer, or answers 5xx, 408, 409 or 429, is
+handed over again for up to 15 minutes (`RUNNER_RETRY_SECONDS`, 0 to 3600; 0 never retries),
+each attempt carrying the same `X-Agent-Connect-Delivery` id for the receiver to dedupe on.
+docs/triggers.md, When the runner does not answer, has the schedule.
+
 ## Kubernetes
 
 To offer only some built-in apps, set `BUILTIN_APPS` to their ids, comma-separated (for example

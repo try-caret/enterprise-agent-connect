@@ -113,6 +113,9 @@ export type RunRow = {
   replyTokenAt: string;
 };
 
+// A run waiting to be handed to its runner again (migrations/0012_runner_retries.sql).
+export type RetryRow = RunRow & { attempts: number; delivery: Buffer; deliveryKeyId: string };
+
 // What deciding on a message needs to know about the bot's agent.
 export type AgentTeamsState = {
   agentName: string;
@@ -616,6 +619,8 @@ export function createTeamsStore(sql: Sql, schema: string) {
       },
     ): Promise<void> {
       const finished = patch.state && patch.state !== "running" && patch.state !== "starting";
+      // A run that started or ended has nothing left to hand over.
+      const delivered = Boolean(patch.state && patch.state !== "starting");
       // cost_cents is the session's total so far; its increase is this turn's spend, logged.
       // prev reads the row as the statement began (one replica, so one writer per run).
       await sql`
@@ -628,7 +633,13 @@ export function createTeamsStore(sql: Sql, schema: string) {
                  error = coalesce(${patch.error ?? null}, error),
                  note = coalesce(${patch.note ?? null}, note),
                  cost_cents = coalesce(${patch.costCents ?? null}, cost_cents),
-                 finished_at = case when ${Boolean(finished)} then now() else finished_at end
+                 finished_at = case when ${Boolean(finished)} then now() else finished_at end,
+                 -- The 30 minute stop counts from when the runner took the run.
+                 reply_token_at = case when state = 'starting' and ${patch.state ?? null} = 'running'
+                   then now() else reply_token_at end,
+                 next_attempt_at = case when ${delivered} then null else next_attempt_at end,
+                 delivery = case when ${delivered} then null else delivery end,
+                 delivery_key_id = case when ${delivered} then null else delivery_key_id end
            where id = ${id}
           returning agent_id, cost_cents
         )
@@ -645,8 +656,37 @@ export function createTeamsStore(sql: Sql, schema: string) {
         update ${t.teams_runs}
            set state = 'failed', error = 'Did not start', finished_at = now()
          where state = 'starting' and reply_token_at < now() - interval '10 minutes'
+           and next_attempt_at is null
         returning id`;
       return rows.length;
+    },
+
+    // A start the runner did not take: tried again at `at` with what is sealed in `delivery`.
+    async scheduleRetry(
+      id: string,
+      attempts: number,
+      at: Date,
+      delivery: { ciphertext: Buffer; keyId: string },
+    ): Promise<void> {
+      await sql`
+        update ${t.teams_runs}
+           set attempts = ${attempts}, next_attempt_at = ${at}, delivery = ${delivery.ciphertext},
+               delivery_key_id = ${delivery.keyId}
+         where id = ${id} and state = 'starting'`;
+    },
+
+    // A run due for its next hand-over, leased for two minutes (a worker that dies holding it
+    // leaves it due again). Never the same one to two workers.
+    async claimRetry(): Promise<RetryRow | null> {
+      const [row] = await sql.unsafe<RetryRow[]>(
+        `update ${t.teams_runs} set next_attempt_at = now() + interval '2 minutes'
+          where id = (
+            select id from ${t.teams_runs}
+             where state = 'starting' and next_attempt_at <= now()
+             order by next_attempt_at for update skip locked limit 1)
+          returning ${RUN}, attempts, delivery, delivery_key_id as "deliveryKeyId"`,
+      );
+      return row ?? null;
     },
 
     async runningRuns(): Promise<RunRow[]> {

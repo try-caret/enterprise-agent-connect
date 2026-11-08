@@ -14,6 +14,8 @@ import { CredentialKey } from "../src/secrets.ts";
 import type { ReportTags } from "../src/report.ts";
 import { connectDatabase, createStore } from "../src/store.ts";
 import {
+  DELIVERY_HEADER,
+  RetryLater,
   signedWebhook,
   SIGNATURE_HEADER,
   type EventRunInput,
@@ -110,6 +112,7 @@ async function setup(
   runners: TriggerRunner[],
   limits: Record<string, unknown> = { projects: ["KAN"] },
   connector = tracker,
+  opts: { retryWindowMs?: number } = {},
 ) {
   const appId = connector.id;
   const store = createStore(sql!, SCHEMA);
@@ -145,8 +148,11 @@ async function setup(
     publicUrl: PUBLIC,
     report: (kind: string, error: unknown, tags?: ReportTags) =>
       reports.push({ kind, error, tags }),
+    retryWindowMs: opts.retryWindowMs,
   };
   const runtime = createEventsRuntime(deps);
+  // Another process of the service on the same database.
+  const newRuntime = () => createEventsRuntime(deps);
   const admin = createEventsAdmin({ ...deps, runtime });
   const app = createApp({
     service: {} as never,
@@ -237,6 +243,7 @@ async function setup(
     calls,
     answers,
     reports,
+    newRuntime,
   };
 }
 
@@ -834,4 +841,179 @@ test("a run whose row cannot be written is reported", { skip: !sql }, async () =
   assert.deepEqual(start.tags, { app: "tracker", org: t.org, agent: t.agentId, runner: "fake" });
   assert.match((start.error as Error).message, /database is gone/);
   assert.equal(f.started.length, 0);
+});
+
+// A signed webhook runner whose receiver answers each event post with the next of `answers`
+// (200 once they run out), recording the delivery header and body.
+async function flakyReceiver(answers: number[], opts: { retryWindowMs?: number } = {}) {
+  const posts: { delivery: string; body: any }[] = [];
+  const fetch = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    if (body.type === "ping") return new Response(null, { status: 200 });
+    posts.push({ delivery: (init.headers as Record<string, string>)[DELIVERY_HEADER], body });
+    return new Response(null, { status: answers.shift() ?? 200 });
+  }) as never;
+  const ctx = { teams: { claudeKey: async () => null } as never, key, publicUrl: PUBLIC };
+  const t = await setup([signedWebhook(fetch)(ctx)], undefined, undefined, opts);
+  const { subscription, secret } = await t.subscribe();
+  await t.trigger({
+    runner: "webhook",
+    settings: { url: "https://hooks.example/events" },
+    signingSecret: "r".repeat(40),
+  });
+  const due = () => sql!`update agent_connect.event_runs set next_attempt_at = now()
+                          where agent_id = ${t.agentId} and next_attempt_at is not null`;
+  return { t, posts, due, send: () => t.deliver(subscription.id, secret!, item()) };
+}
+
+test(
+  "an event the runner did not take is handed over again with the same delivery, audited once",
+  { skip: !sql },
+  async () => {
+    const { t, posts, due, send } = await flakyReceiver([503, 429]);
+    await send();
+    const [run] = await t.runs();
+    assert.equal(run.state, "starting");
+    assert.ok(!(await t.audit()).some((l) => l.startsWith("events:run")));
+    await t.runtime.retryDue();
+    assert.equal(posts.length, 1);
+    await due();
+    await t.runtime.retryDue();
+    // Picked up by another process, as after a restart.
+    await due();
+    await t.newRuntime().retryDue();
+    assert.equal(posts.length, 3);
+    assert.equal((await t.runs())[0].state, "running");
+    assert.equal(new Set(posts.map((p) => p.delivery)).size, 1);
+    assert.ok(posts.every((p) => p.body.delivery === p.delivery && p.body.run === run.id));
+    assert.deepEqual(
+      (await t.audit()).filter((l) => l.startsWith("events:run")),
+      [`events:run allowed Started run ${run.id} after 3 attempts`],
+    );
+    assert.deepEqual(t.reports, []);
+  },
+);
+
+test(
+  "an event run fails past the retry window, or at once on 401, reported once",
+  { skip: !sql },
+  async () => {
+    const late = await flakyReceiver([503, 500], { retryWindowMs: 10_000 });
+    await late.send();
+    await late.due();
+    await late.t.runtime.retryDue();
+    const [run] = await late.t.runs();
+    assert.equal(run.state, "failed");
+    assert.equal(run.error, "The webhook answered 500");
+    assert.deepEqual(
+      (await late.t.audit()).filter((l) => l.startsWith("events:run")),
+      [
+        `events:run failed Run ${run.id} could not start: The webhook answered 500 after 2 attempts`,
+      ],
+    );
+    assert.deepEqual(
+      late.t.reports.map((r) => r.kind),
+      ["event_run_start_failed"],
+    );
+
+    const refused = await flakyReceiver([401]);
+    await refused.send();
+    const [no] = await refused.t.runs();
+    assert.equal(no.state, "failed");
+    assert.equal(no.error, "The webhook answered 401");
+    await refused.due();
+    await refused.t.runtime.retryDue();
+    assert.equal(refused.posts.length, 1);
+  },
+);
+
+test(
+  "an event's hand-over is decided again: no grant, or a type the trigger dropped, starts nothing",
+  { skip: !sql },
+  async () => {
+    const lost = await flakyReceiver([503]);
+    await lost.send();
+    const [run] = await lost.t.runs();
+    assert.equal(run.state, "starting");
+    await sql!`delete from agent_connect.grants where agent_id = ${lost.t.agentId}`;
+    await lost.due();
+    await lost.t.runtime.retryDue();
+    const [failed] = await lost.t.runs();
+    assert.equal(failed.state, "failed");
+    assert.equal(
+      failed.error,
+      "No longer allowed: Not started: the agent has no access to Tracker",
+    );
+    assert.equal(lost.posts.length, 1);
+    assert.deepEqual(
+      lost.t.reports.map((r) => r.kind),
+      ["event_run_start_failed"],
+    );
+
+    const narrowed = await flakyReceiver([503]);
+    await narrowed.send();
+    await sql!`update agent_connect.event_triggers set event_types = '{updated}'
+                where agent_id = ${narrowed.t.agentId}`;
+    await narrowed.due();
+    await narrowed.t.runtime.retryDue();
+    assert.equal(
+      (await narrowed.t.runs())[0].error,
+      "No longer allowed: Filtered: not one of the trigger's event types",
+    );
+    assert.equal(narrowed.posts.length, 1);
+  },
+);
+
+test(
+  "an event hand-over that cannot be made, or comes due past the window, fails its run",
+  { skip: !sql },
+  async () => {
+    const broken = await flakyReceiver([503]);
+    await broken.send();
+    const [run] = await broken.t.runs();
+    await sql!`update agent_connect.event_runs set delivery = '\\x00'::bytea where id = ${run.id}`;
+    await broken.due();
+    await broken.t.runtime.retryDue();
+    const [failed] = await broken.t.runs();
+    assert.equal(failed.state, "failed");
+    assert.ok(
+      (await broken.t.audit()).some((l) => l.startsWith(`events:run failed Run ${run.id}`)),
+    );
+    const [row] = await sql!`
+      select next_attempt_at, delivery from agent_connect.event_runs where id = ${run.id}`;
+    assert.deepEqual({ ...row }, { next_attempt_at: null, delivery: null });
+
+    const late = await flakyReceiver([503]);
+    await late.send();
+    await sql!`update agent_connect.event_runs set started_at = now() - interval '16 minutes'
+                where agent_id = ${late.t.agentId}`;
+    await late.due();
+    await late.t.runtime.retryDue();
+    const [over] = await late.t.runs();
+    assert.equal(over.state, "failed");
+    assert.equal(over.error, "The runner did not take it in time");
+    assert.equal(late.posts.length, 1);
+  },
+);
+
+test("an event run taken on a late attempt has its full 30 minutes", { skip: !sql }, async () => {
+  const f = fakeRunner();
+  let refusals = 1;
+  const startEvent = f.runner.startEvent!;
+  f.runner.startEvent = async (input) => {
+    if (refusals-- > 0) throw new RetryLater("not yet");
+    return startEvent(input);
+  };
+  const t = await setup([f.runner], undefined, undefined, { retryWindowMs: 3600_000 });
+  const { subscription, secret } = await t.subscribe();
+  await t.trigger();
+  await t.deliver(subscription.id, secret!, item());
+  await sql!`update agent_connect.event_runs
+                  set started_at = now() - interval '40 minutes', next_attempt_at = now()
+                where agent_id = ${t.agentId}`;
+  await t.runtime.retryDue();
+  assert.equal(f.started.length, 1);
+  assert.equal((await t.runs())[0].state, "running");
+  await t.runtime.watch();
+  assert.equal((await t.runs())[0].state, "running");
 });
