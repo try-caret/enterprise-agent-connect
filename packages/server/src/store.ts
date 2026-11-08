@@ -90,6 +90,39 @@ export function leases(sql: Sql, t: Tables) {
     async dropLease(name: string, token: string): Promise<void> {
       await sql`delete from ${t.leases} where name = ${name} and token = ${token}`;
     },
+
+    /** `work` while holding `name`, renewed every third of `seconds` and dropped after; null,
+     *  and no work, while another holds it. `signal` aborts once a renewal finds it taken. */
+    async withLease<T>(
+      name: string,
+      seconds: number,
+      work: (signal: AbortSignal) => Promise<T>,
+    ): Promise<{ value: T } | null> {
+      const token = await this.takeLease(name, seconds);
+      if (!token) return null;
+      const lost = new AbortController();
+      // One renewal at a time, the last one landed before the drop: landing after it, it
+      // would take the lease again.
+      let renewal = Promise.resolve();
+      const renewing = setInterval(() => {
+        renewal = renewal
+          .then(() => this.takeLease(name, seconds, token))
+          .then(
+            (held) => {
+              if (!held) lost.abort(new Error(`Lost the lease ${name} to another process`));
+            },
+            (error) => console.error(`[leases] renewing ${name}`, error),
+          );
+      }, (seconds * 1000) / 3);
+      renewing.unref();
+      try {
+        return { value: await work(lost.signal) };
+      } finally {
+        clearInterval(renewing);
+        await renewal;
+        await this.dropLease(name, token);
+      }
+    },
   };
 }
 

@@ -196,9 +196,12 @@ async function eventsSetup(
   const calls: VendorRequest[] = [];
   const items: unknown[] = [];
   const subscribed = new Set<string>();
+  // What a test holds a call on, before the app answers.
+  const before = { call: async (_req: VendorRequest) => {} };
   // Slow enough for the other process to reach the same step.
   async function appCall(_org: string, _app: string, req: VendorRequest): Promise<VendorResponse> {
     calls.push(req);
+    await before.call(req);
     await sleep(30);
     if (req.method === "POST" && req.path === "/v1.0/subscriptions") {
       const body = req.body as { resource: string; expirationDateTime: string };
@@ -229,7 +232,7 @@ async function eventsSetup(
       runners: new Map([[runner.id, runner]]),
       publicUrl: PUBLIC,
     });
-  return { org, sub, store, events, calls, items, started, pod };
+  return { org, sub, store, events, calls, items, started, pod, before };
 }
 
 test(
@@ -299,6 +302,85 @@ test(
     await t.events.dropLease(lease, token);
     await b.settle();
     assert.equal(t.calls[0]?.method, "PATCH");
+  },
+);
+
+test(
+  "a sync that loses its lease to another process makes no further Graph call",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const t = await eventsSetup("graph");
+    const posting = gate();
+    t.before.call = async (req) => {
+      if (req.method === "POST") await posting.pass();
+    };
+    let renewed!: () => void;
+    const renewal = new Promise<void>((r) => (renewed = r));
+    const renewing = {
+      ...t.events,
+      async takeLease(...args: Parameters<EventsStore["takeLease"]>) {
+        const token = await t.events.takeLease(...args);
+        if (args[2]) renewed();
+        return token;
+      },
+    };
+    const syncing = t.pod(renewing).syncApp(t.org, "app");
+    await posting.entered;
+    // Its Graph call stalled past the lease's term, and another process took the lease.
+    await lapseLeases();
+    assert.ok(await t.events.takeLease(`graph-sync:${t.sub.id}`, 60));
+    ctx.mock.timers.tick(20_000);
+    await renewal;
+    posting.open();
+    await syncing;
+    assert.deepEqual(
+      t.calls.map((c) => c.method),
+      ["POST"],
+      "no catch-up after its renewal found the lease taken",
+    );
+  },
+);
+
+test(
+  "a finished sync leaves its lease free, with a renewal on its way or not",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const t = await eventsSetup("graph");
+    const posting = gate();
+    t.before.call = async (req) => {
+      if (req.method === "POST") await posting.pass();
+    };
+    const renewing = gate();
+    let dropped!: () => void;
+    const drop = new Promise<void>((r) => (dropped = r));
+    let renewed!: () => void;
+    const renewal = new Promise<void>((r) => (renewed = r));
+    const slow = {
+      ...t.events,
+      async takeLease(...args: Parameters<EventsStore["takeLease"]>) {
+        if (!args[2]) return t.events.takeLease(...args);
+        await renewing.pass();
+        const token = await t.events.takeLease(...args);
+        renewed();
+        return token;
+      },
+      async dropLease(...args: Parameters<EventsStore["dropLease"]>) {
+        await t.events.dropLease(...args);
+        dropped();
+      },
+    };
+    const syncing = t.pod(slow).syncApp(t.org, "app");
+    await posting.entered;
+    ctx.mock.timers.tick(20_000);
+    // A renewal is on its way to the database when the sync finishes.
+    await renewing.entered;
+    posting.open();
+    await Promise.race([drop, sleep(200)]);
+    renewing.open();
+    await Promise.all([syncing, renewal]);
+    assert.ok(await t.events.takeLease(`graph-sync:${t.sub.id}`, 60), "free for the next sync");
   },
 );
 

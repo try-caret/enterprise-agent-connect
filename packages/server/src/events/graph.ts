@@ -87,8 +87,11 @@ export function graphItem(
 export function createGraphSource(deps: GraphDeps) {
   const { events } = deps;
   const urlOf = (sub: SubscriptionRow) => `${deps.publicUrl}/events/${sub.id}`;
-  const call = (sub: SubscriptionRow, request: VendorRequest) =>
-    deps.appCall(sub.organizationId, sub.connectorId, request);
+  // Under the subscription's lease, `signal` stops the work once another process took it over.
+  const call = (sub: SubscriptionRow, request: VendorRequest, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    return deps.appCall(sub.organizationId, sub.connectorId, request);
+  };
   const failed = (sub: SubscriptionRow, target: string, reason: string, status?: number) =>
     deps.audit({
       organizationId: sub.organizationId,
@@ -162,15 +165,15 @@ export function createGraphSource(deps: GraphDeps) {
     if (typeof lifecycle === "string") {
       await deps.delivery(sub, `${lifecycle} ${watch.value}`, "allowed", `Lifecycle: ${lifecycle}`);
       // A sync may be subscribing this watch right now, and may have replaced it by its turn.
-      return inTurn(sub, async () => {
+      return inTurn(sub, async (signal) => {
         const now = await events.watchByRemote(sub.id, watch.remoteId!);
         if (!now) return;
-        if (lifecycle === "reauthorizationRequired") await subscribe(sub, g, now);
+        if (lifecycle === "reauthorizationRequired") await subscribe(sub, g, now, signal);
         else if (lifecycle === "subscriptionRemoved") {
           await events.watchSubscribed(now.id, null, null, "Removed by Microsoft");
-          await subscribe(sub, g, { ...now, remoteId: null });
-          await catchUp(sub, connector, now);
-        } else if (lifecycle === "missed") await catchUp(sub, connector, now);
+          await subscribe(sub, g, { ...now, remoteId: null }, signal);
+          await catchUp(sub, connector, now, signal);
+        } else if (lifecycle === "missed") await catchUp(sub, connector, now, signal);
       });
     }
     await events.watchNotified(watch.id);
@@ -225,14 +228,19 @@ export function createGraphSource(deps: GraphDeps) {
     sub: SubscriptionRow,
     g: Graph,
     watch: WatchRow,
+    signal: AbortSignal,
   ): Promise<number | undefined> {
     const expires = new Date(Date.now() + g.maxMinutes * 60_000).toISOString();
     if (watch.remoteId) {
-      const res = await call(sub, {
-        method: "PATCH",
-        path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
-        body: { expirationDateTime: expires },
-      });
+      const res = await call(
+        sub,
+        {
+          method: "PATCH",
+          path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
+          body: { expirationDateTime: expires },
+        },
+        signal,
+      );
       if (ok(res)) {
         await events.watchSubscribed(watch.id, watch.remoteId, expires, null);
         return undefined;
@@ -243,18 +251,22 @@ export function createGraphSource(deps: GraphDeps) {
       }
     }
     const url = urlOf(sub);
-    const res = await call(sub, {
-      method: "POST",
-      path: SUBSCRIPTIONS,
-      body: {
-        changeType: g.changeType,
-        notificationUrl: url,
-        lifecycleNotificationUrl: url,
-        resource: fill(g.resource, { value: watch.value }),
-        expirationDateTime: expires,
-        clientState: deps.openSecret(sub),
+    const res = await call(
+      sub,
+      {
+        method: "POST",
+        path: SUBSCRIPTIONS,
+        body: {
+          changeType: g.changeType,
+          notificationUrl: url,
+          lifecycleNotificationUrl: url,
+          resource: fill(g.resource, { value: watch.value }),
+          expirationDateTime: expires,
+          clientState: deps.openSecret(sub),
+        },
       },
-    });
+      signal,
+    );
     const remoteId = ok(res) ? rawAt(res!.data, "id") : null;
     if (typeof remoteId !== "string") {
       await events.watchSubscribed(watch.id, null, null, `Subscribing: ${why(res)}`);
@@ -271,6 +283,7 @@ export function createGraphSource(deps: GraphDeps) {
     sub: SubscriptionRow,
     connector: Connector,
     watch: WatchRow,
+    signal: AbortSignal,
   ): Promise<number | undefined> {
     const g = connector.events!.graph!;
     let link =
@@ -280,10 +293,7 @@ export function createGraphSource(deps: GraphDeps) {
         since: watch.createdAt,
       }) as string);
     for (let page = 0; page < DELTA_PAGES; page++) {
-      const res = await call(sub, {
-        method: g.delta.method,
-        path: link,
-      } as VendorRequest);
+      const res = await call(sub, { method: g.delta.method, path: link } as VendorRequest, signal);
       // A delta link Graph no longer knows: start again from the watch's start.
       if (res?.status === 410) {
         await events.watchCaughtUp(watch.id, null);
@@ -323,12 +333,13 @@ export function createGraphSource(deps: GraphDeps) {
     );
   }
 
-  async function release(sub: SubscriptionRow, watch: WatchRow) {
+  async function release(sub: SubscriptionRow, watch: WatchRow, signal: AbortSignal) {
     if (watch.remoteId) {
-      const res = await call(sub, {
-        method: "DELETE",
-        path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
-      });
+      const res = await call(
+        sub,
+        { method: "DELETE", path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}` },
+        signal,
+      );
       // It lapses at its expiry anyway, and its notifications find no watch here.
       if (!ok(res) && res?.status !== 404)
         await failed(sub, `unsubscribe ${watch.value}`, why(res), res?.status);
@@ -341,19 +352,20 @@ export function createGraphSource(deps: GraphDeps) {
   /** Watches exactly the values agents with a trigger hold, renews subscriptions past half their
    *  life, and catches each one up. Answers the first failing watch's error and the HTTP status of
    *  this round's first refused call. */
-  async function syncOnce(sub: SubscriptionRow, connector: Connector) {
+  async function syncOnce(sub: SubscriptionRow, connector: Connector, signal: AbortSignal) {
     const g = connector.events!.graph!;
     const want = await wanted(sub, g);
-    for (const w of await events.watches(sub.id)) if (!want.has(w.value)) await release(sub, w);
+    for (const w of await events.watches(sub.id))
+      if (!want.has(w.value)) await release(sub, w, signal);
     for (const v of want) await events.addWatch(sub.id, v);
     const halfLife = (g.maxMinutes * 60_000) / 2;
     let status: number | undefined;
     for (const w of await events.watches(sub.id)) {
       if (!w.remoteId || !w.expiresAt || Date.parse(w.expiresAt) - Date.now() < halfLife) {
-        const refused = await subscribe(sub, g, w);
+        const refused = await subscribe(sub, g, w, signal);
         status ??= refused;
       }
-      const refused = await catchUp(sub, connector, w);
+      const refused = await catchUp(sub, connector, w, signal);
       status ??= refused;
     }
     const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
@@ -369,7 +381,7 @@ export function createGraphSource(deps: GraphDeps) {
   // the other's id.
   const syncing = new Map<string, Promise<unknown>>();
 
-  function inTurn<T>(sub: SubscriptionRow, work: () => Promise<T>): Promise<T> {
+  function inTurn<T>(sub: SubscriptionRow, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
     // The earlier one's failure went to its own caller.
     const run = (syncing.get(sub.id) ?? Promise.resolve())
       .catch(() => {})
@@ -383,28 +395,13 @@ export function createGraphSource(deps: GraphDeps) {
   }
 
   // Waits for the other processes' work on the subscription. A sync waits on Graph for as long
-  // as it needs, so a lease, not a lock held on one of the pool's few connections.
-  async function leased<T>(sub: SubscriptionRow, work: () => Promise<T>): Promise<T> {
-    const name = `graph-sync:${sub.id}`;
-    let token = await events.takeLease(name, LEASE_SECONDS);
-    while (!token) {
+  // as it needs, so a lease, not a lock held on one of the pool's few connections. One that
+  // loses it (stalled past its term, another process took it) makes no further Graph call.
+  async function leased<T>(sub: SubscriptionRow, work: (signal: AbortSignal) => Promise<T>) {
+    for (;;) {
+      const done = await events.withLease(`graph-sync:${sub.id}`, LEASE_SECONDS, work);
+      if (done) return done.value;
       await new Promise((r) => setTimeout(r, LEASE_WAIT_MS));
-      token = await events.takeLease(name, LEASE_SECONDS);
-    }
-    const held = token;
-    const renewing = setInterval(
-      () =>
-        events
-          .takeLease(name, LEASE_SECONDS, held)
-          .catch((error) => console.error(`[events] renewing the sync of ${sub.id}`, error)),
-      (LEASE_SECONDS * 1000) / 3,
-    );
-    renewing.unref();
-    try {
-      return await work();
-    } finally {
-      clearInterval(renewing);
-      await events.dropLease(name, held);
     }
   }
 
@@ -413,10 +410,11 @@ export function createGraphSource(deps: GraphDeps) {
     /** On the poll scheduler and after trigger changes. One started while another runs waits
      *  for it, then runs on what changed meanwhile. */
     sync: (sub: SubscriptionRow, connector: Connector) =>
-      inTurn(sub, () => syncOnce(sub, connector)),
+      inTurn(sub, (signal) => syncOnce(sub, connector, signal)),
     /** Removes every watch's Graph subscription, before the organization's goes. */
     async releaseAll(sub: SubscriptionRow) {
-      for (const w of await events.watches(sub.id)) await release(sub, w);
+      const never = new AbortController().signal;
+      for (const w of await events.watches(sub.id)) await release(sub, w, never);
     },
     async settle() {
       while (working.size) await Promise.all([...working]);
