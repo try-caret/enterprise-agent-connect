@@ -277,6 +277,17 @@ empty; with rows, start is refused. Organizations: the admin app names its own o
 first admin request for an unknown one creates it (no name). `upgrade.test.ts` holds the
 equivalence of both paths, the rows, the key and the rollback.
 
+An image refuses a database with a migration it does not know ("applied ... but not known to this
+version"), so going back to an older release (a helm rollback) needs the newer migrations undone
+by hand first: `rollback/to-<version>.sql` undoes every migration after that release's last, newest
+first, in one transaction (`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f ...`, as the service's
+own role, with no newer process running), and says in its header what it cannot keep.
+`rollback/to-0.3.0.sql` undoes 0009-0013 (0.3.0 ends at 0008): it drops what they added and the
+Graph subscriptions, restores 0007's check constraints, and keeps every row 0.3.0 reads; it
+refuses unless exactly 0009-0013 are applied. Checked on Postgres 17 against the npm 0.3.0
+package: the schema after it equals a fresh 0.3.0 install, 0.3.0 starts and reads its rows back,
+and migrating forward again equals a fresh install of this version.
+
 ## Deploy
 
 `deploy/docker` (image, `docker-compose.yml` with Postgres, `docker-compose.example.yml` adding
@@ -409,7 +420,8 @@ packages/server/src/store.ts # Postgres; every table named through tables() in t
 packages/server/src/migrate.ts # the schema runner (see Database)
 packages/server/migrations/ # 0001_tables.sql ... (plain SQL, unqualified names, never edited once
                       # applied: the runner refuses a changed checksum); rollback/to-legacy.sql
-                      # (by hand only: back to the earlier layout in public)
+                      # (by hand only: back to the earlier layout in public); rollback/to-0.3.0.sql
+                      # (by hand only: undoes 0009-0013 so a 0.3.0 image starts again)
 packages/server/src/secrets.ts # AES-256-GCM credential sealing (AAD = org + app, or org + provider:<id>; key
                       # id per row), agent keys
 scripts/test-databases.sh # makes an empty ac_test on a scratch Postgres, for the DB-backed tests
