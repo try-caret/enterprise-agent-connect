@@ -664,6 +664,47 @@ test("two processes cannot both take an agent's last run slot", { skip: !sql }, 
   ]);
 });
 
+// The agent's one session, read as a message about to continue it reads it.
+async function idleSession(t: Awaited<ReturnType<typeof teamsSetup>>, turns: number) {
+  await sql!`update ${name("teams_runs")} set state = 'idle', turns = ${turns}
+              where agent_id = ${t.agentId}`;
+  const [{ threadId }] = await sql!`
+    select thread_id as "threadId" from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+  return (await t.teams.latestRun(t.botId, threadId))!;
+}
+
+const CAPS = { budgetCents: 50, maxRunsPerHour: 100, maxCentsPerDay: 100_000, maxConcurrent: 10 };
+
+test(
+  "a message continuing a session it read before another's turn does not take it past that",
+  { skip: !sql },
+  async () => {
+    const t = await teamsSetup();
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    // Two messages read the session at its 19th turn; the first's turn is over by the time
+    // the second is admitted.
+    const read = await idleSession(t, 19);
+    const next = (i: number) => ({
+      agentId: t.agentId,
+      botId: t.botId,
+      conversationId: read.conversationId,
+      threadId: read.threadId,
+      triggerActivityId: `act-next-${i}`,
+      replyTokenHash: hashReplyToken(`token-next-${i}`),
+      requestedBy: PERSON,
+      runner: "fake",
+    });
+    const first = await t.teams.admit(next(1), read, CAPS);
+    assert.ok("run" in first && first.run);
+    await idleSession(t, 20);
+    assert.deepEqual(await t.teams.admit(next(2), read, CAPS), { run: null });
+    const [run] = await sql!`select turns from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+    assert.equal(run.turns, 20);
+  },
+);
+
 test("an agent's last run slot goes to one process when both admit at once", { skip: !sql }, async () => {
   const t = await teamsSetup();
   // Each process's count waits for the other's, so without the lock both say there is room.

@@ -573,7 +573,7 @@ export function createTeamsStore(sql: Sql, schema: string) {
 
     // The agent's limits counted and its turn started (a new session, or the next turn of
     // `continues`) as one step, whichever process gets there. `run` is null when the thread is
-    // busy.
+    // busy, or the session moved on since `continues` was read.
     async admit(
       input: NewRun,
       continues: RunRow | null,
@@ -583,13 +583,9 @@ export function createTeamsStore(sql: Sql, schema: string) {
         const cap = capReached(await this.runCounts(input.agentId, input.botId, tx), caps);
         if (cap) return { cap };
         if (!continues) return { run: await this.startRun(input, tx) };
-        const free = await this.continueRun(
-          continues.id,
-          input.triggerActivityId,
-          input.replyTokenHash,
-          tx,
-        );
-        return { run: free ? { ...continues, triggerActivityId: input.triggerActivityId } : null };
+        const { triggerActivityId, replyTokenHash } = input;
+        const free = await this.continueRun(continues, triggerActivityId, replyTokenHash, tx);
+        return { run: free ? { ...continues, triggerActivityId } : null };
       });
     },
 
@@ -616,12 +612,13 @@ export function createTeamsStore(sql: Sql, schema: string) {
     },
 
     // The next turn in an idle session: a new reply token, for the new message. False when the
-    // session is no longer idle (another message got there first). It stays 'starting' until
-    // the message is sent, so the watcher never reads the previous turn's idle as this one's.
+    // session is no longer idle, or not at the turn read (another message got there first, and
+    // its turn may have reached the session's last). It stays 'starting' until the message is
+    // sent, so the watcher never reads the previous turn's idle as this one's.
     // Checked here and not left to the one-active index: under admit() every writer of the
     // thread waits, and a failed statement would fail admit()'s transaction.
     async continueRun(
-      id: string,
+      read: Pick<RunRow, "id" | "turns">,
       triggerActivityId: string,
       replyTokenHash: string,
       db: Sql = sql,
@@ -631,7 +628,7 @@ export function createTeamsStore(sql: Sql, schema: string) {
            set state = 'starting', trigger_activity_id = ${triggerActivityId},
                reply_token_hash = ${replyTokenHash}, reply_token_at = now(),
                reply_count = 0, turns = turns + 1, finished_at = null
-         where r.id = ${id} and r.state = 'idle'
+         where r.id = ${read.id} and r.state = 'idle' and r.turns = ${read.turns}
            and not exists (select 1 from ${t.teams_runs} o
                             where o.bot_id = r.bot_id and o.thread_id = r.thread_id
                               and o.state in ('starting', 'running'))
