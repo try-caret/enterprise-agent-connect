@@ -78,7 +78,7 @@ runner may take it later, so a receiver that restarts (a deploy) only delays mes
   this" only when it finally fails.
 - **One outcome**: the audit gets one `events:run` row per run, when it starts or finally fails
   (`after N attempts` when it took more than one); Teams' `teams:run` row is written once, before
-  the first attempt. Sentry (`teams_run_start_failed`, `event_run_start_failed`) hears of the
+  the first attempt. `onError` (`teams_run_start_failed`, `event_run_start_failed`) hears of the
   final failure only.
 
 Every attempt of one hand-over carries the same id, a UUID, in the header

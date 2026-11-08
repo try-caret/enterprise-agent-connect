@@ -8,6 +8,10 @@
       "types": "./dist/packages/server/src/index.d.ts",
       "default": "./dist/packages/server/src/index.js"
     },
+    "./server": {
+      "types": "./dist/packages/server/src/server.d.ts",
+      "default": "./dist/packages/server/src/server.js"
+    },
     "./kit": {
       "types": "./dist/packages/connector-kit/src/index.d.ts",
       "default": "./dist/packages/connector-kit/src/index.js"

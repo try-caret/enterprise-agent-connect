@@ -706,7 +706,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
   }
 
   // The one place a response that could not start is told: the run fails with the reason, the
-  // person is told once, Sentry once.
+  // person is told once, onError once.
   async function failStart(
     bot: BotRow,
     run: RunRow,

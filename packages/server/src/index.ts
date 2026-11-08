@@ -22,7 +22,7 @@ import {
 import { migrate as runMigrations } from "./migrate.js";
 import { CredentialKey } from "./secrets.js";
 import { assertToolsImplemented, createService, type App, type ProviderApp } from "./service.js";
-import { errorReporter, reportingVendorRefusals, type ErrorReporting } from "./report.js";
+import { errorReporter, reportingVendorRefusals, type OnError } from "./report.js";
 import { assertSchemaName, connectDatabase, createStore, type Sql } from "./store.js";
 import { createEventsAdmin, resealEventSecrets } from "./events/admin.js";
 import { createEventsRuntime } from "./events/runtime.js";
@@ -46,7 +46,7 @@ import { microsoftClient } from "../../../connectors/microsoft/client.js";
 export type { BrandingInput } from "../../connector-kit/src/branding.js";
 export type { ConnectorContext, ConnectorModule } from "./builtin.js";
 export type { ConnectorJson } from "../../connector-kit/src/connector.js";
-export type { ErrorReporting } from "./report.js";
+export type { AgentConnectError, OnError } from "./report.js";
 export { builtinConnectors } from "./builtin.js";
 export type { EventRunInput, RunInput, RunnerFactory, TriggerRunner } from "./teams/runner.js";
 export {
@@ -90,8 +90,9 @@ export type AgentConnectOptions = {
   // in seconds: 0 to 3600, default 900; 0 never tries again.
   runnerRetrySeconds?: number;
   log?: Pick<Console, "log" | "error">;
-  // Reports failures to Sentry (its DSN) as they happen; off when left out.
-  errorReporting?: ErrorReporting | null;
+  // Called once per failure as it happens, ids and codes only (README "Error reporting"); at most
+  // once a minute per kind and app; what it throws is logged, never passed on.
+  onError?: OnError | null;
 };
 
 /** The whole service, checked and wired: fetch serves /agent-connect/*, start runs the Teams
@@ -186,7 +187,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
   const sql =
     "unsafe" in options.database ? options.database : connectDatabase(options.database.url);
   if (options.migrate ?? true) await runMigrations(sql, schema);
-  const report = errorReporter(options.errorReporting, { log });
+  const report = errorReporter(options.onError, { log });
   const store = reportingVendorRefusals(createStore(sql, schema), report);
   const key = new CredentialKey(options.encryptionKey, options.previousEncryptionKey);
   const teamsStore = createTeamsStore(sql, schema);

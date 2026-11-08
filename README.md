@@ -235,11 +235,25 @@ const inventory: ConnectorModule = {
 
 ## Error reporting
 
-Set `SENTRY_DSN` (a Sentry project's DSN) to report failures to Sentry as they happen, with
-`SENTRY_ENVIRONMENT` and `SENTRY_RELEASE` optional. Embedded, pass
-`errorReporting: { dsn, environment, release }` to `createAgentConnect`. Unset, nothing is sent.
-Each kind is reported where it is decided, grouped by its own fingerprint
-(`["agent-connect", <kind>]`), at most once a minute per kind and app in each process:
+Pass `onError` to `createAgentConnect` to hear of failures as they happen, in whatever error
+service you use. Left out, nothing is called. The container's entry is exported as
+`serveFromEnv` from `@arbium/enterprise-agent-connect/server`, so a small file of your own can
+start the same server from the same environment and add the hook:
+
+```js
+import { serveFromEnv } from "@arbium/enterprise-agent-connect/server";
+
+await serveFromEnv({
+  onError: (e) => {
+    // e.g. your error service's capture call, or a POST to its ingest endpoint
+    console.log(JSON.stringify({ level: "error", ...e }));
+  },
+});
+```
+
+Each kind is reported where it is decided, at most once a minute per kind and app in each
+process (so a broken app cannot flood the sink). What the hook throws is logged and never
+reaches the service; a hook that sends over the network should not block (fire and forget).
 
 | Kind | When |
 | --- | --- |
@@ -251,9 +265,18 @@ Each kind is reported where it is decided, grouped by its own fingerprint
 | `event_poll_failed` | an app event subscription's poll or Graph sync starts failing (not each retry) |
 | `vendor_auth_failed` | an app answers 401 or 403 to an audited call |
 
-An event carries ids only (organization, agent, app, bot, subscription, tool, runner) and the
-error's class, code and HTTP status, with its stack frames. Never its message, a message body, a
-token or a person's details. The log lines stay as they were.
+The event (`AgentConnectError`):
+
+| Field | |
+| --- | --- |
+| `kind` | one of the kinds above; group by it |
+| `tags` | the ids that apply, as strings: `org`, `agent`, `app`, `bot`, `subscription`, `source`, `tool`, `runner`, `what` (what Teams refused: `file`, `file_card`, `approval_card`, `notice`), `status` |
+| `errorClass`, `code`, `status` | the error's class name, its `code` and HTTP status, when it has them |
+| `frames` | where it happened, `{function, file, line, column}`, innermost first, when there is an error |
+| `timestamp` | ISO 8601 |
+
+Never the error's message, a message body, a token or a person's details: a message can hold a
+vendor's or a person's words. The log lines stay as they were.
 
 ## When a runner does not answer
 
