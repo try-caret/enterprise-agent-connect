@@ -250,7 +250,7 @@ export async function createAgentConnect(options: AgentConnectOptions) {
         resealTeamsCredentials(teamsStore, key).then(
           (n) =>
             log.log(
-              `[agent-connect] re-sealed ${n.bots} bot credentials, ${n.claudeKeys} Claude keys and ${n.triggerSecrets} trigger secrets`,
+              `[agent-connect] re-sealed ${n.bots} bot credentials, ${n.claudeKeys} Claude keys, ${n.triggerSecrets} trigger secrets and ${n.fileOffers} files waiting to be sent`,
             ),
           (error) => log.error("[agent-connect] re-sealing Teams credentials failed", error),
         );

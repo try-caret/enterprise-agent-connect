@@ -257,6 +257,7 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
       method: request.method,
       path: `${url.pathname}${url.search}`,
       body: request.body,
+      ...(request.responseType ? { responseType: request.responseType } : {}),
       ...(request.body === undefined ? {} : { headers: { "content-type": contentType(request) } }),
     };
     const headers = { ...fixed, ...fieldHeaders(c) };
@@ -296,7 +297,7 @@ export function httpVendor(connector: Connector, fetchImpl: Fetch = fetch): Vend
     const raw = await res.text();
     return {
       status: res.status,
-      data: raw ? parse(raw) : null,
+      data: request.responseType === "text" && res.ok ? raw : raw ? parse(raw) : null,
       headers: Object.fromEntries(res.headers),
     };
   };
@@ -475,6 +476,7 @@ export function httpTools(http: HttpApp): Toolset {
                   method: tool.method,
                   path: target,
                   ...(tool.binary ? { responseType: "bytes" as const } : {}),
+                  ...(tool.text ? { responseType: "text" as const } : {}),
                   ...(hasBody ? { body } : {}),
                   ...(hasBody && tool.contentType
                     ? { headers: { "content-type": tool.contentType } }

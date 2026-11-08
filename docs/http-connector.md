@@ -147,6 +147,9 @@ A connector with an `http` block is like any other connector (name, setup steps,
   "resource": {"uri", "mimeType", "blob"}}` whose `blob` is the bytes in base64. It is meant for
   a program calling the tool, which should check the SHA-256 before using the bytes. A binary
   tool has no `result`, `paging` or `answerLimits`.
+- **text**: `true` on a `GET` tool whose answer is text to hand back exactly as the app sent it,
+  such as a file's content: it is never read as JSON, so a JSON file keeps its own formatting.
+  A text tool is not `binary` and has no `result`, `paging` or `answerLimits`.
 - **contentType** (on the `http` block or a tool, the tool's winning): the JSON body's content
   type when the app wants one other than `application/json`, such as
   `"application/vnd.api+json"`. Only `application/json` or a `+json` type. The app's `Accept`

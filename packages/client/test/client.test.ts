@@ -8,8 +8,10 @@ import {
   createClient,
   discovered,
   discoveredChoices,
+  teamsSetup,
   triggerForm,
   triggerInput,
+  type TeamsBot,
   type TeamsTrigger,
 } from "../src/index.ts";
 
@@ -182,4 +184,18 @@ test("steps for a capability show only while it is ticked; discover labels are o
     { value: "1", label: "Parent Co" },
     { value: "2", label: "2" },
   ]);
+});
+
+test("a bot published by the setup script is asked to publish again when its package changes", () => {
+  const place = { kind: "team", name: "Ops", id: "t", conversationId: "c" } as const;
+  const base = { status: "connected", botAppId: "b", packageVersion: "1.1.1", installedIn: [place] };
+  const cue = (bot: object) =>
+    teamsSetup({ publishedVersion: null, scriptVersion: null, ...base, ...bot } as TeamsBot)[2]
+      .detail;
+  assert.equal(cue({ scriptVersion: "1.1.1" }), undefined);
+  assert.equal(cue({ scriptVersion: "1.0.1" }), "Its package changed: publish it again");
+  // Set up before the script's version was kept: unknown, so asked too.
+  assert.equal(cue({}), "Its package changed: publish it again");
+  assert.equal(cue({ publishedVersion: "1.1.1", scriptVersion: "1.0.1" }), undefined);
+  assert.equal(cue({ installedIn: [] }), undefined);
 });

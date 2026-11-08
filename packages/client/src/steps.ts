@@ -404,6 +404,9 @@ export function teamsSetup(bot: TeamsBot | null): TeamsStep[] {
   const signedIn = bot?.status === "connected";
   const places = bot?.installedIn ?? [];
   const published = bot?.publishedVersion ?? null;
+  // In the catalog: what was published from here, else by the setup script. Unknown for a bot
+  // set up before the script's version was kept, which is asked to publish again.
+  const catalogVersion = published ?? bot?.scriptVersion ?? null;
   return [
     {
       label: "Bot made in your Microsoft tenant",
@@ -420,7 +423,7 @@ export function teamsSetup(bot: TeamsBot | null): TeamsStep[] {
       // A bot set up with the script publishes itself; being added somewhere proves it.
       done: published !== null || places.length > 0,
       detail:
-        published && bot && published !== bot.packageVersion
+        bot && (published !== null || places.length > 0) && catalogVersion !== bot.packageVersion
           ? "Its package changed: publish it again"
           : undefined,
     },

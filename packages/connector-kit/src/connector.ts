@@ -543,11 +543,20 @@ const httpToolSchema = z
     // The answer is a file (e.g. an archive), handed back whole as kit `binary`: any content
     // type, up to MAX_BINARY_BYTES, never parsed.
     binary: z.boolean().default(false),
+    // The answer is text handed back as the app sent it (e.g. a file's content), never parsed as
+    // JSON.
+    text: z.boolean().default(false),
   })
   .strict()
   .refine(
     (t) => !t.binary || (t.method === "GET" && !t.result && !t.paging && !t.answerLimits.length),
     { message: "A binary tool is a GET with no result, paging or answerLimits" },
+  )
+  .refine(
+    (t) =>
+      !t.text ||
+      (t.method === "GET" && !t.binary && !t.result && !t.paging && !t.answerLimits.length),
+    { message: "A text tool is a GET, not binary, with no result, paging or answerLimits" },
   )
   .refine(
     (t) => {

@@ -170,7 +170,7 @@ export function clientCredentials(name: string, unguarded: Fetch) {
     const raw = await res.text();
     return {
       status: res.status,
-      data: raw ? parse(raw) : null,
+      data: request.responseType === "text" && res.ok ? raw : raw ? parse(raw) : null,
       headers: Object.fromEntries(res.headers),
     };
   }

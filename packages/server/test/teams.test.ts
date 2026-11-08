@@ -8,7 +8,8 @@ import { migrate } from "../src/migrate.ts";
 import { CredentialKey } from "../src/secrets.ts";
 import { connectDatabase, createStore } from "../src/store.ts";
 import { hashReplyToken } from "../src/teams/activity.ts";
-import { createTeamsAdmin } from "../src/teams/admin.ts";
+import { offerAad } from "../src/teams/offer.ts";
+import { createTeamsAdmin, resealTeamsCredentials } from "../src/teams/admin.ts";
 import type { BotClient } from "../src/teams/bot.ts";
 import type { BotAuth } from "../src/teams/jwt.ts";
 import type { RunInput, TriggerRunner } from "../src/teams/runner.ts";
@@ -36,18 +37,32 @@ const auth = { token: async () => () => {} } as unknown as BotAuth;
 type Sent = { method: string; path: string; body?: any };
 // A Bot Connector that records what was sent. A new channel post answers its thread and
 // activity id, any other post its activity id.
-function fakeBots(sent: Sent[]) {
+function fakeBots(
+  sent: Sent[],
+  {
+    refuse,
+    graph = async () => ok,
+  }: {
+    refuse?: (req: Sent) => number | undefined;
+    graph?: BotClient["graph"];
+  } = {},
+) {
   return {
     connector: async (_bot: unknown, _url: string, req: Sent) => {
       sent.push(req);
+      const refused = refuse?.(req);
+      if (refused) return { status: refused, data: null };
       if (req.method === "POST" && req.path === "/v3/conversations")
         return {
           status: 201,
-          data: { id: "19:general@thread.tacv2;messageid=900", activityId: "900" },
+          data: {
+            id: "19:general@thread.tacv2;messageid=900",
+            activityId: "900",
+          },
         };
       return { status: 200, data: { id: "900", value: [] } };
     },
-    graph: async () => ok,
+    graph,
   } as unknown as BotClient;
 }
 
@@ -69,7 +84,11 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
       calls.push(`continue ${session}`);
     },
     async state(run) {
-      return { status: run.replyCount > 0 ? "idle" : "running", costCents: 0, atBudget: false };
+      return {
+        status: run.replyCount > 0 ? "idle" : "running",
+        costCents: 0,
+        atBudget: false,
+      };
     },
     async stop(session) {
       calls.push(`stop ${session}`);
@@ -78,9 +97,16 @@ function fakeRunner(id: string, onStart?: (input: RunInput) => Promise<void>) {
   return { runner, calls };
 }
 
-async function setup(runners: TriggerRunner[], opts: { fetch?: typeof fetch } = {}) {
+async function setup(
+  runners: TriggerRunner[],
+  opts: {
+    fetch?: typeof fetch;
+    refuse?: (req: Sent) => number | undefined;
+    graph?: BotClient["graph"];
+  } = {},
+) {
   const sent: Sent[] = [];
-  const bots = fakeBots(sent);
+  const bots = fakeBots(sent, { refuse: opts.refuse, graph: opts.graph });
   const store = createStore(sql!, SCHEMA);
   const teams = createTeamsStore(sql!, SCHEMA);
   const org = randomUUID();
@@ -154,7 +180,10 @@ async function setup(runners: TriggerRunner[], opts: { fetch?: typeof fetch } = 
       botAppId,
       new Request(`${publicUrl}/teams/bots/${botAppId}/messages`, {
         method: "POST",
-        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer x",
+          "content-type": "application/json",
+        },
         body: JSON.stringify(activity),
       }),
     );
@@ -245,7 +274,8 @@ test(
     assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"\n<\/teams_files>/);
     assert.doesNotMatch(prompt, /tempauth/);
     assert.deepEqual(files, [{ name: "q3.xlsx", source: "chat", url: link }]);
-    const [row] = await sql!`select files from agent_connect.teams_runs where agent_id = ${t.agentId}`;
+    const [row] =
+      await sql!`select files from agent_connect.teams_runs where agent_id = ${t.agentId}`;
     assert.ok(row.files && !Buffer.from(row.files).toString("latin1").includes("tempauth"));
   },
 );
@@ -262,7 +292,9 @@ test("a file sent with no text in a direct chat still starts a run", { skip: !sq
       {
         contentType: "application/vnd.microsoft.teams.file.download.info",
         name: "q3.xlsx",
-        content: { downloadUrl: "https://contoso-my.sharepoint.com/d?tempauth=x" },
+        content: {
+          downloadUrl: "https://contoso-my.sharepoint.com/d?tempauth=x",
+        },
       },
     ],
   });
@@ -270,6 +302,58 @@ test("a file sent with no text in a direct chat still starts a run", { skip: !sq
   assert.match(prompt, /<teams_files>\n1\. "q3\.xlsx"/);
   await t.message("");
   assert.equal((await t.runs()).length, 1);
+});
+
+// A group chat message that names the bot (replies only when mentioned, by default).
+const group = (botAppId: string) => ({
+  conversation: { id: "19:files@thread.v2", conversationType: "groupChat" },
+  entities: [{ type: "mention", mentioned: { id: `28:${botAppId}` } }],
+});
+
+test("a file sent with no text in a group chat starts a run", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-group-file", async (input) => {
+    prompt = input.text;
+  });
+  const asked: string[] = [];
+  const file = {
+    contentType: "reference",
+    name: "r.docx",
+    contentUrl: "https://x.example/r",
+  };
+  const t = await setup([runner], {
+    graph: async (_bot, path) => {
+      asked.push(path);
+      return path.endsWith("/messages/act-1") ? { status: 200, data: { attachments: [file] } } : ok;
+    },
+  });
+  await t.setRunner("fake-group-file");
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+  assert.match(prompt, /<teams_files>\n1\. "r\.docx" \(in a group chat/);
+  // Graph's copy of the message is read once, before deciding, and reused.
+  assert.equal(asked.filter((p) => p.endsWith("/messages/act-1")).length, 1);
+  await t.message("", group(t.botAppId));
+  assert.equal((await t.runs()).length, 1);
+});
+
+test("a message whose files cannot be read still reaches the agent", { skip: !sql }, async () => {
+  let prompt = "";
+  const { runner } = fakeRunner("fake-graph-down", async (input) => {
+    prompt = input.text;
+  });
+  const t = await setup([runner], {
+    graph: async (_bot, path) => {
+      if (/\/messages\/act-\d+$/.test(path)) throw new TypeError("fetch failed");
+      return ok;
+    },
+  });
+  await t.setRunner("fake-graph-down");
+  await t.message("hello", group(t.botAppId));
+  const [run] = await t.runs();
+  assert.equal(run.state, "running");
+  assert.match(prompt, /hello/);
+  assert.doesNotMatch(prompt, /teams_files/);
 });
 
 test(
@@ -355,7 +439,10 @@ test(
           `http://svc/agent-connect/admin${prefix}/orgs/${t.org}/agents/${t.agentId}/teams-bot/add`,
           {
             method: "POST",
-            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            headers: {
+              authorization: `Bearer ${ADMIN_TOKEN}`,
+              "content-type": "application/json",
+            },
             body: JSON.stringify({ displayName: "Triage", by: "admin" }),
           },
         ),
@@ -418,8 +505,14 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
     call: async (req) => {
       lookups.push(req.path);
       if (req.path.startsWith(`/v1.0/users/${encodeURIComponent("ann@contoso.example")}?`))
-        return { status: 200, data: { id: PERSON.toUpperCase(), displayName: "Ann" } };
-      return { status: 404, data: { error: { message: "Resource not found" } } };
+        return {
+          status: 200,
+          data: { id: PERSON.toUpperCase(), displayName: "Ann" },
+        };
+      return {
+        status: 404,
+        data: { error: { message: "Resource not found" } },
+      };
     },
     teams: t.runtime.access(bot),
     audit: (entry) =>
@@ -432,7 +525,9 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       }),
   };
   teamsTools.register(
-    { registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h) } as never,
+    {
+      registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h),
+    } as never,
     ctx,
     new Set(teamsTools.names),
   );
@@ -449,7 +544,11 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       facts: [{ name: "Cost", value: "1,200 USD" }],
     });
     assert.equal(r.isError, false, r.text);
-    return JSON.parse(r.text) as { approval_id: string; message_id: string; expires: string };
+    return JSON.parse(r.text) as {
+      approval_id: string;
+      message_id: string;
+      expires: string;
+    };
   }
   const read = async (approvalId: string) =>
     JSON.parse((await call("teams_get_approval", { approval_id: approvalId })).text);
@@ -473,15 +572,25 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       serviceUrl: SERVICE_URL,
       channelId: "msteams",
       recipient: { id: `28:${botAppId}` },
-      from: { id: "29:clicker", aadObjectId: opts.from ?? PERSON, name: "Ann Example" },
-      conversation: opts.conversation ?? { id: CHAT, conversationType: "groupChat" },
+      from: {
+        id: "29:clicker",
+        aadObjectId: opts.from ?? PERSON,
+        name: "Ann Example",
+      },
+      conversation: opts.conversation ?? {
+        id: CHAT,
+        conversationType: "groupChat",
+      },
       channelData: { tenant: { id: TENANT } },
       replyToId: "900",
       value: {
         action: {
           type: "Action.Execute",
           verb: opts.verb ?? "approve",
-          data: { approval: rowId, ...(opts.comment ? { comment: opts.comment } : {}) },
+          data: {
+            approval: rowId,
+            ...(opts.comment ? { comment: opts.comment } : {}),
+          },
         },
         trigger: "manual",
       },
@@ -490,12 +599,19 @@ async function approvals(t: Awaited<ReturnType<typeof setup>>) {
       botAppId,
       new Request(`https://svc.example/agent-connect/teams/bots/${botAppId}/messages`, {
         method: "POST",
-        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer x",
+          "content-type": "application/json",
+        },
         body: JSON.stringify(activity),
       }),
     );
     assert.equal(res.status, 200);
-    return (await res.json()) as { statusCode: number; type: string; value: any };
+    return (await res.json()) as {
+      statusCode: number;
+      type: string;
+      value: any;
+    };
   }
   const rowId = async () => {
     const [row] = await sql!`select id::text from agent_connect.approvals
@@ -561,7 +677,10 @@ test("the approver's click is recorded once and the card shows it", { skip: !sql
   const a = await approvals(t);
   const asked = await a.request();
   const id = await a.rowId();
-  const answer = await a.click(id, { verb: "reject", comment: "Too expensive" });
+  const answer = await a.click(id, {
+    verb: "reject",
+    comment: "Too expensive",
+  });
   assert.equal(answer.statusCode, 200);
   assert.equal(answer.type, "application/vnd.microsoft.card.adaptive");
   assert.match(cardText(answer.value), /Rejected by Ann Example/);
@@ -637,7 +756,9 @@ test("another bot's approval is not answered through this bot", { skip: !sql }, 
   assert.equal(row.decision, "denied");
   // And the other agent cannot read it either.
   const b = await approvals(other);
-  const r = await b.call("teams_get_approval", { approval_id: asked.approval_id });
+  const r = await b.call("teams_get_approval", {
+    approval_id: asked.approval_id,
+  });
   assert.equal(r.isError, true);
 });
 
@@ -725,7 +846,11 @@ test("the store records a decision only when every condition holds", { skip: !sq
       facts: [],
       days: 7,
     });
-  const by = (aad: string) => ({ status: "approved" as const, byAadId: aad, byName: "Ann" });
+  const by = (aad: string) => ({
+    status: "approved" as const,
+    byAadId: aad,
+    byName: "Ann",
+  });
   const status = async (id: string) =>
     (await sql!`select status from agent_connect.approvals where id = ${id}`)[0].status;
 
@@ -752,7 +877,11 @@ test("the store records a decision only when every condition holds", { skip: !sq
   const decided = await t.teams.decideApproval(t.botId, e.id, CHAT, by(PERSON), "ok");
   assert.equal(decided?.status, "approved");
   assert.equal(decided?.decidedByAadId, PERSON);
-  const again = { status: "rejected" as const, byAadId: PERSON, byName: "Ann" };
+  const again = {
+    status: "rejected" as const,
+    byAadId: PERSON,
+    byName: "Ann",
+  };
   assert.equal(await t.teams.decideApproval(t.botId, e.id, CHAT, again, null), null);
   assert.equal(await status(e.id), "approved");
   // The lookup a click starts with keeps to the bot and the conversation too.
@@ -808,7 +937,16 @@ const DIRECT = "a:chat";
 const REPORT = "https://contoso.sharepoint.com/sites/T/_layouts/15/download.aspx?tempauth=t1";
 const UPLOAD = "https://contoso-my.sharepoint.com/personal/ann/_api/upload?session=s1";
 
-async function fileReplies(opts: { body?: string; length?: number } = {}) {
+async function fileReplies(
+  opts: {
+    body?: string;
+    length?: number;
+    // The upload's answers in turn (a function throws instead); 201 once they run out.
+    puts?: (number | (() => never))[];
+    refuse?: (req: Sent) => number | undefined;
+  } = {},
+) {
+  const putAnswers = [...(opts.puts ?? [])];
   const bytes = opts.body ?? "quarterly numbers";
   const puts: { url: string; headers: Headers; body: Buffer }[] = [];
   const gets: string[] = [];
@@ -825,13 +963,16 @@ async function fileReplies(opts: { body?: string; length?: number } = {}) {
       headers: new Headers(init!.headers),
       body: Buffer.from(init!.body as Uint8Array),
     });
-    return new Response("{}", { status: 201 });
+    const next = putAnswers.shift() ?? 201;
+    return new Response("{}", {
+      status: typeof next === "number" ? next : next(),
+    });
   }) as unknown as typeof fetch;
   let replyToken = "";
   const { runner } = fakeRunner("fake-file-reply", async (input) => {
     replyToken = input.replyToken;
   });
-  const t = await setup([runner], { fetch: fakeFetch });
+  const t = await setup([runner], { fetch: fakeFetch, refuse: opts.refuse });
   await t.teams.upsertConversation({
     botId: t.botId,
     conversationId: DIRECT,
@@ -860,12 +1001,18 @@ async function fileReplies(opts: { body?: string; length?: number } = {}) {
       }),
   };
   teamsTools.register(
-    { registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h) } as never,
+    {
+      registerTool: (name: string, _d: unknown, h: any) => handlers.set(name, h),
+    } as never,
     ctx,
     new Set(teamsTools.names),
   );
   async function reply(files: { name: string; download_url: string }[]) {
-    const r = await handlers.get("teams_reply")!({ reply_token: replyToken, text: "Here it is", files });
+    const r = await handlers.get("teams_reply")!({
+      reply_token: replyToken,
+      text: "Here it is",
+      files,
+    });
     return { isError: Boolean(r.isError), text: r.content[0].text as string };
   }
   let n = 0;
@@ -902,7 +1049,10 @@ async function fileReplies(opts: { body?: string; length?: number } = {}) {
       t.botAppId,
       new Request(`https://svc.example/agent-connect/teams/bots/${t.botAppId}/messages`, {
         method: "POST",
-        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer x",
+          "content-type": "application/json",
+        },
         body: JSON.stringify(activity),
       }),
     );
@@ -1027,3 +1177,141 @@ test(
     assert.equal(good.isError, false, good.text);
   },
 );
+
+const isFileCard = (kind: string) => (req: Sent) =>
+  req.method === "POST" &&
+  req.body?.attachments?.[0]?.contentType === `application/vnd.microsoft.teams.card.file.${kind}`;
+const texts = (sent: Sent[]) =>
+  sent.filter((s) => s.method === "POST" && s.body?.text).map((s) => s.body.text as string);
+
+test(
+  "an upload that fails or is not complete keeps the file for another accept, and says so",
+  { skip: !sql },
+  async () => {
+    const f = await fileReplies({
+      puts: [
+        503,
+        // 202 is not a finished upload in Teams' contract.
+        202,
+        () => {
+          throw new TypeError("fetch failed");
+        },
+      ],
+    });
+    await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    const [offer] = await f.offers();
+    for (let i = 0; i < 3; i++) {
+      await f.answer(offer.id);
+      assert.equal((await f.offers()).length, 1, `kept after failure ${i + 1}`);
+    }
+    assert.equal(f.t.sent.filter(isFileCard("info")).length, 0);
+    assert.ok(!f.t.sent.some((s) => s.method === "DELETE"));
+    assert.equal(
+      texts(f.t.sent).filter((x) => /couldn't save report\.xlsx.*Accept on it to try again/.test(x))
+        .length,
+      3,
+    );
+    // The next accept goes through.
+    await f.answer(offer.id);
+    assert.equal(f.puts.length, 4);
+    assert.equal(f.t.sent.filter(isFileCard("info")).length, 1);
+    assert.equal((await f.offers()).length, 0);
+    assert.deepEqual(
+      (await f.fileAudits()).map((a) => [a.decision, a.reason]),
+      [
+        ["denied", "report.xlsx: OneDrive answered 503"],
+        ["denied", "report.xlsx: OneDrive answered 202"],
+        ["denied", "report.xlsx: the upload failed: fetch failed"],
+        ["allowed", "report.xlsx saved to their OneDrive"],
+      ],
+    );
+  },
+);
+
+test(
+  "a saved file whose file card Teams refuses is told to the person and its consent card goes",
+  { skip: !sql },
+  async () => {
+    const f = await fileReplies({
+      refuse: (r) => (isFileCard("info")(r) ? 502 : undefined),
+    });
+    await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+    const [offer] = await f.offers();
+    await f.answer(offer.id);
+    assert.equal(f.puts.length, 1);
+    assert.ok(
+      texts(f.t.sent).includes("I saved report.xlsx to your OneDrive, but couldn't show it here."),
+    );
+    assert.ok(f.t.sent.some((s) => s.method === "DELETE"));
+    assert.equal((await f.offers()).length, 0);
+    assert.deepEqual(
+      (await f.fileAudits()).map((a) => a.decision),
+      ["denied"],
+    );
+  },
+);
+
+test(
+  "a file whose consent card fails after the text is told, not thrown, and the rest still go",
+  { skip: !sql },
+  async () => {
+    let cards = 0;
+    const f = await fileReplies({
+      refuse: (r) => (isFileCard("consent")(r) && ++cards === 2 ? 500 : undefined),
+    });
+    const r = await f.reply([
+      { name: "a.xlsx", download_url: REPORT },
+      { name: "b.xlsx", download_url: REPORT },
+      { name: "c.xlsx", download_url: REPORT },
+    ]);
+    assert.equal(r.isError, false, r.text);
+    const out = JSON.parse(r.text);
+    assert.equal(out.replied, true);
+    assert.equal(out.files_offered, 2);
+    assert.deepEqual(
+      out.files_not_sent.map((x: { name: string }) => x.name),
+      ["b.xlsx"],
+    );
+    assert.equal(out.person_told, true);
+    assert.ok(texts(f.t.sent).includes("I couldn't send b.xlsx."));
+    assert.deepEqual((await f.offers()).map((o) => o.name).sort(), ["a.xlsx", "c.xlsx"]);
+  },
+);
+
+test("expired file offers are pruned without waiting for a new offer", { skip: !sql }, async () => {
+  const f = await fileReplies();
+  await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+  const [offer] = await f.offers();
+  await sql!`update agent_connect.teams_file_offers set expires_at = now() - interval '1 minute'
+              where id = ${offer.id}`;
+  await f.t.teams.pruneFileOffers();
+  assert.equal((await f.offers()).length, 0);
+});
+
+test("a key rotation re-seals files still waiting to be accepted", { skip: !sql }, async () => {
+  const f = await fileReplies();
+  await f.reply([{ name: "report.xlsx", download_url: REPORT }]);
+  const [offer] = await f.offers();
+  const rotated = new CredentialKey(
+    Buffer.alloc(32, 9).toString("base64"),
+    Buffer.alloc(32, 7).toString("base64"),
+  );
+  // Only this test's offer: the other rows in the shared database stay on the test key.
+  const n = await resealTeamsCredentials(
+    {
+      ...f.t.teams,
+      staleSealed: async () => ({ bots: [], claudeKeys: [], triggers: [] }) as never,
+      staleFileOffers: async (ids) =>
+        (await f.t.teams.staleFileOffers(ids)).filter((id) => id === offer.id),
+    },
+    rotated,
+  );
+  assert.equal(n.fileOffers, 1);
+  const [row] = await sql!`select content, content_key_id as "keyId"
+                             from agent_connect.teams_file_offers where id = ${offer.id}`;
+  assert.notEqual(row.keyId, key.id);
+  // It opens with the new key alone.
+  const next = new CredentialKey(Buffer.alloc(32, 9).toString("base64"));
+  const opened = next.open({ ciphertext: row.content, keyId: row.keyId }, offerAad(offer.id));
+  assert.equal(Buffer.from(opened.content, "base64").toString(), f.bytes);
+});
