@@ -1,11 +1,8 @@
 import { JqlRejected, ORDER_BY, splitOrderBy } from "./jql.js";
 
-// Confines an agent's AQL (Jira Assets Query Language) to the object schemas its grant allows,
-// the way scopeJql confines JQL to projects: the agent's clause is kept whole inside
-// parentheses after the schema filter, so it has to be lexically closed on its own. AQL
-// strings are double-quoted with backslash escapes ("Use Assets Query Language (AQL)" in
-// Atlassian's Jira Service Management Cloud docs); objectSchemaId is one of its keywords.
-// The tools also drop any answer outside the schemas, so this is not the only guard.
+// Confines an agent's AQL to its granted object schemas, as scopeJql does for projects: the
+// agent's clause goes whole inside parentheses after the schema filter. AQL strings are
+// double-quoted. The tools also drop any answer outside the schemas.
 
 const SCHEMA_ID = /^[1-9][0-9]{0,17}$/;
 
@@ -22,10 +19,8 @@ export function scopeAql(aql: string, schemas: string[] | null): string {
     return aql.trim();
   }
   if (schemas.length === 0) throw new JqlRejected("No object schemas are allowed");
-  // The filter limits only the objects answered. AQL that looks through references (HAVING
-  // inboundReferences/outboundReferences, or dot notation such as Owner.Name) could test objects
-  // in other schemas, and a single quote might start a string this check does not know, so
-  // neither is accepted from a limited agent. Double-quoted strings are blanked first.
+  // Looking through references (HAVING, ...References(, Owner.Name) could test objects in other
+  // schemas, and a single quote might start a string this check does not know: both refused.
   const bare = where.replace(/"(?:\\.|[^"\\])*"/g, '""');
   if (/'/.test(bare))
     throw new JqlRejected('Quote values with double quotes ("), not single quotes');

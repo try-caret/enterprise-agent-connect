@@ -628,53 +628,20 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   UserDetails, ProjectDetails, issue comment GET/POST, issue changelog GET) and
   developer.atlassian.com/cloud/jira/service-desk/swagger.v3.json (Create request comment,
   CommentCreateDTO, CommentDTO, DateDTO), read October 25, 2026.
-  Jira Assets (Jira Service Management's CMDB), capabilities `assets_read`
-  (`jira_assets_search`, `jira_assets_get_object`, `jira_assets_list_attributes`) and
-  `assets_update` (`jira_assets_update_object`), neither required, so issue-only keys are
-  unchanged. Generic: no object type, attribute or status is known here. Calls go through the
-  same gateway, `api.atlassian.com/ex/jira/{cloudId}/jsm/assets/workspace/{workspaceId}/v1/`:
-  tools send `ASSETS_PATH` with the literal `{workspaceId}` and the vendor fills it from
-  `GET /rest/servicedeskapi/assets/workspace` (the first `values[].workspaceId`, letters,
-  digits and dashes only: Atlassian's own example id is not hex), kept per cloudId in the vendor
-  for the process; a refused discovery is passed back as the tool's answer, no workspace is a 404.
-  Search is `POST object/aql?startAt&maxResults&includeAttributes=true` {qlQuery}; its values
-  carry only `objectTypeAttributeId`, named from the answer's `objectTypeAttributes`. Values are
-  shown as stored (ISO dates), a reference, status, user or group by its name (a referenced
-  object outside the agent's schemas, or with no schema id, as a fixed placeholder). Limit
-  `asset_schemas` (object schema ids, empty = every schema the account sees): AQL becomes
-  `objectSchemaId = N AND (<agent's AQL>) [ORDER BY ...]` (`in (...)` for several; only double
-  quotes are strings; for a limited agent a single quote, `HAVING`, `inboundReferences(` /
-  `outboundReferences(` and dot notation such as `Owner.Name` are refused outside strings,
-  because they could test objects in other schemas through references), and every
-  object answered, read or changed is checked on `objectType.objectSchemaId`; an object type's
-  attributes are refused when any names another schema. Update reads the object (schema check),
-  its type's attributes (`GET objecttype/{id}/attributes`), maps names case-insensitively,
-  refuses unknown, `system` or non-`editable` ones and several values for a single-value one,
-  resolves a Status (type 7) by name or id within the attribute's `typeValueMulti` from `GET
-  config/statustype` plus `?objectSchemaId=` (global and schema statuses come from separate
-  calls), a Select (defaultType 10) only to one of its `options`, an Object reference (type 1)
-  only to an object id or key found in the agent's schemas (by id: the object check; by key:
-  scoped AQL `Key = "..."`), and refuses an attribute named twice. That list needs `read:cmdb-config:jira`, which service-account credentials are not
-  offered, so on 401/403 the choices are the statuses the attribute already holds on objects of
-  its type (one AQL page of 200) and the refusal says so. Then `PUT object/{id}` {objectTypeId,
-  attributes: only the named ones} and reads the object back. No create or delete. Scopes per
-  capability (each lists its own reads, since neither is required): read
-  `read:servicedesk-request` (workspace discovery), `read:cmdb-object:jira`,
-  `read:cmdb-attribute:jira`; update those plus `write:cmdb-object:jira`. Checked live November
-  8, 2026: a service account's OAuth 2.0 credential is offered 15 cmdb scopes (not
-  `read:cmdb-config:jira`; config/statustype answers 401 "scope does not match"); the workspace
-  endpoint answers for a service account with no Service Management seat (IDC); with a JSM agent
-  seat and no schema role a service account searched, read and changed objects on our test site
-  (the schema role picker does not list service accounts); without the seat a JSM project's
-  issues are invisible to it even as a Jira admin; a PUT naming some attributes left the others
-  as they were. Not yet run with ONLY the scopes listed above (the live credential had all 15).
-  Sources: developer.atlassian.com/cloud/assets/swagger.v3.json
-  (servers, object/aql, object/{id}, objecttype/{id}/attributes, config/statustype,
-  ObjectIn, ObjectAttributeValueIn, ObjectTypeAttribute.type), the Jira Service Management
-  swagger.v3.json (Get assets workspaces, `read:servicedesk-request`),
-  developer.atlassian.com/cloud/assets/scopes-for-oauth-2-3LO-and-forge-apps, support.atlassian.com
-  use-assets-query-language-aql and what-are-roles, read November 7, 2026. Tests:
-  `connectors/jira/assets.test.ts`, against a fake Assets.
+  Jira Assets (connectors/jira/assets.ts), capabilities `assets_read` (search, get object, list
+  attributes) and `assets_update` (update object), neither required. Same gateway, under
+  `jsm/assets/workspace/{workspaceId}/v1/`; the vendor finds the workspace id once per cloudId
+  (`GET /rest/servicedeskapi/assets/workspace`). Limit `asset_schemas`: AQL becomes
+  `objectSchemaId = N AND (<agent's AQL>)`, AQL that could look through references (`HAVING`,
+  `...References(`, dot notation) or uses single quotes is refused, and every object answered or
+  changed is checked on its schema; a referenced object outside them is shown as a placeholder.
+  Update sends only the named attributes after checking each (editable, a Status the attribute
+  allows, a Select option; Object references are refused) and reads the object back. No create
+  or delete. Service accounts are not offered `read:cmdb-config:jira`, so on a 401 from
+  `config/statustype` statuses come from the type's objects (one page of 200). Checked live
+  November 8, 2026 (with all 15 cmdb scopes, not only the listed ones): a service account needs a
+  JSM agent seat, no schema role; a partial PUT leaves other attributes as they were. Source:
+  developer.atlassian.com/cloud/assets/swagger.v3.json, read November 7, 2026.
 - Microsoft connection (provider `microsoft`, table `providers`, one per org):
   the apps with `"provider": "microsoft"` sign in through it, so its credentials are entered
   once; each app row keeps its own ceiling and settings (`provider_id`, no credential of its

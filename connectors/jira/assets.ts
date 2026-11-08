@@ -12,14 +12,11 @@ import {
   type Toolset,
 } from "../../packages/connector-kit/src/common.js";
 
-// Jira Assets (Jira Service Management's CMDB): find objects with AQL, read one, list an object
-// type's attributes, and change named attributes of one existing object. Generic on purpose:
-// attribute names and status values differ per customer, so nothing here knows any object
-// type. Nothing creates or deletes objects. Paths and shapes from Atlassian's Assets OpenAPI
-// (developer.atlassian.com/cloud/assets/swagger.v3.json, read November 7, 2026): POST
-// object/aql, GET/PUT object/{id}, GET objecttype/{id}/attributes, GET config/statustype.
-// The grant's `asset_schemas` limit (object schema ids) holds every call: AQL is confined to
-// them and every object answered or changed is checked on its objectType.objectSchemaId.
+// Jira Assets (Jira Service Management's CMDB): search with AQL, read an object, list a type's
+// attributes, change named attributes of one existing object. No create or delete. Generic: no
+// object type is known here. The `asset_schemas` limit holds every call (AQL is confined to the
+// schemas and every object is checked on objectType.objectSchemaId). Shapes from
+// developer.atlassian.com/cloud/assets/swagger.v3.json, read November 7, 2026.
 
 type Mark = (status: number) => void;
 type Obj = Record<string, any>;
@@ -37,7 +34,6 @@ const ATTRIBUTE_TYPES: Record<number, string> = {
 const REFERENCE = 1;
 const STATUS = 7;
 const SELECT = 10; // defaultType.id of a plain Select value
-const OBJECT_KEY = /^[A-Za-z][A-Za-z0-9_]{0,19}-[1-9][0-9]{0,17}$/;
 
 function assetsError(res: { status: number; data: unknown }): string {
   const d = res.data as {
@@ -66,9 +62,8 @@ function allowedSchema(schemas: string[] | null, id: unknown): boolean {
   return schemas === null || (id !== undefined && id !== null && schemas.includes(String(id)));
 }
 
-// One value as an agent reads it: a referenced object, status, user or group by its name, any
-// other value as stored (dates in ISO 8601, not the account's display format).
-// A referenced object outside the agent's schemas is not named (`schemas`: the limit).
+// One value as an agent reads it: a reference, status, user or group by its name (a referenced
+// object outside the agent's schemas is not named), any other value as stored (ISO dates).
 const HIDDEN_REFERENCE = "(an object in a schema this agent may not use)";
 function shownValue(v: Obj, schemas: string[] | null = null): unknown {
   if (v?.referencedObject) {
@@ -139,12 +134,9 @@ async function typeAttributes(
   return attrs;
 }
 
-// The statuses a Status attribute can take: Assets' global statuses plus the schema's own
-// (config/statustype answers only one of the two per call). That list needs the scope
-// read:cmdb-config:jira, which Atlassian does not offer to service accounts (checked November 8,
-// 2026: 15 cmdb scopes offered, not that one; the call answers 401 "scope does not match"). On
-// 401 or 403 the choices are the statuses this attribute already holds on objects of its type:
-// a status no object holds yet cannot be named, and the refusal says so.
+// The statuses a Status attribute can take: global plus the schema's own (one call each). That
+// needs read:cmdb-config:jira, which service accounts are not offered (401, checked November 8,
+// 2026), so on 401/403 the choices are the statuses objects of the type already hold.
 async function statusChoices(
   ctx: ToolContext,
   mark: Mark,
@@ -177,34 +169,6 @@ async function statusChoices(
         for (const v of (a.objectAttributeValues ?? []) as Obj[])
           if (v?.status?.id !== undefined) found.set(String(v.status.id), v.status);
   return { list: [...found.values()], partial: true };
-}
-
-// An Object reference value: an object id or key that must name an existing object in the
-// agent's schemas. Answers the key Assets is sent.
-async function referenceKey(ctx: ToolContext, mark: Mark, v: string, attribute: string) {
-  const want = v.trim();
-  if (OBJECT_ID.test(want)) {
-    const o = await fetchObject(ctx, mark, want);
-    return String(o.objectKey ?? want);
-  }
-  if (!OBJECT_KEY.test(want))
-    throw new Denied(`${attribute} takes an object key such as ITSM-88, not ${v}`);
-  const schemas = listLimit(ctx.limits, "asset_schemas");
-  const data = await ok(ctx, mark, {
-    method: "POST",
-    path: path("object/aql?startAt=0&maxResults=5&includeAttributes=false"),
-    body: { qlQuery: scopeAql(`Key = "${want}"`, schemas) },
-  });
-  const found = ((data?.values ?? []) as Obj[]).find(
-    (o) =>
-      String(o.objectKey ?? "").toUpperCase() === want.toUpperCase() &&
-      allowedSchema(schemas, o.objectType?.objectSchemaId),
-  );
-  if (!found)
-    throw new Denied(
-      `${attribute}: no object ${want} in the object schemas this agent may use`,
-    );
-  return String(found.objectKey);
 }
 
 const attributeKind = (a: Obj) =>
@@ -339,8 +303,7 @@ export const assetsTools: Toolset = {
           description:
             "Change named attributes of one existing Jira Assets object; every other attribute " +
             "is left as it is. Values are text: dates as YYYY-MM-DD, a Select its option, a " +
-            "Status its name, an Object reference the key of an object this agent may use " +
-            "(e.g. ITSM-88), a User the " +
+            "Status its name, a User the " +
             "Atlassian account id. A list sets several values; null clears the attribute. " +
             "Answers with the object read back after the change.",
           inputSchema: z.object({
@@ -384,6 +347,10 @@ export const assetsTools: Toolset = {
                 named.add(String(def.id));
                 if (def.editable !== true || def.system === true)
                   throw new Denied(`${def.name} cannot be edited`);
+                if (def.type === REFERENCE)
+                  throw new Denied(
+                    `${def.name} links to other objects, which this tool does not change`,
+                  );
                 let values = value === null ? [] : Array.isArray(value) ? value : [value];
                 if (values.length > 1 && def.maximumCardinality === 1)
                   throw new Denied(`${def.name} takes one value`);
@@ -409,7 +376,8 @@ export const assetsTools: Toolset = {
                           .map((s) => s.name)
                           .join(", ")}${
                           statuses!.partial
-                            ? ". Only statuses some object of this type already has can be set: Atlassian does not let a service account read the full list."
+                            ? ". Only statuses some object of this type already has can " +
+                              "be set: Atlassian does not let a service account read the full list."
                             : ""
                         }`,
                       );
@@ -430,11 +398,6 @@ export const assetsTools: Toolset = {
                       );
                     return found;
                   });
-                }
-                if (def.type === REFERENCE && values.length) {
-                  const resolved = [];
-                  for (const v of values) resolved.push(await referenceKey(ctx, mark, v, def.name));
-                  values = resolved;
                 }
                 body.push({
                   objectTypeAttributeId: String(def.id),

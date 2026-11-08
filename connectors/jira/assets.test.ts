@@ -468,16 +468,13 @@ test("scopeAql refuses, for a limited agent, AQL that looks through references o
   );
 });
 
-test("jira_assets_update_object checks Select options and references, and refuses an attribute named twice", async () => {
+test("jira_assets_update_object checks Select options, refuses references and an attribute named twice", async () => {
   const h = harness();
   const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
   const { sent } = assets(h);
   const refused: [object, RegExp][] = [
     [{ Location: "Paris" }, /no option Paris. Use one of: Boston, London/],
-    [{ Owner: "IT-99" }, /no object IT-99 in the object schemas/],
-    [{ Owner: "IT-55" }, /no object IT-55/],
-    [{ Owner: "99" }, /object schema this agent is not allowed/],
-    [{ Owner: "not a key" }, /takes an object key/],
+    [{ Owner: "IT-12" }, /Owner links to other objects/],
     [{ Status: "In use", status: "In use" }, /Status is named twice/],
   ];
   for (const [attributes, message] of refused) {
@@ -488,14 +485,11 @@ test("jira_assets_update_object checks Select options and references, and refuse
   assert.equal(sent.filter((s) => s.method === "PUT").length, 0);
   const r = await call(h, key, "jira_assets_update_object", {
     object_id: "11",
-    attributes: { Location: "boston", Owner: "it-12" },
+    attributes: { Location: "boston" },
   });
   assert.equal(r.isError, false, r.text ?? "");
-  const lookup = sent.filter((s) => s.method === "POST").at(-1);
-  assert.deepEqual((lookup!.body as any).qlQuery, 'objectSchemaId = 137 AND (Key = "it-12")');
   assert.deepEqual((sent.find((s) => s.method === "PUT")!.body as any).attributes, [
     { objectTypeAttributeId: "7", objectAttributeValues: [{ value: "Boston" }] },
-    { objectTypeAttributeId: "8", objectAttributeValues: [{ value: "IT-12" }] },
   ]);
 });
 
