@@ -55,7 +55,8 @@ Every delivery (received, refused for its signature, too old, a repeat, an undec
 audited as `events:delivery`, every decision for every trigger (started, filtered, out of
 limits, capped, not started) as `events:run` under the agent, and failed polls as
 `events:poll`. `GET /orgs/{org}/audit?app=jira` reads them. Refused signatures are audited at most
-once a minute per subscription, since anyone can post to the address.
+once a minute per subscription in each replica of the service, since anyone can post to the
+address.
 
 ## When the runner does not answer
 

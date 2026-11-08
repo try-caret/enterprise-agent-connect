@@ -106,7 +106,7 @@ orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in open
 - `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
   cap, the connector's proof (HMAC-SHA256 of the raw body, or of `verify.signs` filled with the
   body and headers; or a token header; constant time) checked
-  before the body is parsed (401; audited at most once a minute per subscription), then type,
+  before the body is parsed (401; audited at most once a minute per subscription in each process), then type,
   delivery id (else the body's SHA-256) and replay window; a signed `webhook.handshake` (Slack's
   url_verification) is answered with its echo as text and queues nothing; a repeated delivery id or an
   undeclared type is audited and ignored. Accepted: the kept fields sealed into `app_events`,
@@ -114,7 +114,7 @@ orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in open
   echoed as text/plain (Graph's handshake, sent before Graph has the subscription, so it proves
   nothing and starts nothing); otherwise a `value[]` batch, each notification's `clientState`
   compared in constant time to the subscription's sealed secret (none matching: 401; any not
-  matching audited at most once a minute), answered 202 at once and worked on after: the
+  matching audited at most once a minute in each process), answered 202 at once and worked on after: the
   message read with the connection (`graph.read`), or a lifecycle event
   (`reauthorizationRequired` renews, `subscriptionRemoved` subscribes again and catches up,
   `missed` catches up).
@@ -158,7 +158,7 @@ Option `onError` (no environment variable; a host wraps `serveFromEnv` from
 `@arbium/enterprise-agent-connect/server`): called once per failure as it happens
 (packages/server/src/report.ts, README "Error reporting": the kinds, ids and error
 class/code/status only, never a message; once a minute per kind, app, organization,
-subscription and bot; a throwing or rejecting hook is logged, never passed on); left out,
+subscription and bot in each process; a throwing or rejecting hook is logged, never passed on); left out,
 nothing is called.
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
 multi-tenant Entra app instead of the customer's own, and then needs

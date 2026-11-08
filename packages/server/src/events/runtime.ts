@@ -54,7 +54,8 @@ const SELF_TTL_MS = 3600_000;
 // A pass holds the watch, renewed while it lasts and dropped after; one that dies mid-pass holds
 // the other processes' passes back this long at most.
 const WATCH_LEASE_SECONDS = 15;
-// One refused delivery per subscription and minute is audited: anyone can post refusals.
+// One refused delivery per subscription and minute is audited, in each process: anyone can
+// post refusals.
 const REFUSED_AUDIT_MS = 60_000;
 
 export const subscriptionAad = (org: string, id: string) =>
