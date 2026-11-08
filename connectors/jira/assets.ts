@@ -130,6 +130,46 @@ async function typeAttributes(
   return attrs;
 }
 
+// The statuses a Status attribute can take: Assets' global statuses plus the schema's own
+// (config/statustype answers only one of the two per call). That list needs the scope
+// read:cmdb-config:jira, which Atlassian does not offer to service accounts (checked November 8,
+// 2026: 15 cmdb scopes offered, not that one; the call answers 401 "scope does not match"). On
+// 401 or 403 the choices are the statuses this attribute already holds on objects of its type:
+// a status no object holds yet cannot be named, and the refusal says so.
+async function statusChoices(
+  ctx: ToolContext,
+  mark: Mark,
+  schemaId: string,
+  typeId: string,
+  attributeId: string,
+): Promise<{ list: Obj[]; partial: boolean }> {
+  const found = new Map<string, Obj>();
+  let refused = false;
+  for (const query of ["", `?objectSchemaId=${schemaId}`]) {
+    const res = await ctx.call({ method: "GET", path: path(`config/statustype${query}`) });
+    mark(res.status);
+    if (res.status === 401 || res.status === 403) {
+      refused = true;
+      break;
+    }
+    if (res.status < 200 || res.status >= 300) throw new VendorFailed(res.status, assetsError(res));
+    for (const s of (res.data ?? []) as Obj[]) found.set(String(s.id), s);
+  }
+  if (!refused) return { list: [...found.values()], partial: false };
+  found.clear();
+  const data = await ok(ctx, mark, {
+    method: "POST",
+    path: path("object/aql?startAt=0&maxResults=200&includeAttributes=true"),
+    body: { qlQuery: `objectSchemaId = ${schemaId} AND objectTypeId = ${typeId}` },
+  });
+  for (const o of (data?.values ?? []) as Obj[])
+    for (const a of (o.attributes ?? []) as Obj[])
+      if (String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "") === attributeId)
+        for (const v of (a.objectAttributeValues ?? []) as Obj[])
+          if (v?.status?.id !== undefined) found.set(String(v.status.id), v.status);
+  return { list: [...found.values()], partial: true };
+}
+
 const attributeKind = (a: Obj) =>
   a.type === 0 || a.type === undefined
     ? (a.defaultType?.name ?? "Text")
@@ -286,7 +326,7 @@ export const assetsTools: Toolset = {
               const defs = await typeAttributes(ctx, mark, typeId, true);
               const byName = new Map(defs.map((a) => [String(a.name).toLowerCase(), a]));
               const editable = defs.filter((a) => a.editable === true && a.system !== true);
-              let statuses: Obj[] | null = null;
+              let statuses: { list: Obj[]; partial: boolean } | null = null;
               const body = [];
               for (const [name, value] of changes) {
                 const def = byName.get(name.trim().toLowerCase());
@@ -303,13 +343,10 @@ export const assetsTools: Toolset = {
                   throw new Denied(`${def.name} takes one value`);
                 if (def.type === STATUS && values.length) {
                   if (!isSchemaId(schemaId)) throw new Error("Object has no schema id");
-                  statuses ??= (await ok(ctx, mark, {
-                    method: "GET",
-                    path: path(`config/statustype?objectSchemaId=${schemaId}`),
-                  })) as Obj[];
+                  statuses ??= await statusChoices(ctx, mark, schemaId, typeId, String(def.id));
                   // A Status attribute may allow only some statuses (typeValueMulti, ids).
                   const allowedIds = ((def.typeValueMulti ?? []) as unknown[]).map(String);
-                  const usable = statuses.filter(
+                  const usable = statuses.list.filter(
                     (s) => !allowedIds.length || allowedIds.includes(String(s.id)),
                   );
                   values = values.map((v) => {
@@ -324,7 +361,11 @@ export const assetsTools: Toolset = {
                       throw new Denied(
                         `${def.name} has no status ${v}. Use one of: ${usable
                           .map((s) => s.name)
-                          .join(", ")}`,
+                          .join(", ")}${
+                          statuses!.partial
+                            ? ". Only statuses some object of this type already has can be set: Atlassian does not let a service account read the full list."
+                            : ""
+                        }`,
                       );
                     return String(found.id);
                   });

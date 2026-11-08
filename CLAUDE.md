@@ -647,19 +647,23 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   attributes are refused when any names another schema. Update reads the object (schema check),
   its type's attributes (`GET objecttype/{id}/attributes`), maps names case-insensitively,
   refuses unknown, `system` or non-`editable` ones and several values for a single-value one,
-  resolves a Status (type 7) by name or id from `GET config/statustype?objectSchemaId=` within
-  the attribute's `typeValueMulti`, then `PUT object/{id}` {objectTypeId, attributes: only the
-  named ones} and reads the object back. No create or delete. Scopes per capability (each lists
-  its own reads, since neither is required): read `read:servicedesk-request` (workspace
-  discovery), `read:cmdb-object:jira`, `read:cmdb-attribute:jira`; update those plus
-  `read:cmdb-config:jira` (statuses) and `write:cmdb-object:jira`. The service account also
-  needs a role on each object schema (Object viewer to read, Object schema users to change).
-  Unconfirmed: that service-account OAuth 2.0 credentials can be given these scopes at all
-  (Atlassian's service account page says scopes can be selected for Jira, Confluence, Goals and
-  Projects, and names neither JSM nor Assets), that a service account without a Service
-  Management agent seat may call the servicedeskapi workspace endpoint, and that a PUT naming
-  some attributes leaves the others as they are (the OpenAPI does not say; the tool assumes it).
-  Not yet run against a real site. Sources: developer.atlassian.com/cloud/assets/swagger.v3.json
+  resolves a Status (type 7) by name or id within the attribute's `typeValueMulti` from `GET
+  config/statustype` plus `?objectSchemaId=` (global and schema statuses come from separate
+  calls). That list needs `read:cmdb-config:jira`, which service-account credentials are not
+  offered, so on 401/403 the choices are the statuses the attribute already holds on objects of
+  its type (one AQL page of 200) and the refusal says so. Then `PUT object/{id}` {objectTypeId,
+  attributes: only the named ones} and reads the object back. No create or delete. Scopes per
+  capability (each lists its own reads, since neither is required): read
+  `read:servicedesk-request` (workspace discovery), `read:cmdb-object:jira`,
+  `read:cmdb-attribute:jira`; update those plus `write:cmdb-object:jira`. Checked live November
+  8, 2026: a service account's OAuth 2.0 credential is offered 15 cmdb scopes (not
+  `read:cmdb-config:jira`; config/statustype answers 401 "scope does not match"); the workspace
+  endpoint answers for a service account with no Service Management seat (IDC); with a JSM agent
+  seat and no schema role a service account searched, read and changed objects on our test site
+  (the schema role picker does not list service accounts); without the seat a JSM project's
+  issues are invisible to it even as a Jira admin. Still unconfirmed: that a PUT naming some
+  attributes leaves the others as they are (the OpenAPI does not say; the tool assumes it).
+  Sources: developer.atlassian.com/cloud/assets/swagger.v3.json
   (servers, object/aql, object/{id}, objecttype/{id}/attributes, config/statustype,
   ObjectIn, ObjectAttributeValueIn, ObjectTypeAttribute.type), the Jira Service Management
   swagger.v3.json (Get assets workspaces, `read:servicedesk-request`),

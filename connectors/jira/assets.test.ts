@@ -110,7 +110,7 @@ const laptop = (id: string, status: string, received: string, embed: boolean, ty
   ),
 });
 
-type Options = { fail?: number };
+type Options = { fail?: number; statusRefused?: boolean };
 
 function assets(h: ReturnType<typeof harness>, options: Options = {}) {
   const sent: VendorRequest[] = [];
@@ -174,6 +174,8 @@ function assets(h: ReturnType<typeof harness>, options: Options = {}) {
     if (p === "objecttype/505/attributes") return { status: 200, data: ATTRS };
     if (p === "objecttype/77/attributes")
       return { status: 200, data: ATTRS.map((a) => ({ ...a, objectType: OTHER })) };
+    if (p === "config/statustype" && options.statusRefused)
+      return { status: 401, data: { code: 401, message: "Unauthorized; scope does not match" } };
     if (p === "config/statustype")
       return {
         status: 200,
@@ -339,6 +341,30 @@ test("jira_assets_update_object refuses before any write: other schema, unknown,
     assert.equal(h.state.audit.at(-1)!.decision, "denied");
   }
   assert.equal(sent.filter((s) => s.method === "PUT").length, 0);
+});
+
+test("without the status list (service accounts get no read:cmdb-config) statuses come from the type's objects", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
+  const { sent } = assets(h, { statusRefused: true });
+  const held = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Status: "In stock" },
+  });
+  assert.equal(held.isError, false, held.text ?? "");
+  const put = sent.filter((s) => s.method === "PUT");
+  assert.deepEqual((put[0].body as any).attributes, [
+    { objectTypeAttributeId: "3", objectAttributeValues: [{ value: "20" }] },
+  ]);
+  const aql = sent.find((s) => s.method === "POST");
+  assert.deepEqual(aql!.body, { qlQuery: "objectSchemaId = 137 AND objectTypeId = 505" });
+  const unheld = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Status: "In use" },
+  });
+  assert.equal(unheld.isError, true);
+  assert.match(unheld.text!, /no status In use\. Use one of: In stock\. Only statuses some object/);
+  assert.equal(sent.filter((s) => s.method === "PUT").length, 1);
 });
 
 test("Assets 401, 403 and 404 come back as Jira errors do, 403 with the capability's hint", async () => {

@@ -31,10 +31,10 @@
     },
     {
       "title": "Give it a role on the Assets object schemas",
-      "body": "Assets keeps its own access, per object schema: without a role there, Assets searches find nothing and reads and changes are refused. Give the service account Object viewer to let agents read, or Object schema users to let them change objects. If Atlassian Administration lists Assets as an app of its own, also set Assets to User in the service account's app roles. You can narrow each agent to specific object schemas here later.",
+      "body": "Assets is part of Jira Service Management: the service account needs Jira Service Management access as User (an agent seat), or Assets finds nothing. Assets also keeps its own access per object schema. The schema's role picker may not list service accounts; with the agent seat, schemas that let agents in by default need no role. Otherwise give it Object viewer to let agents read, or Object schema users to let them change objects, or add it to a group that has that role. You can narrow each agent to specific object schemas here later.",
       "capabilities": ["assets_read", "assets_update"],
       "click": [
-        "Atlassian Administration > Directory > Service accounts > {brand.microsoft.appName} > app roles: Assets > User (only if Assets is listed as its own app)",
+        "Atlassian Administration > Directory > Service accounts > {brand.microsoft.appName} > app roles: Jira Service Management > User",
         "Jira > Assets > the object schema > Configure > Roles",
         "Object viewer (read) or Object schema users (change objects) > add {brand.microsoft.appName} > Save"
       ],
@@ -130,7 +130,6 @@
         "read:servicedesk-request",
         "read:cmdb-object:jira",
         "read:cmdb-attribute:jira",
-        "read:cmdb-config:jira",
         "write:cmdb-object:jira"
       ],
       "permissions": [],
