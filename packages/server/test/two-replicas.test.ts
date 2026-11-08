@@ -1,0 +1,1105 @@
+import assert from "node:assert/strict";
+import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { after, before, test } from "node:test";
+import { z } from "zod";
+import { parseConnector } from "../../connector-kit/src/connector.ts";
+import type { VendorRequest, VendorResponse } from "../../connector-kit/src/types.ts";
+import { createEventsRuntime, subscriptionAad } from "../src/events/runtime.ts";
+import { createEventsStore, type EventsStore } from "../src/events/store.ts";
+import { migrate } from "../src/migrate.ts";
+import { CredentialKey } from "../src/secrets.ts";
+import { connectDatabase, createStore } from "../src/store.ts";
+import { hashReplyToken } from "../src/teams/activity.ts";
+import type { BotClient } from "../src/teams/bot.ts";
+import type { BotAuth } from "../src/teams/jwt.ts";
+import type { Caps, EventRunInput, RunInput, TriggerRunner } from "../src/teams/runner.ts";
+import { botAad, createTeamsRuntime } from "../src/teams/runtime.ts";
+import { createTeamsStore } from "../src/teams/store.ts";
+import { teamsConnector } from "./helpers.ts";
+
+// The service as two processes on one database: each test drives two runtimes against the
+// scratch database (TEST_DATABASE_URL), each process's step held open where the other's matters.
+// In a schema of its own: the other files' runtimes claim whatever is due in theirs.
+const url = process.env.TEST_DATABASE_URL;
+const sql = url ? connectDatabase(url) : null;
+const SCHEMA = `two_replicas_${randomBytes(4).toString("hex")}`;
+before(async () => {
+  if (sql) await migrate(sql, SCHEMA, () => {});
+});
+after(async () => {
+  await sql?.begin(async (tx) => {
+    await tx`set local client_min_messages = warning`;
+    await tx.unsafe(`drop schema ${SCHEMA} cascade`);
+  });
+  await sql?.end();
+});
+
+const key = new CredentialKey(Buffer.alloc(32, 7).toString("base64"));
+const PUBLIC = "https://svc.example/agent-connect";
+const MAILBOX = "helper@example.com";
+const SECRET = "s".repeat(40);
+const name = (table: string) => sql!(`${SCHEMA}.${table}`);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const lapseLeases = () => sql!`update ${name("leases")} set expires_at = now() - interval '1 second'`;
+// Until `lease` is held again (its holder renewed it), for a second at most.
+async function renewed(lease: string) {
+  for (let i = 0; i < 100; i++) {
+    const [held] = await sql!`
+      select 1 from ${name("leases")} where name = ${lease} and expires_at > now()`;
+    if (held) return;
+    await sleep(10);
+  }
+}
+
+// Holds whoever calls `pass` until `open`; `entered` says one has arrived.
+function gate() {
+  let open!: () => void;
+  let enter!: () => void;
+  const opened = new Promise<void>((r) => (open = r));
+  const entered = new Promise<void>((r) => (enter = r));
+  return { open, entered, pass: () => (enter(), opened) };
+}
+
+// Holds each caller until `n` have called, or for 200 ms: one holding a lock the others want
+// cannot be joined by them.
+function barrier(n: number) {
+  let arrived = 0;
+  let open!: () => void;
+  const all = new Promise<void>((r) => (open = r));
+  return async () => {
+    if (++arrived >= n) open();
+    await Promise.race([all, sleep(200)]);
+  };
+}
+
+const running = { status: "running" as const, costCents: 0, atBudget: false };
+
+function fakeRunner(over: Partial<TriggerRunner> = {}) {
+  const started: (RunInput | EventRunInput)[] = [];
+  const runner: TriggerRunner = {
+    id: "fake",
+    settings: z.strictObject({}),
+    unready: async () => null,
+    verify: async () => {},
+    async start(input) {
+      started.push(input);
+      return `s-${input.runId}`;
+    },
+    async startEvent(input) {
+      started.push(input);
+      return `s-${input.runId}`;
+    },
+    continue: async () => {},
+    state: async () => running,
+    stop: async () => {},
+    ...over,
+  };
+  return { runner, started };
+}
+
+// ---- app events ----
+
+const app = parseConnector(
+  {
+    ...JSON.parse(
+      readFileSync(
+        new URL("../../../connectors/outlook-mail/connector.json", import.meta.url),
+        "utf8",
+      ),
+    ),
+    id: "app",
+    name: "App",
+    events: {
+      types: [{ id: "received", label: "Received" }],
+      fields: { mailbox: "mailbox", id: "message.id", from: "message.from" },
+      limits: { mailbox: "mailbox" },
+      poll: {
+        request: { method: "GET", path: "/items" },
+        items: "items",
+        cursor: "message.updated",
+        deliveryId: ["message.id"],
+        types: [{ type: "received" }],
+      },
+      graph: {
+        per: "mailbox",
+        resource: "users/{value}/messages",
+        changeType: "created",
+        type: "received",
+        maxMinutes: 10070,
+        read: { method: "GET", path: "/v1.0/users/{value}/messages/{id}" },
+        delta: { method: "GET", path: "/v1.0/users/{value}/delta?since={since}" },
+        wrap: "message",
+        deliveryId: "message.id",
+        received: "message.received",
+        own: ["from"],
+        only: {},
+      },
+    },
+  },
+  "app",
+);
+
+const item = (id: string) => ({
+  mailbox: MAILBOX,
+  message: { id, updated: new Date(Date.now() + 1000).toISOString() },
+});
+
+async function eventsSetup(
+  source: "poll" | "graph",
+  over: Partial<TriggerRunner> = {},
+  caps: Partial<Caps> = {},
+) {
+  const store = createStore(sql!, SCHEMA);
+  const events = createEventsStore(sql!, SCHEMA);
+  const org = randomUUID();
+  await store.ensureOrganization(org);
+  const [{ id: agentId }] = await sql!`
+    insert into ${name("agents")} (organization_id, name, key_hash, status)
+    values (${org}, 'Helper', ${randomUUID().replaceAll("-", "").repeat(2)}, 'active')
+    returning id::text`;
+  await sql!`insert into ${name("connections")}
+               (organization_id, connector_id, credential, credential_key_id, status, capabilities)
+             values (${org}, 'app', ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["read"])})`;
+  await sql!`insert into ${name("grants")} (agent_id, connector_id, capabilities, limits)
+             values (${agentId}, 'app', ${sql!.array(["read"])}, ${sql!.json({ mailbox: MAILBOX })})`;
+  // A pass and a poll round cover every organization: earlier tests' are finished with.
+  await sql!`update ${name("event_runs")} set state = 'ended' where state in ('starting', 'running')`;
+  await sql!`update ${name("event_subscriptions")} set polled_at = now()`;
+  const id = randomUUID();
+  const sealed = source === "graph" ? key.seal({ secret: SECRET }, subscriptionAad(org, id)) : null;
+  const sub = (await events.createSubscription({
+    id,
+    organizationId: org,
+    connectorId: "app",
+    source,
+    secret: sealed?.ciphertext ?? null,
+    secretKeyId: sealed?.keyId ?? null,
+    filter: "",
+    intervalSeconds: 300,
+    cursor: new Date(Date.now() - 60_000).toISOString(),
+    createdBy: "ann",
+  }))!;
+  const { runner, started } = fakeRunner(over);
+  await events.setTrigger(org, {
+    agentId,
+    connectorId: "app",
+    enabled: true,
+    eventTypes: ["received"],
+    conditions: [],
+    prompt: "Answer.",
+    runner: runner.id,
+    settings: {},
+    secret: null,
+    secretKeyId: null,
+    managedAgentId: null,
+    environmentId: null,
+    vaultIds: [],
+    budgetCents: 50,
+    maxRunsPerHour: 100,
+    maxCentsPerDay: 100_000,
+    maxConcurrent: 10,
+    updatedBy: "ann",
+    ...caps,
+  });
+  const calls: VendorRequest[] = [];
+  const items: unknown[] = [];
+  const subscribed = new Set<string>();
+  // What a test holds a call on, before the app answers.
+  const before = { call: async (_req: VendorRequest) => {} };
+  // Slow enough for the other process to reach the same step.
+  async function appCall(_org: string, _app: string, req: VendorRequest): Promise<VendorResponse> {
+    calls.push(req);
+    await before.call(req);
+    await sleep(30);
+    if (req.method === "POST" && req.path === "/v1.0/subscriptions") {
+      const body = req.body as { resource: string; expirationDateTime: string };
+      if (subscribed.has(body.resource))
+        return { status: 409, data: { error: { code: "Conflict" } } };
+      subscribed.add(body.resource);
+      return {
+        status: 201,
+        data: { id: `g-${subscribed.size}`, expirationDateTime: body.expirationDateTime },
+      };
+    }
+    if (req.path.includes("/delta"))
+      return {
+        status: 200,
+        data: { value: [], "@odata.deltaLink": "https://graph.example/v1.0/delta?t=done" },
+      };
+    if (req.path === "/items") return { status: 200, data: { items } };
+    return { status: 404, data: null };
+  }
+  // One process of the service.
+  const pod = (store2: EventsStore = events) =>
+    createEventsRuntime({
+      store,
+      events: store2,
+      key,
+      connectors: new Map([["app", app]]),
+      appCall,
+      runners: new Map([[runner.id, runner]]),
+      publicUrl: PUBLIC,
+    });
+  return { org, sub, store, events, calls, items, started, pod, before };
+}
+
+test(
+  "a lease is its holder's until dropped or lapsed, and only its holder renews or drops it",
+  { skip: !sql },
+  async () => {
+    const events = createEventsStore(sql!, SCHEMA);
+    const lease = `test:${randomUUID()}`;
+    const first = (await events.takeLease(lease, 60))!;
+    assert.ok(first);
+    assert.equal(await events.takeLease(lease, 60), null, "held");
+    assert.equal(await events.takeLease(lease, 60, first), first, "renewed by its holder");
+    await lapseLeases();
+    const second = (await events.takeLease(lease, 60))!;
+    assert.ok(second, "a lapsed lease is free");
+    await events.dropLease(lease, first);
+    assert.equal(await events.takeLease(lease, 60), null, "the old holder's drop does nothing");
+    await events.dropLease(lease, second);
+    assert.ok(await events.takeLease(lease, 60), "dropped");
+  },
+);
+
+test(
+  "two processes' syncs of a subscription make one Graph subscription for its watch",
+  { skip: !sql },
+  async () => {
+    const t = await eventsSetup("graph");
+    await Promise.all([t.pod().syncApp(t.org, "app"), t.pod().syncApp(t.org, "app")]);
+    const posts = t.calls.filter((c) => c.method === "POST" && c.path === "/v1.0/subscriptions");
+    assert.equal(posts.length, 1);
+    const [w] = await t.events.watches(t.sub.id);
+    assert.ok(w.remoteId, "the refused one did not clear its id");
+    assert.equal(w.lastError, null);
+  },
+);
+
+test(
+  "a lifecycle notification waits for another process's work on the subscription",
+  { skip: !sql },
+  async () => {
+    const t = await eventsSetup("graph");
+    const a = t.pod();
+    await a.syncApp(t.org, "app");
+    const [w] = await t.events.watches(t.sub.id);
+    t.calls.length = 0;
+    const lease = `graph-sync:${t.sub.id}`;
+    const token = (await t.events.takeLease(lease, 60))!;
+    const b = t.pod();
+    const res = await b.inbound(
+      t.sub.id,
+      new Request(`${PUBLIC}/events/${t.sub.id}`, {
+        method: "POST",
+        body: JSON.stringify({
+          value: [
+            {
+              subscriptionId: w.remoteId,
+              clientState: SECRET,
+              lifecycleEvent: "reauthorizationRequired",
+            },
+          ],
+        }),
+      }),
+    );
+    assert.equal(res.status, 202);
+    await sleep(100);
+    assert.equal(t.calls.length, 0, "nothing while another process holds it");
+    await t.events.dropLease(lease, token);
+    await b.settle();
+    assert.equal(t.calls[0]?.method, "PATCH");
+  },
+);
+
+test(
+  "a sync that loses its lease to another process makes no further Graph call",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const t = await eventsSetup("graph");
+    const posting = gate();
+    t.before.call = async (req) => {
+      if (req.method === "POST") await posting.pass();
+    };
+    let renewed!: () => void;
+    const renewal = new Promise<void>((r) => (renewed = r));
+    const renewing = {
+      ...t.events,
+      async takeLease(...args: Parameters<EventsStore["takeLease"]>) {
+        const token = await t.events.takeLease(...args);
+        if (args[2]) renewed();
+        return token;
+      },
+    };
+    const syncing = t.pod(renewing).syncApp(t.org, "app");
+    await posting.entered;
+    // Its Graph call stalled past the lease's term, and another process took the lease.
+    await lapseLeases();
+    assert.ok(await t.events.takeLease(`graph-sync:${t.sub.id}`, 60));
+    ctx.mock.timers.tick(20_000);
+    await renewal;
+    posting.open();
+    await syncing;
+    assert.deepEqual(
+      t.calls.map((c) => c.method),
+      ["POST"],
+      "no catch-up after its renewal found the lease taken",
+    );
+  },
+);
+
+test(
+  "a finished sync leaves its lease free, with a renewal on its way or not",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const t = await eventsSetup("graph");
+    const posting = gate();
+    t.before.call = async (req) => {
+      if (req.method === "POST") await posting.pass();
+    };
+    const renewing = gate();
+    let dropped!: () => void;
+    const drop = new Promise<void>((r) => (dropped = r));
+    let renewed!: () => void;
+    const renewal = new Promise<void>((r) => (renewed = r));
+    const slow = {
+      ...t.events,
+      async takeLease(...args: Parameters<EventsStore["takeLease"]>) {
+        if (!args[2]) return t.events.takeLease(...args);
+        await renewing.pass();
+        const token = await t.events.takeLease(...args);
+        renewed();
+        return token;
+      },
+      async dropLease(...args: Parameters<EventsStore["dropLease"]>) {
+        await t.events.dropLease(...args);
+        dropped();
+      },
+    };
+    const syncing = t.pod(slow).syncApp(t.org, "app");
+    await posting.entered;
+    ctx.mock.timers.tick(20_000);
+    // A renewal is on its way to the database when the sync finishes.
+    await renewing.entered;
+    posting.open();
+    await Promise.race([drop, sleep(200)]);
+    renewing.open();
+    await Promise.all([syncing, renewal]);
+    assert.ok(await t.events.takeLease(`graph-sync:${t.sub.id}`, 60), "free for the next sync");
+  },
+);
+
+test(
+  "removing a subscription waits for another process's sync, and deletes what it made",
+  { skip: !sql },
+  async () => {
+    const t = await eventsSetup("graph");
+    const posting = gate();
+    t.before.call = async (req) => {
+      if (req.method === "POST") await posting.pass();
+    };
+    const syncing = t.pod().syncApp(t.org, "app");
+    await posting.entered;
+    const removing = t
+      .pod()
+      .releaseAll(t.sub, () => t.events.deleteSubscription(t.org, t.sub.id));
+    await sleep(100);
+    posting.open();
+    await Promise.all([syncing, removing]);
+    assert.deepEqual(
+      t.calls.filter((c) => c.method === "DELETE").map((c) => c.path),
+      ["/v1.0/subscriptions/g-1"],
+    );
+    assert.equal(await t.events.subscription(t.sub.id), null);
+  },
+);
+
+// Polled just now, so not due until its interval.
+async function notDue(id: string) {
+  await sql!`update ${name("event_subscriptions")} set polled_at = now() where id = ${id}`;
+}
+
+// The events store, telling when a try for `lease` found it held.
+function refusedOnce(events: EventsStore, lease: string) {
+  let refused!: () => void;
+  const tried = new Promise<void>((r) => (refused = r));
+  const store = {
+    ...events,
+    async takeLease(...args: Parameters<EventsStore["takeLease"]>) {
+      const token = await events.takeLease(...args);
+      if (args[0] === lease && !token) refused();
+      return token;
+    },
+  };
+  return { store, tried };
+}
+
+test(
+  "an unsubscribe waiting on another process's long work is answered busy, not left hanging",
+  { skip: !sql, timeout: 10_000 },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const t = await eventsSetup("graph");
+    const lease = `graph-sync:${t.sub.id}`;
+    assert.ok(await t.events.takeLease(lease, 60), "the other process's sync");
+    const { store, tried } = refusedOnce(t.events, lease);
+    const removing = t
+      .pod(store)
+      .releaseAll(t.sub, () => t.events.deleteSubscription(t.org, t.sub.id));
+    await tried;
+    ctx.mock.timers.tick(15_000);
+    await assert.rejects(removing, /Try again in a minute/);
+    assert.ok(await t.events.subscription(t.sub.id), "nothing removed");
+  },
+);
+
+test(
+  "a trigger change waiting on another process's long work is left to the next round",
+  { skip: !sql, timeout: 10_000 },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const t = await eventsSetup("graph");
+    await notDue(t.sub.id);
+    const lease = `graph-sync:${t.sub.id}`;
+    const other = (await t.events.takeLease(lease, 60))!;
+    const { store, tried } = refusedOnce(t.events, lease);
+    const a = t.pod(store);
+    const changing = a.syncApp(t.org, "app");
+    await tried;
+    ctx.mock.timers.tick(15_000);
+    await changing;
+    assert.equal(t.calls.length, 0);
+    // The other process's sync, which read the triggers before the change, ends its round.
+    await t.events.polled(t.sub.id, null, null);
+    await t.events.dropLease(lease, other);
+    await a.pollDue();
+    const [w] = await t.events.watches(t.sub.id);
+    assert.ok(w?.remoteId, "subscribed at the scheduler's next round");
+  },
+);
+
+test(
+  "a lifecycle notification waiting on another process's long work is left to the next round",
+  { skip: !sql, timeout: 10_000 },
+  async (ctx) => {
+    const t = await eventsSetup("graph");
+    await t.pod().syncApp(t.org, "app");
+    const [w] = await t.events.watches(t.sub.id);
+    await notDue(t.sub.id);
+    ctx.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const lease = `graph-sync:${t.sub.id}`;
+    const other = (await t.events.takeLease(lease, 60))!;
+    const { store, tried } = refusedOnce(t.events, lease);
+    const b = t.pod(store);
+    t.calls.length = 0;
+    const res = await b.inbound(
+      t.sub.id,
+      new Request(`${PUBLIC}/events/${t.sub.id}`, {
+        method: "POST",
+        body: JSON.stringify({
+          value: [
+            { subscriptionId: w.remoteId, clientState: SECRET, lifecycleEvent: "subscriptionRemoved" },
+          ],
+        }),
+      }),
+    );
+    assert.equal(res.status, 202);
+    await tried;
+    ctx.mock.timers.tick(15_000);
+    await b.settle();
+    assert.equal(t.calls.length, 0);
+    const [lapsed] = await t.events.watches(t.sub.id);
+    assert.equal(lapsed.remoteId, null, "Microsoft's removal recorded");
+    await t.events.polled(t.sub.id, null, null);
+    await t.events.dropLease(lease, other);
+    await b.pollDue();
+    assert.ok(
+      t.calls.some((c) => c.method === "POST" && c.path === "/v1.0/subscriptions"),
+      "subscribed again at the scheduler's next round",
+    );
+  },
+);
+
+test("one process makes each due poll", { skip: !sql }, async () => {
+  const t = await eventsSetup("poll");
+  const first = t.pod().pollDue();
+  while (!t.calls.length) await sleep(5);
+  // The first process is waiting on the app.
+  await t.pod().pollDue();
+  await first;
+  assert.equal(t.calls.filter((c) => c.path === "/items").length, 1);
+});
+
+test("two processes cannot both take a trigger's last run slot", { skip: !sql }, async () => {
+  const t = await eventsSetup("poll", {}, { maxConcurrent: 1 });
+  t.items.push(item("i1"), item("i2"));
+  // A stopped process queues both without working on them.
+  const queueing = t.pod();
+  await queueing.stop();
+  await queueing.poll(t.sub);
+  // Each process's count waits for the other's, so without the lock both say there is room.
+  const counted = barrier(2);
+  const racing = {
+    ...t.events,
+    runCounts: async (...args: Parameters<EventsStore["runCounts"]>) => {
+      const counts = await t.events.runCounts(...args);
+      await counted();
+      return counts;
+    },
+  };
+  const [a, b] = [t.pod(racing), t.pod(racing)];
+  a.kick();
+  b.kick();
+  await Promise.all([a.idle(), b.idle()]);
+  assert.equal(t.started.length, 1);
+  const audit = await t.store.recentAudit(t.org, 50, { agentId: null, connectorId: null });
+  assert.ok(audit.some((e) => e.reason === "Capped: runs at once reached"));
+});
+
+test("one process makes each pass over an app's running runs", { skip: !sql }, async () => {
+  let reads = 0;
+  const t = await eventsSetup("poll", {
+    state: async () => {
+      reads++;
+      return running;
+    },
+  });
+  t.items.push(item("i1"));
+  const [a, b] = [t.pod(), t.pod()];
+  await a.poll(t.sub);
+  await a.idle();
+  await Promise.all([a.watchTurn(), b.watchTurn()]);
+  assert.equal(reads, 1);
+  await lapseLeases();
+  await b.watchTurn();
+  assert.equal(reads, 2, "the next tick's pass, by the other process");
+});
+
+test(
+  "overlapping passes over an app's runs leave a finished run as the first recorded it",
+  { skip: !sql },
+  async () => {
+    let reads = 0;
+    const t = await eventsSetup("poll", {
+      // The second pass read the run before the first recorded it, and finds the session gone.
+      state: async () =>
+        ++reads === 1
+          ? { status: "idle", costCents: 30, atBudget: false }
+          : (await sleep(50), { gone: "The session is gone" }),
+    });
+    t.items.push(item("i1"));
+    const [a, b] = [t.pod(), t.pod()];
+    await a.poll(t.sub);
+    await a.idle();
+    await Promise.all([a.watch(), b.watch()]);
+    const [run] = await sql!`
+      select r.state, r.error, r.cost_cents from ${name("event_runs")} r
+        join ${name("agents")} a on a.id = r.agent_id
+       where a.organization_id = ${t.org}`;
+    assert.deepEqual({ ...run }, { state: "ended", error: null, cost_cents: 30 });
+  },
+);
+
+test(
+  "a pass over an app's runs keeps the watch while it lasts, from every process",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const reading = gate();
+    let reads = 0;
+    const t = await eventsSetup("poll", {
+      state: async () => {
+        if (++reads === 1) await reading.pass();
+        return running;
+      },
+    });
+    t.items.push(item("i1"));
+    const [a, b] = [t.pod(), t.pod()];
+    await a.poll(t.sub);
+    await a.idle();
+    const pass = a.watchTurn();
+    await reading.entered;
+    // Past the lease's term, which the pass renews.
+    await lapseLeases();
+    ctx.mock.timers.tick(5_000);
+    await renewed("events-watch");
+    await b.watchTurn();
+    assert.equal(reads, 1, "not while the other process's pass lasts");
+    await lapseLeases();
+    await a.watchTurn();
+    assert.equal(reads, 1, "nor a second one of its own");
+    reading.open();
+    await pass;
+    await b.watchTurn();
+    assert.equal(reads, 2, "the next one, once it is done");
+  },
+);
+
+// ---- Teams ----
+
+const TENANT = "33333333-3333-3333-3333-333333333333";
+const PERSON = "44444444-4444-4444-4444-444444444444";
+const SERVICE_URL = "https://smba.trafficmanager.net/amer/";
+const auth = { token: async () => () => {} } as unknown as BotAuth;
+type Sent = { method: string; path: string; body?: { type?: string; text?: string } };
+
+async function teamsSetup(over: Partial<TriggerRunner> = {}, caps: Partial<Caps> = {}) {
+  const store = createStore(sql!, SCHEMA);
+  const teams = createTeamsStore(sql!, SCHEMA);
+  // A pass covers every organization: earlier tests' sessions are finished with.
+  await sql!`update ${name("teams_runs")} set state = 'ended' where state in ('starting', 'running')`;
+  const org = randomUUID();
+  await store.ensureOrganization(org);
+  const [{ id: agentId }] = await sql!`
+    insert into ${name("agents")} (organization_id, name, key_hash, status)
+    values (${org}, 'Triage', ${randomUUID().replaceAll("-", "").repeat(2)}, 'active')
+    returning id::text`;
+  await sql!`insert into ${name("connections")}
+               (organization_id, connector_id, credential, credential_key_id, status, capabilities)
+             values (${org}, 'teams', ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["respond"])})`;
+  await sql!`insert into ${name("grants")} (agent_id, connector_id, capabilities)
+             values (${agentId}, 'teams', ${sql!.array(["respond"])})`;
+  const botId = randomUUID();
+  const botAppId = randomUUID();
+  const sealed = key.seal({ private_key: "pk" }, botAad(org, botId));
+  await sql!`insert into ${name("teams_bots")}
+               (id, organization_id, agent_id, bot_app_id, tenant_id, display_name, status, config,
+                credential, credential_key_id)
+             values (${botId}, ${org}, ${agentId}, ${botAppId}, ${TENANT}, 'Triage', 'connected',
+                     ${sql!.json({ certificate: "cert" })}, ${sealed.ciphertext}, ${sealed.keyId})`;
+  const { runner, started } = fakeRunner(over);
+  await teams.setTrigger(org, {
+    agentId,
+    enabled: true,
+    runner: runner.id,
+    settings: {},
+    secret: null,
+    secretKeyId: null,
+    managedAgentId: null,
+    environmentId: null,
+    vaultIds: [],
+    budgetCents: 50,
+    maxRunsPerHour: 100,
+    maxCentsPerDay: 100_000,
+    maxConcurrent: 10,
+    replyMode: "all",
+    allowedTeams: [],
+    allowedPeople: [PERSON],
+    anyoneInOrganization: false,
+    updatedBy: "ann",
+    ...caps,
+  });
+  const sent: Sent[] = [];
+  const bots = {
+    connector: async (_bot: unknown, _url: string, req: Sent) => {
+      sent.push(req);
+      return { status: 200, data: { id: "900", value: [] } };
+    },
+    graph: async () => ({ status: 200, data: { value: [] }, headers: {} }),
+  } as unknown as BotClient;
+  const pod = () =>
+    createTeamsRuntime({
+      store,
+      teams,
+      key,
+      auth,
+      bots,
+      runners: new Map([[runner.id, runner]]),
+      connector: teamsConnector,
+      publicUrl: PUBLIC,
+    });
+  type Pod = ReturnType<typeof pod>;
+  let n = 0;
+  // A direct message from PERSON, each in its own chat so none is held behind another.
+  async function send(to: Pod, text: string) {
+    n++;
+    const res = await to.inbound(
+      botAppId,
+      new Request(`${PUBLIC}/teams/bots/${botAppId}/messages`, {
+        method: "POST",
+        headers: { authorization: "Bearer x", "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "message",
+          id: `act-${n}`,
+          serviceUrl: SERVICE_URL,
+          channelId: "msteams",
+          recipient: { id: `28:${botAppId}` },
+          from: { id: "29:person", aadObjectId: PERSON, name: "Ann" },
+          conversation: { id: `a:chat-${n}`, conversationType: "personal" },
+          channelData: { tenant: { id: TENANT } },
+          text,
+        }),
+      }),
+    );
+    assert.equal(res.status, 200);
+  }
+  const told = () => sent.filter((s) => s.body?.type === "message").map((s) => s.body!.text);
+  return { org, agentId, botId, teams, sent, started, pod, send, told };
+}
+
+test("two processes cannot both take an agent's last run slot", { skip: !sql }, async () => {
+  // The first process has read its counts and is held in the checks after them.
+  const held = gate();
+  let first = true;
+  const t = await teamsSetup(
+    {
+      unready: async () => {
+        if (first) {
+          first = false;
+          await held.pass();
+        }
+        return null;
+      },
+    },
+    { maxConcurrent: 1 },
+  );
+  const [a, b] = [t.pod(), t.pod()];
+  await t.send(a, "one");
+  await held.entered;
+  await t.send(b, "two");
+  await b.idle();
+  held.open();
+  await a.idle();
+  assert.equal(t.started.length, 1);
+  assert.deepEqual(t.told(), [
+    "I'm busy in other conversations right now. Please try again in a few minutes.",
+  ]);
+});
+
+// The agent's one session, read as a message about to continue it reads it.
+async function idleSession(t: Awaited<ReturnType<typeof teamsSetup>>, turns: number) {
+  await sql!`update ${name("teams_runs")} set state = 'idle', turns = ${turns}
+              where agent_id = ${t.agentId}`;
+  const [{ threadId }] = await sql!`
+    select thread_id as "threadId" from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+  return (await t.teams.latestRun(t.botId, threadId))!;
+}
+
+const CAPS = { budgetCents: 50, maxRunsPerHour: 100, maxCentsPerDay: 100_000, maxConcurrent: 10 };
+
+test(
+  "a message continuing a session it read before another's turn does not take it past that",
+  { skip: !sql },
+  async () => {
+    const t = await teamsSetup();
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    // Two messages read the session at its 19th turn; the first's turn is over by the time
+    // the second is admitted.
+    const read = await idleSession(t, 19);
+    const next = (i: number) => ({
+      agentId: t.agentId,
+      botId: t.botId,
+      conversationId: read.conversationId,
+      threadId: read.threadId,
+      triggerActivityId: `act-next-${i}`,
+      replyTokenHash: hashReplyToken(`token-next-${i}`),
+      requestedBy: PERSON,
+      runner: "fake",
+    });
+    const first = await t.teams.admit(next(1), read, CAPS);
+    assert.ok("run" in first && first.run);
+    await idleSession(t, 20);
+    assert.deepEqual(await t.teams.admit(next(2), read, CAPS), { run: null });
+    const [run] = await sql!`select turns from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+    assert.equal(run.turns, 20);
+  },
+);
+
+test(
+  "a continued turn is answered busy when the previous image starts one in the thread first",
+  { skip: !sql },
+  async () => {
+    const t = await teamsSetup();
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const read = await idleSession(t, 1);
+    // The previous image, during a rollout, takes no advisory lock: its start is in, not yet
+    // committed, when this image's continued turn is written.
+    const previous = gate();
+    const starting = sql!.begin(async (tx) => {
+      await tx`insert into ${name("teams_runs")}
+                 (agent_id, bot_id, conversation_id, thread_id, trigger_activity_id,
+                  reply_token_hash, requested_by_aad_id, runner, state)
+               values (${t.agentId}, ${t.botId}, ${read.conversationId}, ${read.threadId},
+                       'act-old', ${hashReplyToken("token-old")}, ${PERSON}, 'fake', 'starting')`;
+      await previous.pass();
+    });
+    await previous.entered;
+    const admitting = t.teams.admit(
+      {
+        agentId: t.agentId,
+        botId: t.botId,
+        conversationId: read.conversationId,
+        threadId: read.threadId,
+        triggerActivityId: "act-new",
+        replyTokenHash: hashReplyToken("token-new"),
+        requestedBy: PERSON,
+        runner: "fake",
+      },
+      read,
+      CAPS,
+    );
+    // Until the continued turn waits on the previous image's row.
+    for (let i = 0; i < 200; i++) {
+      const [{ waiting }] = await sql!`
+        select count(*)::int as waiting from pg_stat_activity
+         where wait_event_type = 'Lock' and query like ${`%${SCHEMA}%teams_runs%`}`;
+      if (waiting) break;
+      await sleep(10);
+    }
+    previous.open();
+    await starting;
+    assert.deepEqual(await admitting, { run: null });
+  },
+);
+
+test("an agent's last run slot goes to one process when both admit at once", { skip: !sql }, async () => {
+  const t = await teamsSetup();
+  // Each process's count waits for the other's, so without the lock both say there is room.
+  const counted = barrier(2);
+  const racing = {
+    ...t.teams,
+    runCounts: async (...args: Parameters<typeof t.teams.runCounts>) => {
+      const counts = await t.teams.runCounts(...args);
+      await counted();
+      return counts;
+    },
+  };
+  const admit = (i: number) =>
+    racing.admit(
+      {
+        agentId: t.agentId,
+        botId: t.botId,
+        conversationId: `a:chat-${i}`,
+        threadId: `a:chat-${i}`,
+        triggerActivityId: `act-${i}`,
+        replyTokenHash: hashReplyToken(`token-${i}`),
+        requestedBy: PERSON,
+        runner: "fake",
+      },
+      null,
+      { budgetCents: 50, maxRunsPerHour: 100, maxCentsPerDay: 100_000, maxConcurrent: 1 },
+    );
+  const answers = await Promise.all([admit(1), admit(2)]);
+  assert.deepEqual(answers.map((a) => ("cap" in a ? a.cap : "started")).sort(), [
+    "concurrent",
+    "started",
+  ]);
+});
+
+test(
+  "a message another process is still handing over counts towards the hourly limit",
+  { skip: !sql },
+  async () => {
+    const held = gate();
+    let first = true;
+    const started: RunInput[] = [];
+    const t = await teamsSetup(
+      {
+        async start(input) {
+          started.push(input);
+          if (first) {
+            first = false;
+            await held.pass();
+          }
+          return `s-${input.runId}`;
+        },
+      },
+      { maxRunsPerHour: 1 },
+    );
+    const [a, b] = [t.pod(), t.pod()];
+    await t.send(a, "one");
+    await held.entered;
+    await t.send(b, "two");
+    await b.idle();
+    assert.equal(started.length, 1, "the second is over the limit");
+    held.open();
+    await a.idle();
+    assert.deepEqual(t.told(), ["I've reached my limit for this hour. Please try again later."]);
+  },
+);
+
+test(
+  "overlapping passes log a finished session's spend and tell the person once",
+  { skip: !sql },
+  async () => {
+    const t = await teamsSetup({
+      state: async () => {
+        await sleep(30);
+        return { status: "idle", costCents: 30, atBudget: false };
+      },
+    });
+    const [a, b] = [t.pod(), t.pod()];
+    await t.send(a, "hello");
+    await a.idle();
+    await Promise.all([a.watch(), b.watch()]);
+    assert.deepEqual(t.told(), [
+      "I could not answer this one. Ask your admin to check my Teams settings.",
+    ]);
+    const spend = await sql!`select cents from ${name("teams_spend")} where agent_id = ${t.agentId}`;
+    assert.deepEqual(
+      spend.map((s) => s.cents),
+      [30],
+    );
+  },
+);
+
+test("one process makes each pass over the running sessions", { skip: !sql }, async () => {
+  let reads = 0;
+  const t = await teamsSetup({
+    state: async () => {
+      reads++;
+      return running;
+    },
+  });
+  const [a, b] = [t.pod(), t.pod()];
+  await t.send(a, "hello");
+  await a.idle();
+  await Promise.all([a.watchTurn(), b.watchTurn()]);
+  assert.equal(reads, 1);
+  await lapseLeases();
+  await b.watchTurn();
+  assert.equal(reads, 2, "the next tick's pass, by the other process");
+});
+
+test(
+  "a pass over the sessions keeps the watch while it lasts, from every process",
+  { skip: !sql },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["setInterval"] });
+    const reading = gate();
+    let reads = 0;
+    const t = await teamsSetup({
+      state: async () => {
+        if (++reads === 1) await reading.pass();
+        return running;
+      },
+    });
+    const [a, b] = [t.pod(), t.pod()];
+    await t.send(a, "hello");
+    await a.idle();
+    const pass = a.watchTurn();
+    await reading.entered;
+    // Past the lease's term, which the pass renews.
+    await lapseLeases();
+    ctx.mock.timers.tick(5_000);
+    await renewed("teams-watch");
+    await b.watchTurn();
+    assert.equal(reads, 1, "not while the other process's pass lasts");
+    await lapseLeases();
+    await a.watchTurn();
+    assert.equal(reads, 1, "nor a second one of its own");
+    reading.open();
+    await pass;
+    await b.watchTurn();
+    assert.equal(reads, 2, "the next one, once it is done");
+  },
+);
+
+test(
+  "a pass that read a turn writes nothing once the session moved to its next",
+  { skip: !sql },
+  async () => {
+    const reading = gate();
+    const t = await teamsSetup({
+      state: async () => {
+        await reading.pass();
+        return { status: "idle", costCents: 10, atBudget: false };
+      },
+    });
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const pass = a.watch();
+    await reading.entered;
+    // Meanwhile another pass recorded the turn idle, and the next message is running.
+    await sql!`update ${name("teams_runs")} set turns = turns + 1, reply_token_at = now()
+                where agent_id = ${t.agentId}`;
+    reading.open();
+    await pass;
+    const [run] = await sql!`
+      select state, turns from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+    assert.deepEqual({ ...run }, { state: "running", turns: 2 });
+    assert.deepEqual(t.told(), [], "no notice for a turn it did not watch");
+  },
+);
+
+test(
+  "what a session spent is logged when its finish finds the run stopped meanwhile",
+  { skip: !sql },
+  async () => {
+    const reading = gate();
+    const t = await teamsSetup({
+      state: async () => {
+        await reading.pass();
+        return { status: "idle", costCents: 30, atBudget: false };
+      },
+    });
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const pass = a.watch();
+    await reading.entered;
+    // An administrator stops the session while the pass reads it.
+    const [{ id }] = await sql!`
+      select id::text from ${name("teams_runs")} where agent_id = ${t.agentId}`;
+    await t.teams.updateRun(id, { state: "failed", error: "Stopped by an administrator" });
+    reading.open();
+    await pass;
+    const spend = await sql!`select cents from ${name("teams_spend")} where agent_id = ${t.agentId}`;
+    assert.deepEqual(
+      spend.map((s) => s.cents),
+      [30],
+    );
+  },
+);
+
+test(
+  "a finish racing another writer of the session's cost logs only its own increase",
+  { skip: !sql },
+  async () => {
+    const t = await teamsSetup();
+    const a = t.pod();
+    await t.send(a, "hello");
+    await a.idle();
+    const [run] = await sql!`
+      update ${name("teams_runs")} set cost_cents = 10 where agent_id = ${t.agentId}
+      returning id::text, turns`;
+    // A stale pass's recordCost, mid-transaction: the session's cost raised to 20, its 10 logged.
+    const other = gate();
+    const recording = sql!.begin(async (tx) => {
+      await tx`select 1 from ${name("teams_runs")} where id = ${run.id} for update`;
+      await tx`update ${name("teams_runs")} set cost_cents = 20 where id = ${run.id}`;
+      await tx`insert into ${name("teams_spend")} (agent_id, run_id, cents)
+               values (${t.agentId}, ${run.id}, 10)`;
+      await other.pass();
+    });
+    await other.entered;
+    // The current pass finishes the turn at 30 meanwhile.
+    const finishing = t.teams.updateRun(
+      run.id,
+      { state: "idle", costCents: 30 },
+      { state: "running", turns: run.turns },
+    );
+    for (let i = 0; i < 200; i++) {
+      const [{ waiting }] = await sql!`
+        select count(*)::int as waiting from pg_stat_activity
+         where wait_event_type = 'Lock' and query like ${`%${SCHEMA}%teams_runs%`}`;
+      if (waiting) break;
+      await sleep(10);
+    }
+    other.open();
+    await recording;
+    assert.equal(await finishing, true);
+    const [{ total }] = await sql!`
+      select sum(cents)::int as total from ${name("teams_spend")} where run_id = ${run.id}`;
+    assert.equal(total, 20, "30 spent since the 10 recorded before");
+  },
+);

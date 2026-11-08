@@ -9,7 +9,6 @@ import { drainer } from "../queue.js";
 import { credentialAad, type CredentialKey } from "../secrets.js";
 import type { AuditEntry, Store } from "../store.js";
 import {
-  capReached,
   nextAttempt,
   RETRY_WINDOW_MS,
   RetryLater,
@@ -32,7 +31,7 @@ import {
   valueAt,
   type EventData,
 } from "./deliver.js";
-import { createGraphSource } from "./graph.js";
+import { createGraphSource, SubscriptionBusy } from "./graph.js";
 import { noReport, type Report } from "../report.js";
 import type {
   AgentAppState,
@@ -52,7 +51,11 @@ const MAX_BODY = 1024 * 1024;
 const STUCK_MS = 30 * 60_000;
 const VERIFY_TTL_MS = 60_000;
 const SELF_TTL_MS = 3600_000;
-// One refused delivery per subscription and minute is audited: anyone can post refusals.
+// A pass holds the watch, renewed while it lasts and dropped after; one that dies mid-pass holds
+// the other processes' passes back this long at most.
+const WATCH_LEASE_SECONDS = 15;
+// One refused delivery per subscription and minute is audited, in each process: anyone can
+// post refusals.
 const REFUSED_AUDIT_MS = 60_000;
 
 export const subscriptionAad = (org: string, id: string) =>
@@ -372,12 +375,6 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     const refused = await refusal(org, connector, event.eventType, data, trigger, state);
     if (refused) return decide(...refused);
     const runner = deps.runners.get(trigger.runner)!;
-    const cap = capReached(await events.runCounts(trigger.id), trigger);
-    if (cap)
-      return decide(
-        "denied",
-        `Capped: ${cap === "hour" ? "runs per hour" : cap === "day" ? "spending per day" : "runs at once"} reached`,
-      );
 
     const threadField = connector.events!.thread;
     const threadValue = threadField ? data[threadField] : null;
@@ -393,20 +390,31 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     };
     // A run whose row cannot even be written is reported here; any later failure, once, by
     // failStart.
-    const runId = await events
-      .startRun({
-        agentId: trigger.agentId,
-        triggerId: trigger.id,
-        eventId: event.id,
-        eventType: event.eventType,
-        deliveryId: event.deliveryId,
-        thread,
-        runner: trigger.runner,
-      })
+    const admitted = await events
+      .admitRun(
+        {
+          agentId: trigger.agentId,
+          triggerId: trigger.id,
+          eventId: event.id,
+          eventType: event.eventType,
+          deliveryId: event.deliveryId,
+          thread,
+          runner: trigger.runner,
+        },
+        trigger,
+      )
       .catch((error: unknown) => {
         report("event_run_start_failed", error, runTags);
         throw error;
       });
+    if ("cap" in admitted) {
+      const { cap } = admitted;
+      return decide(
+        "denied",
+        `Capped: ${cap === "hour" ? "runs per hour" : cap === "day" ? "spending per day" : "runs at once"} reached`,
+      );
+    }
+    const { runId } = admitted;
     const type = connector.events!.types.find((t) => t.id === event.eventType)!;
     const run = {
       runId,
@@ -660,19 +668,24 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     }
   }
 
-  /** A Graph subscription's watches brought in line with the triggers, renewed and caught up. */
-  async function sync(sub: SubscriptionRow) {
+  /** A Graph subscription's watches brought in line with the triggers, renewed and caught up.
+   *  False, and nothing recorded, when another change to them outlasted the wait. */
+  async function sync(sub: SubscriptionRow): Promise<boolean> {
     const connector = connectors.get(sub.connectorId);
-    if (!connector?.events?.graph)
-      return polled(sub, null, `${sub.connectorId} sends no Graph notifications`);
+    if (!connector?.events?.graph) {
+      await polled(sub, null, `${sub.connectorId} sends no Graph notifications`);
+      return true;
+    }
     try {
       const { error, status } = await graph.sync(sub, connector);
       await polled(sub, null, error, null, status);
     } catch (error) {
+      if (error instanceof SubscriptionBusy) return false;
       console.error(`[events] graph sync ${sub.id}`, error);
       const why = error instanceof ConnectError ? error.message : "Internal error";
       await polled(sub, null, why, error);
     }
+    return true;
   }
 
   let polling = false;
@@ -680,7 +693,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (polling) return;
     polling = true;
     try {
-      for (const sub of await events.duePolls())
+      let sub;
+      while ((sub = await events.claimDuePoll()))
         if (sub.source === "graph") await sync(sub);
         else await poll(sub);
     } finally {
@@ -694,10 +708,14 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     const stale = await events.failStaleStarts();
     if (stale) console.error(`[events] ${stale} run(s) failed after not starting`);
     for (const run of await events.runningRuns()) {
+      // Passes can overlap (one whose lease another process took over): what one read is
+      // written only if the run is still running.
+      const finish = (patch: Parameters<typeof events.updateRun>[1]) =>
+        events.updateRun(run.id, patch, "running");
       try {
         const runner = deps.runners.get(run.runner);
         if (!runner) {
-          await events.updateRun(run.id, {
+          await finish({
             state: "failed",
             error: `Runner ${run.runner} is not offered by this deployment`,
           });
@@ -708,23 +726,19 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
           run.organizationId,
         );
         if ("gone" in s) {
-          await events.updateRun(run.id, { state: "failed", error: s.gone });
+          await finish({ state: "failed", error: s.gone });
           continue;
         }
         const costCents = s.costCents ?? undefined;
         if (s.status === "idle" && s.atBudget)
-          await events.updateRun(run.id, {
-            state: "failed",
-            error: "Stopped at its spending limit",
-            costCents,
-          });
+          await finish({ state: "failed", error: "Stopped at its spending limit", costCents });
         else if (s.status === "idle" || s.status === "terminated")
-          await events.updateRun(run.id, { state: "ended", costCents });
+          await finish({ state: "ended", costCents });
         else if (Date.now() - Date.parse(run.startedAt) > STUCK_MS) {
           await runner
             .stop(run.sessionId!, run.organizationId)
             .catch((e) => console.error(`[events] stopping run ${run.id}`, e));
-          await events.updateRun(run.id, {
+          await finish({
             state: "failed",
             error: "Stopped after 30 minutes without finishing",
             costCents,
@@ -736,20 +750,34 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     }
   }
 
+  /** One pass at a time, in this process and across them, however long one lasts. */
+  let watching = false;
+  async function watchTurn() {
+    if (watching) return;
+    watching = true;
+    try {
+      await events.withLease("events-watch", WATCH_LEASE_SECONDS, () => watch());
+    } finally {
+      watching = false;
+    }
+  }
+
   let timers: NodeJS.Timeout[] = [];
   return {
     inbound,
     poll,
     pollDue,
     /** After a trigger on the app changes: the organization's Graph subscription for it, if
-     *  any, follows at once rather than at its next interval. */
+     *  any, follows at once rather than at its next interval; while another change to it
+     *  outlasts the wait, at the scheduler's next round. */
     async syncApp(org: string, app: string) {
       const sub = await events.subscriptionFor(org, app);
-      if (sub?.source === "graph") await sync(sub);
+      if (sub?.source === "graph" && !(await sync(sub))) await events.pollSoon(sub.id);
     },
     releaseAll: graph.releaseAll,
     settle: graph.settle,
     watch,
+    watchTurn,
     kick: queue.kick,
     idle: queue.idle,
     /** Drains the queue, watches runs and polls what is due, every few seconds. */
@@ -760,7 +788,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         setInterval(() => {
           queue.kick();
           retries.kick();
-          watch().catch((error) => console.error("[events] watch", error));
+          watchTurn().catch((error) => console.error("[events] watch", error));
         }, 5000),
         setInterval(
           () => pollDue().catch((error) => console.error("[events] poll", error)),

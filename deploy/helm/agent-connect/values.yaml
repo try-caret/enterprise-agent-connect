@@ -5,7 +5,8 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# Must stay 1: Teams run limits are admitted by a single process (and rollouts are Recreate).
+# Any number: run limits are admitted in the database and each background job runs on one
+# process at a time.
 replicaCount: 1
 
 # Required: a Secret holding DATABASE_URL, CONNECT_ENCRYPTION_KEY and AGENT_CONNECT_ADMIN_TOKEN

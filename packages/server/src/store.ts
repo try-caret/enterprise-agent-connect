@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { brand } from "../../connector-kit/src/branding.js";
 import { ConnectError, type Limits } from "../../connector-kit/src/types.js";
@@ -44,6 +45,7 @@ const TABLES = [
   "event_runs",
   "event_watches",
   "internal_apps",
+  "leases",
 ] as const;
 
 export type Tables = Record<(typeof TABLES)[number], postgres.Helper<string, []>>;
@@ -59,6 +61,69 @@ export function tables(sql: Sql, schema: string): Tables {
       return [table, Object.assign(sql(name), { toString: () => name })];
     }),
   ) as Tables;
+}
+
+/** `work` in a transaction holding the advisory lock on `key`, so a count and the insert it
+ *  allows are one step across every process. For short work only: it holds a connection. */
+export const withAdvisoryLock = <T>(sql: Sql, key: string, work: (tx: Sql) => Promise<T>) =>
+  sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${key}))`;
+    return work(tx as unknown as Sql);
+  }) as Promise<T>;
+
+/** Work every process would otherwise do at once, for its holder alone. No connection is held
+ *  meanwhile, so it is the guard for work that waits on a vendor. */
+export function leases(sql: Sql, t: Tables) {
+  return {
+    /** A token for `name` for `seconds`; null while another holds it. Taken with the token it
+     *  gave, it renews. */
+    async takeLease(name: string, seconds: number, token: string = randomUUID()) {
+      const rows = await sql`
+        insert into ${t.leases} as l (name, token, expires_at)
+        values (${name}, ${token}, now() + make_interval(secs => ${seconds}))
+        on conflict (name) do update set token = excluded.token, expires_at = excluded.expires_at
+         where l.expires_at <= now() or l.token = excluded.token
+        returning name`;
+      return rows.length ? token : null;
+    },
+
+    async dropLease(name: string, token: string): Promise<void> {
+      await sql`delete from ${t.leases} where name = ${name} and token = ${token}`;
+    },
+
+    /** `work` while holding `name`, renewed every third of `seconds` and dropped after; null,
+     *  and no work, while another holds it. `signal` aborts once a renewal finds it taken. */
+    async withLease<T>(
+      name: string,
+      seconds: number,
+      work: (signal: AbortSignal) => Promise<T>,
+    ): Promise<{ value: T } | null> {
+      const token = await this.takeLease(name, seconds);
+      if (!token) return null;
+      const lost = new AbortController();
+      // One renewal at a time, the last one landed before the drop: landing after it, it
+      // would take the lease again.
+      let renewal = Promise.resolve();
+      const renewing = setInterval(() => {
+        renewal = renewal
+          .then(() => this.takeLease(name, seconds, token))
+          .then(
+            (held) => {
+              if (!held) lost.abort(new Error(`Lost the lease ${name} to another process`));
+            },
+            (error) => console.error(`[leases] renewing ${name}`, error),
+          );
+      }, (seconds * 1000) / 3);
+      renewing.unref();
+      try {
+        return { value: await work(lost.signal) };
+      } finally {
+        clearInterval(renewing);
+        await renewal;
+        await this.dropLease(name, token);
+      }
+    },
+  };
 }
 
 export type ConnectionRow = {

@@ -1,4 +1,5 @@
-import { tables, type Sql } from "../store.js";
+import { leases, tables, withAdvisoryLock, type Sql } from "../store.js";
+import { capReached, type Caps } from "./runner.js";
 import type { ApprovalFact, ApprovalRow } from "./approval.js";
 
 // Postgres for Teams bots, where they are installed, the inbound queue, each agent's
@@ -167,9 +168,22 @@ export const MAX_REPLIES = 3;
 const REPLYABLE = `state in ('starting', 'running', 'idle') and reply_token_at > now() - interval '12 hours'
   and reply_count < ${MAX_REPLIES}`;
 
+type NewRun = {
+  agentId: string;
+  botId: string;
+  conversationId: string;
+  threadId: string;
+  triggerActivityId: string;
+  replyTokenHash: string;
+  requestedBy: string;
+  runner: string;
+};
+
 export function createTeamsStore(sql: Sql, schema: string) {
   const t = tables(sql, schema);
   return {
+    ...leases(sql, t),
+
     // ---- bots ----
 
     async createBot(input: {
@@ -523,18 +537,26 @@ export function createTeamsStore(sql: Sql, schema: string) {
 
     // ---- runs ----
 
-    // Sessions running now; messages answered or tried in the last hour (each turn counts, and
-    // so does a start that failed); what this agent's turns cost in the last 24 hours.
+    // Sessions running now; messages answered or tried in the last hour (each turn counts, so
+    // does a start that failed, and so does one another process is handing over now, its run
+    // made and its message not yet finished: found through the thread's one active run, an
+    // index lookup); what this agent's turns cost in the last 24 hours.
     async runCounts(
       agentId: string,
       botId: string,
+      db: Sql = sql,
     ): Promise<{ active: number; lastHour: number; spentToday: number }> {
-      const [row] = await sql<{ active: number; lastHour: number; spentToday: number }[]>`
+      const [row] = await db<{ active: number; lastHour: number; spentToday: number }[]>`
         select (select count(*) from ${t.teams_runs}
                  where agent_id = ${agentId} and state in ('starting', 'running'))::int as active,
-               (select count(*) from ${t.teams_events}
-                 where bot_id = ${botId} and state in ('run', 'failed')
-                   and received_at > now() - interval '1 hour')::int as "lastHour",
+               (select count(*) from ${t.teams_events} e
+                 where e.bot_id = ${botId} and e.received_at > now() - interval '1 hour'
+                   and (e.state in ('run', 'failed')
+                        or (e.state = 'processing' and exists (
+                              select 1 from ${t.teams_runs} r
+                               where r.bot_id = e.bot_id and r.thread_id = e.thread_id
+                                 and r.state in ('starting', 'running')
+                                 and r.trigger_activity_id = e.activity_id))))::int as "lastHour",
                (select coalesce(sum(cents), 0) from ${t.teams_spend}
                  where agent_id = ${agentId}
                    and spent_at > now() - interval '24 hours')::int as "spentToday"`;
@@ -551,61 +573,76 @@ export function createTeamsStore(sql: Sql, schema: string) {
       return row ?? null;
     },
 
-    // A new session for the thread. Null when one is already active there (unique index).
-    async startRun(input: {
-      agentId: string;
-      botId: string;
-      conversationId: string;
-      threadId: string;
-      triggerActivityId: string;
-      replyTokenHash: string;
-      requestedBy: string;
-      runner: string;
-    }): Promise<RunRow | null> {
+    // The agent's limits counted and its turn started (a new session, or the next turn of
+    // `continues`) as one step, whichever process gets there. `run` is null when the thread is
+    // busy, or the session moved on since `continues` was read.
+    async admit(
+      input: NewRun,
+      continues: RunRow | null,
+      caps: Caps,
+    ): Promise<{ run: RunRow | null } | { cap: NonNullable<ReturnType<typeof capReached>> }> {
       try {
-        const [row] = await sql.unsafe<RunRow[]>(
-          `insert into ${t.teams_runs}
-             (agent_id, bot_id, conversation_id, thread_id, trigger_activity_id, reply_token_hash,
-              requested_by_aad_id, runner, state)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, 'starting') returning ${RUN}`,
-          [
-            input.agentId,
-            input.botId,
-            input.conversationId,
-            input.threadId,
-            input.triggerActivityId,
-            input.replyTokenHash,
-            input.requestedBy,
-            input.runner,
-          ],
-        );
-        return row;
+        return await withAdvisoryLock(sql, `${schema}.teams-runs:${input.agentId}`, async (tx) => {
+          const cap = capReached(await this.runCounts(input.agentId, input.botId, tx), caps);
+          if (cap) return { cap };
+          if (!continues) return { run: await this.startRun(input, tx) };
+          const { triggerActivityId, replyTokenHash } = input;
+          const free = await this.continueRun(continues, triggerActivityId, replyTokenHash, tx);
+          return { run: free ? { ...continues, triggerActivityId } : null };
+        });
       } catch (error) {
-        if ((error as { code?: string }).code === "23505") return null;
+        // During a rollout the previous image starts runs without the lock: the thread's
+        // one-active index then refuses this continued turn. Nothing else was written.
+        if ((error as { code?: string }).code === "23505") return { run: null };
         throw error;
       }
     },
 
+    // A new session for the thread. Null when one is already active there (unique index).
+    async startRun(input: NewRun, db: Sql = sql): Promise<RunRow | null> {
+      const [row] = await db.unsafe<RunRow[]>(
+        `insert into ${t.teams_runs}
+           (agent_id, bot_id, conversation_id, thread_id, trigger_activity_id, reply_token_hash,
+            requested_by_aad_id, runner, state)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, 'starting')
+         on conflict do nothing returning ${RUN}`,
+        [
+          input.agentId,
+          input.botId,
+          input.conversationId,
+          input.threadId,
+          input.triggerActivityId,
+          input.replyTokenHash,
+          input.requestedBy,
+          input.runner,
+        ],
+      );
+      return row ?? null;
+    },
+
     // The next turn in an idle session: a new reply token, for the new message. False when the
-    // session is no longer idle (another message got there first). It stays 'starting' until
-    // the message is sent, so the watcher never reads the previous turn's idle as this one's.
+    // session is no longer idle, or not at the turn read (another message got there first, and
+    // its turn may have reached the session's last). It stays 'starting' until the message is
+    // sent, so the watcher never reads the previous turn's idle as this one's.
+    // Checked here and not left to the one-active index: under admit() every writer of this
+    // image waits, and a failed statement fails admit()'s transaction (answered busy there).
     async continueRun(
-      id: string,
+      read: Pick<RunRow, "id" | "turns">,
       triggerActivityId: string,
       replyTokenHash: string,
+      db: Sql = sql,
     ): Promise<boolean> {
-      try {
-        const rows = await sql`
-          update ${t.teams_runs}
-             set state = 'starting', trigger_activity_id = ${triggerActivityId},
-                 reply_token_hash = ${replyTokenHash}, reply_token_at = now(),
-                 reply_count = 0, turns = turns + 1, finished_at = null
-           where id = ${id} and state = 'idle' returning id`;
-        return rows.length > 0;
-      } catch (error) {
-        if ((error as { code?: string }).code === "23505") return false;
-        throw error;
-      }
+      const rows = await db`
+        update ${t.teams_runs} r
+           set state = 'starting', trigger_activity_id = ${triggerActivityId},
+               reply_token_hash = ${replyTokenHash}, reply_token_at = now(),
+               reply_count = 0, turns = turns + 1, finished_at = null
+         where r.id = ${read.id} and r.state = 'idle' and r.turns = ${read.turns}
+           and not exists (select 1 from ${t.teams_runs} o
+                            where o.bot_id = r.bot_id and o.thread_id = r.thread_id
+                              and o.state in ('starting', 'running'))
+        returning r.id`;
+      return rows.length > 0;
     },
 
     async updateRun(
@@ -617,36 +654,64 @@ export function createTeamsStore(sql: Sql, schema: string) {
         note?: string;
         costCents?: number;
       },
-    ): Promise<void> {
+      // Only while the run is as read, in this state and turn: false, and nothing written,
+      // otherwise.
+      from?: Pick<RunRow, "state" | "turns">,
+    ): Promise<boolean> {
       const finished = patch.state && patch.state !== "running" && patch.state !== "starting";
       // A run that started or ended has nothing left to hand over.
       const delivered = Boolean(patch.state && patch.state !== "starting");
       // cost_cents is the session's total so far; its increase is this turn's spend, logged.
-      // prev reads the row as the statement began (one replica, so one writer per run).
-      await sql`
-        with prev as (
-          select cost_cents as old from ${t.teams_runs} where id = ${id}
-        ), updated as (
-          update ${t.teams_runs}
-             set state = coalesce(${patch.state ?? null}, state),
-                 session_id = coalesce(${patch.sessionId ?? null}, session_id),
-                 error = coalesce(${patch.error ?? null}, error),
-                 note = coalesce(${patch.note ?? null}, note),
-                 cost_cents = coalesce(${patch.costCents ?? null}, cost_cents),
-                 finished_at = case when ${Boolean(finished)} then now() else finished_at end,
-                 -- The 30 minute stop counts from when the runner took the run.
-                 reply_token_at = case when state = 'starting' and ${patch.state ?? null} = 'running'
-                   then now() else reply_token_at end,
-                 next_attempt_at = case when ${delivered} then null else next_attempt_at end,
-                 delivery = case when ${delivered} then null else delivery end,
-                 delivery_key_id = case when ${delivered} then null else delivery_key_id end
-           where id = ${id}
-          returning agent_id, cost_cents
-        )
-        insert into ${t.teams_spend} (agent_id, run_id, cents)
-        select u.agent_id, ${id}, u.cost_cents - coalesce(p.old, 0)
-          from updated u, prev p
-         where u.cost_cents > coalesce(p.old, 0)`;
+      // prev reads the row as the statement began, so the row is locked first, in the same
+      // transaction: a cost another writer (recordCost) set meanwhile is then the one read, and
+      // its increase is not logged twice.
+      const [{ changed }] = await sql.begin(async (tx) => {
+        await tx`select 1 from ${t.teams_runs} where id = ${id} for update`;
+        return tx<{ changed: number }[]>`
+          with prev as (
+            select cost_cents as old from ${t.teams_runs} where id = ${id}
+          ), updated as (
+            update ${t.teams_runs}
+               set state = coalesce(${patch.state ?? null}, state),
+                   session_id = coalesce(${patch.sessionId ?? null}, session_id),
+                   error = coalesce(${patch.error ?? null}, error),
+                   note = coalesce(${patch.note ?? null}, note),
+                   cost_cents = coalesce(${patch.costCents ?? null}, cost_cents),
+                   finished_at = case when ${Boolean(finished)} then now() else finished_at end,
+                   -- The 30 minute stop counts from when the runner took the run.
+                   reply_token_at = case when state = 'starting' and ${patch.state ?? null} = 'running'
+                     then now() else reply_token_at end,
+                   next_attempt_at = case when ${delivered} then null else next_attempt_at end,
+                   delivery = case when ${delivered} then null else delivery end,
+                   delivery_key_id = case when ${delivered} then null else delivery_key_id end
+             where id = ${id}
+               and (${from?.state ?? null}::text is null
+                    or (state = ${from?.state ?? null} and turns = ${from?.turns ?? null}))
+            returning agent_id, cost_cents
+          ), spent as (
+            insert into ${t.teams_spend} (agent_id, run_id, cents)
+            select u.agent_id, ${id}, u.cost_cents - coalesce(p.old, 0)
+              from updated u, prev p
+             where u.cost_cents > coalesce(p.old, 0)
+          )
+          select count(*)::int as changed from updated`;
+      });
+      return changed > 0;
+    },
+
+    // The session's cost total as a pass read it, when its finish found the run moved on (its
+    // next turn, an administrator's stop): its increase over what is recorded is logged, which
+    // no later finish of that turn would do. The row is locked, so it is logged once.
+    async recordCost(id: string, costCents: number): Promise<void> {
+      await sql.begin(async (tx) => {
+        const [row] = await tx<{ agentId: string; old: number }[]>`
+          select agent_id::text as "agentId", coalesce(cost_cents, 0) as old
+            from ${t.teams_runs} where id = ${id} for update`;
+        if (!row || costCents <= row.old) return;
+        await tx`update ${t.teams_runs} set cost_cents = ${costCents} where id = ${id}`;
+        await tx`insert into ${t.teams_spend} (agent_id, run_id, cents)
+                 values (${row.agentId}, ${id}, ${costCents - row.old})`;
+      });
     },
 
     // Runs stuck starting (the process stopped, or a write failed, before the start finished)

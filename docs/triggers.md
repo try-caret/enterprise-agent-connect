@@ -55,7 +55,8 @@ Every delivery (received, refused for its signature, too old, a repeat, an undec
 audited as `events:delivery`, every decision for every trigger (started, filtered, out of
 limits, capped, not started) as `events:run` under the agent, and failed polls as
 `events:poll`. `GET /orgs/{org}/audit?app=jira` reads them. Refused signatures are audited at most
-once a minute per subscription, since anyone can post to the address.
+once a minute per subscription in each replica of the service, since anyone can post to the
+address.
 
 ## When the runner does not answer
 
@@ -384,5 +385,5 @@ by changed_at limit 100` and
 - Event content is written by people in the app: it is quoted as untrusted data, never put into
   the instructions, and cut to the fields the connector keeps (text to 2000 characters, lists to
   50 items).
-- Runs are bounded by each trigger's caps and budget. Counting them is one process's job, so the
-  service runs as one replica, as for Teams.
+- Runs are bounded by each trigger's caps and budget, counted in the database as each run is
+  admitted, as for Teams, so they hold however many replicas of the service run.

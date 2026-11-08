@@ -100,13 +100,15 @@ orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in open
   app's API took it), `POST …/:subscription/secret` {by, secret} (a new webhook secret, once; given for
   `secretFromApp`), `GET …/:subscription/watches` (a Graph subscription's watched
   values, each agent's mailbox: subscribed, expiresAt, lastNotificationAt, caughtUpAt, lastError),
-  `DELETE …/:subscription` {by} (deletes Graph's subscriptions first); per agent `GET …/event-triggers`,
-  `PUT/DELETE …/event-triggers/:app` (a Graph subscription's watches follow at once) and `GET
+  `DELETE …/:subscription` {by} (deletes Graph's subscriptions first; 422 "try again" when another
+  change to them outlasts 15 s); per agent `GET …/event-triggers`,
+  `PUT/DELETE …/event-triggers/:app` (a Graph subscription's watches follow at once, or at the
+  scheduler's next round when another change to them outlasts 15 s) and `GET
   …/event-runs?limit` (each with `thread`).
 - `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
   cap, the connector's proof (HMAC-SHA256 of the raw body, or of `verify.signs` filled with the
   body and headers; or a token header; constant time) checked
-  before the body is parsed (401; audited at most once a minute per subscription), then type,
+  before the body is parsed (401; audited at most once a minute per subscription in each process), then type,
   delivery id (else the body's SHA-256) and replay window; a signed `webhook.handshake` (Slack's
   url_verification) is answered with its echo as text and queues nothing; a repeated delivery id or an
   undeclared type is audited and ignored. Accepted: the kept fields sealed into `app_events`,
@@ -114,7 +116,7 @@ orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in open
   echoed as text/plain (Graph's handshake, sent before Graph has the subscription, so it proves
   nothing and starts nothing); otherwise a `value[]` batch, each notification's `clientState`
   compared in constant time to the subscription's sealed secret (none matching: 401; any not
-  matching audited at most once a minute), answered 202 at once and worked on after: the
+  matching audited at most once a minute in each process), answered 202 at once and worked on after: the
   message read with the connection (`graph.read`), or a lifecycle event
   (`reauthorizationRequired` renews, `subscriptionRemoved` subscribes again and catches up,
   `missed` catches up).
@@ -158,7 +160,7 @@ Option `onError` (no environment variable; a host wraps `serveFromEnv` from
 `@arbium/enterprise-agent-connect/server`): called once per failure as it happens
 (packages/server/src/report.ts, README "Error reporting": the kinds, ids and error
 class/code/status only, never a message; once a minute per kind, app, organization,
-subscription and bot; a throwing or rejecting hook is logged, never passed on); left out,
+subscription and bot in each process; a throwing or rejecting hook is logged, never passed on); left out,
 nothing is called.
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
 multi-tenant Entra app instead of the customer's own, and then needs
@@ -242,7 +244,7 @@ itself, read with the agent's tools, holds what came before), with `thread` in i
 
 Schema `agent_connect` (`DATABASE_SCHEMA`), tables without a prefix (`agents`, `providers`,
 `connections`, `grants`, `audit`, `confirmed`, `teams_*`, `approvals`, `organizations`,
-`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`, `internal_apps`); index and
+`event_subscriptions`, `app_events`, `event_triggers`, `event_runs`, `internal_apps`, `leases`); index and
 constraint names keep the `agent_connect_<table>_...` spelling they had in public (`store.ts`
 matches `agent_connect_providers_one_org_per_tenant`). `packages/server/src/migrate.ts` applies
 `packages/server/migrations/NNNN_*.sql` on start, all pending in one transaction under an advisory lock, with
@@ -263,7 +265,8 @@ connector definitions; rollback drops it), 0009 the `graph` source (its check co
 catch-up delta link) and `event_runs.thread` (rollback drops `event_watches` first; the rest
 goes with the 0007 tables), and 0012 the retry columns on `teams_runs` and `event_runs`
 (`attempts`, `next_attempt_at`, sealed `delivery`; rollback drops them from `teams_runs`, the rest
-goes with 0007). The adopting run then makes simple views
+goes with 0007), and 0013 `leases` (work every process would otherwise do at once; rollback
+drops it). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -274,18 +277,36 @@ empty; with rows, start is refused. Organizations: the admin app names its own o
 first admin request for an unknown one creates it (no name). `upgrade.test.ts` holds the
 equivalence of both paths, the rows, the key and the rollback.
 
+An image refuses a database with a migration it does not know ("applied ... but not known to this
+version"), so going back to an older release (a helm rollback) needs the newer migrations undone
+by hand first: `rollback/to-<version>.sql` undoes every migration after that release's last, newest
+first, in one transaction (`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f ...`, as the service's
+own role, with no newer process running), and says in its header what it cannot keep.
+`rollback/to-0.3.0.sql` undoes 0009-0013 (0.3.0 ends at 0008): it drops what they added and the
+Graph subscriptions, restores 0007's check constraints, and keeps every row 0.3.0 reads; it
+refuses unless exactly 0009-0013 are applied. Checked on Postgres 17 against the npm 0.3.0
+package: the schema after it equals a fresh 0.3.0 install, 0.3.0 starts and reads its rows back,
+and migrating forward again equals a fresh install of this version.
+
 ## Deploy
 
 `deploy/docker` (image, `docker-compose.yml` with Postgres, `docker-compose.example.yml` adding
 the example internal app, `docker-compose.sql-example.yml` the example orders database; the
 image moves the optional database drivers, peers of the npm package, into its dependencies
-before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (one replica, Service, optional
+before `npm ci --omit=dev`, so it carries all of them) and `deploy/helm/agent-connect` (`replicaCount`, Service, optional
 Ingress with only `/agent-connect/mcp`, `/agent-connect/teams` and `/agent-connect/events`; `existingSecret` holds
 `DATABASE_URL`, `CONNECT_ENCRYPTION_KEY`, `AGENT_CONNECT_ADMIN_TOKEN`; `caBundle` mounts a
-ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). One replica only: Teams
-and app event run limits (concurrent runs, runs per hour, daily spend) and polls are counted,
-admitted and run by one process,
-so a rollout recreates rather than overlaps. The admin API is never public: it refuses any
+ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). Any number of replicas: Teams and app event
+run limits (concurrent runs, runs per hour, daily spend) are counted and the run started in one
+transaction under an advisory lock per agent or trigger (`admit`, `admitRun`); each due poll is
+claimed (`claimDuePoll`); a Graph subscription's watches change, and an unsubscribe removes them,
+under a lease renewed while the work lasts (store.ts `withLease`, `graph.ts` `inTurn`; work
+whose renewal finds the lease taken makes no further Graph call; waiting for the lease gives up
+after 15 s, `SubscriptionBusy`, and the work goes to the scheduler's next round: `pollSoon`, which
+a round ending meanwhile keeps, and a lifecycle event marks its watch first, `watchLapsed`); and the watcher makes one
+pass at a time, across the processes and in each (`watchTurn`, under a lease held while the pass
+lasts), a run's finish recorded and told once however passes overlap (`updateRun` with
+`from`). A rollout overlaps two versions, so a migration must leave the previous image working. The admin API is never public: it refuses any
 request carrying `X-Forwarded-For`. Give the service a database role that owns only its schema.
 
 ## Layout
@@ -401,7 +422,8 @@ packages/server/src/store.ts # Postgres; every table named through tables() in t
 packages/server/src/migrate.ts # the schema runner (see Database)
 packages/server/migrations/ # 0001_tables.sql ... (plain SQL, unqualified names, never edited once
                       # applied: the runner refuses a changed checksum); rollback/to-legacy.sql
-                      # (by hand only: back to the earlier layout in public)
+                      # (by hand only: back to the earlier layout in public); rollback/to-0.3.0.sql
+                      # (by hand only: undoes 0009-0013 so a 0.3.0 image starts again)
 packages/server/src/secrets.ts # AES-256-GCM credential sealing (AAD = org + app, or org + provider:<id>; key
                       # id per row), agent keys
 scripts/test-databases.sh # makes an empty ac_test on a scratch Postgres, for the DB-backed tests

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
 import { z } from "zod";
@@ -28,11 +28,19 @@ import { ADMIN_TOKEN } from "./helpers.ts";
 // (TEST_DATABASE_URL, see store.test.ts). Skipped without one.
 const url = process.env.TEST_DATABASE_URL;
 const sql = url ? connectDatabase(url) : null;
-const SCHEMA = "agent_connect";
+// In a schema of its own: the other files' runtimes claim whatever is due in theirs.
+const SCHEMA = `events_${randomBytes(4).toString("hex")}`;
+const name = (table: string) => sql!(`${SCHEMA}.${table}`);
 before(async () => {
   if (sql) await migrate(sql, SCHEMA, () => {});
 });
-after(() => sql?.end());
+after(async () => {
+  await sql?.begin(async (tx) => {
+    await tx`set local client_min_messages = warning`;
+    await tx.unsafe(`drop schema ${SCHEMA} cascade`);
+  });
+  await sql?.end();
+});
 
 const key = new CredentialKey(Buffer.alloc(32, 7).toString("base64"));
 const PUBLIC = "https://svc.example/agent-connect";
@@ -120,13 +128,13 @@ async function setup(
   const org = randomUUID();
   await store.ensureOrganization(org);
   const [{ id: agentId }] = await sql!`
-    insert into agent_connect.agents (organization_id, name, key_hash, status)
+    insert into ${name("agents")} (organization_id, name, key_hash, status)
     values (${org}, 'Triage', ${randomUUID().replaceAll("-", "").repeat(2)}, 'active')
     returning id::text`;
-  await sql!`insert into agent_connect.connections
+  await sql!`insert into ${name("connections")}
                (organization_id, connector_id, credential, credential_key_id, status, capabilities)
              values (${org}, ${appId}, ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["read"])})`;
-  await sql!`insert into agent_connect.grants (agent_id, connector_id, capabilities, limits)
+  await sql!`insert into ${name("grants")} (agent_id, connector_id, capabilities, limits)
              values (${agentId}, ${appId}, ${sql!.array(["read"])}, ${sql!.json(limits as never)})`;
   const calls: VendorRequest[] = [];
   const answers = new Map<string, VendorResponse>([
@@ -339,7 +347,7 @@ test(
     assert.ok(log.some((l) => /Filtered: type does not match/.test(l)));
 
     // Without the grant the agent is never started.
-    await sql!`delete from agent_connect.grants where agent_id = ${t.agentId}`;
+    await sql!`delete from ${name("grants")} where agent_id = ${t.agentId}`;
     await send({});
     assert.equal(f.started.length, 1);
     assert.ok((await t.audit()).some((l) => /no access to Tracker/.test(l)));
@@ -861,7 +869,7 @@ async function flakyReceiver(answers: number[], opts: { retryWindowMs?: number }
     settings: { url: "https://hooks.example/events" },
     signingSecret: "r".repeat(40),
   });
-  const due = () => sql!`update agent_connect.event_runs set next_attempt_at = now()
+  const due = () => sql!`update ${name("event_runs")} set next_attempt_at = now()
                           where agent_id = ${t.agentId} and next_attempt_at is not null`;
   return { t, posts, due, send: () => t.deliver(subscription.id, secret!, item()) };
 }
@@ -935,7 +943,7 @@ test(
     await lost.send();
     const [run] = await lost.t.runs();
     assert.equal(run.state, "starting");
-    await sql!`delete from agent_connect.grants where agent_id = ${lost.t.agentId}`;
+    await sql!`delete from ${name("grants")} where agent_id = ${lost.t.agentId}`;
     await lost.due();
     await lost.t.runtime.retryDue();
     const [failed] = await lost.t.runs();
@@ -952,7 +960,7 @@ test(
 
     const narrowed = await flakyReceiver([503]);
     await narrowed.send();
-    await sql!`update agent_connect.event_triggers set event_types = '{updated}'
+    await sql!`update ${name("event_triggers")} set event_types = '{updated}'
                 where agent_id = ${narrowed.t.agentId}`;
     await narrowed.due();
     await narrowed.t.runtime.retryDue();
@@ -971,7 +979,7 @@ test(
     const broken = await flakyReceiver([503]);
     await broken.send();
     const [run] = await broken.t.runs();
-    await sql!`update agent_connect.event_runs set delivery = '\\x00'::bytea where id = ${run.id}`;
+    await sql!`update ${name("event_runs")} set delivery = '\\x00'::bytea where id = ${run.id}`;
     await broken.due();
     await broken.t.runtime.retryDue();
     const [failed] = await broken.t.runs();
@@ -980,12 +988,12 @@ test(
       (await broken.t.audit()).some((l) => l.startsWith(`events:run failed Run ${run.id}`)),
     );
     const [row] = await sql!`
-      select next_attempt_at, delivery from agent_connect.event_runs where id = ${run.id}`;
+      select next_attempt_at, delivery from ${name("event_runs")} where id = ${run.id}`;
     assert.deepEqual({ ...row }, { next_attempt_at: null, delivery: null });
 
     const late = await flakyReceiver([503]);
     await late.send();
-    await sql!`update agent_connect.event_runs set started_at = now() - interval '16 minutes'
+    await sql!`update ${name("event_runs")} set started_at = now() - interval '16 minutes'
                 where agent_id = ${late.t.agentId}`;
     await late.due();
     await late.t.runtime.retryDue();
@@ -1008,7 +1016,7 @@ test("an event run taken on a late attempt has its full 30 minutes", { skip: !sq
   const { subscription, secret } = await t.subscribe();
   await t.trigger();
   await t.deliver(subscription.id, secret!, item());
-  await sql!`update agent_connect.event_runs
+  await sql!`update ${name("event_runs")}
                   set started_at = now() - interval '40 minutes', next_attempt_at = now()
                 where agent_id = ${t.agentId}`;
   await t.runtime.retryDue();

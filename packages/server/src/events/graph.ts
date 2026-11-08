@@ -1,5 +1,9 @@
 import type { Connector } from "../../../connector-kit/src/connector.js";
-import type { VendorRequest, VendorResponse } from "../../../connector-kit/src/types.js";
+import {
+  ConnectError,
+  type VendorRequest,
+  type VendorResponse,
+} from "../../../connector-kit/src/types.js";
 import { tokensEqual } from "../secrets.js";
 import type { AuditEntry } from "../store.js";
 import { readCappedBytes } from "../teams/runtime.js";
@@ -21,6 +25,20 @@ const MAX_ID = 1024;
 const NEWS_MS = 7 * 86400_000;
 const DELTA_PAGES = 20;
 const SUBSCRIPTIONS = "/v1.0/subscriptions";
+// Renewed while a sync runs, so a process that dies holding it is waited for this long at most.
+const LEASE_SECONDS = 60;
+const LEASE_WAIT_MS = 500;
+// How long work waits for another's turn on the subscription: an admin request is answered
+// within it.
+const TURN_WAIT_MS = 15_000;
+
+/** Another change to the subscription's watches, in this process or another, outlasted the
+ *  wait for its turn. */
+export class SubscriptionBusy extends ConnectError {
+  constructor() {
+    super("Another change to this app's events is still being made. Try again in a minute.");
+  }
+}
 
 export type GraphDeps = {
   events: EventsStore;
@@ -84,8 +102,11 @@ export function graphItem(
 export function createGraphSource(deps: GraphDeps) {
   const { events } = deps;
   const urlOf = (sub: SubscriptionRow) => `${deps.publicUrl}/events/${sub.id}`;
-  const call = (sub: SubscriptionRow, request: VendorRequest) =>
-    deps.appCall(sub.organizationId, sub.connectorId, request);
+  // Under the subscription's lease, `signal` stops the work once another process took it over.
+  const call = (sub: SubscriptionRow, request: VendorRequest, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    return deps.appCall(sub.organizationId, sub.connectorId, request);
+  };
   const failed = (sub: SubscriptionRow, target: string, reason: string, status?: number) =>
     deps.audit({
       organizationId: sub.organizationId,
@@ -158,13 +179,24 @@ export function createGraphSource(deps: GraphDeps) {
     const lifecycle = rawAt(n, "lifecycleEvent");
     if (typeof lifecycle === "string") {
       await deps.delivery(sub, `${lifecycle} ${watch.value}`, "allowed", `Lifecycle: ${lifecycle}`);
-      if (lifecycle === "reauthorizationRequired") await subscribe(sub, g, watch);
-      else if (lifecycle === "subscriptionRemoved") {
-        await events.watchSubscribed(watch.id, null, null, "Removed by Microsoft");
-        await subscribe(sub, g, { ...watch, remoteId: null });
-        await catchUp(sub, connector, watch);
-      } else if (lifecycle === "missed") await catchUp(sub, connector, watch);
-      return;
+      // A sync may be subscribing this watch right now, and may have replaced it by its turn.
+      return inTurn(sub, async (signal) => {
+        const now = await events.watchByRemote(sub.id, watch.remoteId!);
+        if (!now) return;
+        if (lifecycle === "reauthorizationRequired") await subscribe(sub, g, now, signal);
+        else if (lifecycle === "subscriptionRemoved") {
+          await events.watchSubscribed(now.id, null, null, "Removed by Microsoft");
+          await subscribe(sub, g, { ...now, remoteId: null }, signal);
+          await catchUp(sub, connector, now, signal);
+        } else if (lifecycle === "missed") await catchUp(sub, connector, now, signal);
+      }).catch(async (error) => {
+        if (!(error instanceof SubscriptionBusy)) throw error;
+        // Left to the scheduler's next round, which renews a watch with no expiry, subscribes
+        // one with no Graph subscription and catches every watch up.
+        if (lifecycle === "reauthorizationRequired" || lifecycle === "subscriptionRemoved")
+          await events.watchLapsed(watch.id, watch.remoteId!, lifecycle === "subscriptionRemoved");
+        await events.pollSoon(sub.id);
+      });
     }
     await events.watchNotified(watch.id);
     const id = rawAt(n, "resourceData.id");
@@ -218,14 +250,19 @@ export function createGraphSource(deps: GraphDeps) {
     sub: SubscriptionRow,
     g: Graph,
     watch: WatchRow,
+    signal: AbortSignal,
   ): Promise<number | undefined> {
     const expires = new Date(Date.now() + g.maxMinutes * 60_000).toISOString();
     if (watch.remoteId) {
-      const res = await call(sub, {
-        method: "PATCH",
-        path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
-        body: { expirationDateTime: expires },
-      });
+      const res = await call(
+        sub,
+        {
+          method: "PATCH",
+          path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
+          body: { expirationDateTime: expires },
+        },
+        signal,
+      );
       if (ok(res)) {
         await events.watchSubscribed(watch.id, watch.remoteId, expires, null);
         return undefined;
@@ -236,18 +273,22 @@ export function createGraphSource(deps: GraphDeps) {
       }
     }
     const url = urlOf(sub);
-    const res = await call(sub, {
-      method: "POST",
-      path: SUBSCRIPTIONS,
-      body: {
-        changeType: g.changeType,
-        notificationUrl: url,
-        lifecycleNotificationUrl: url,
-        resource: fill(g.resource, { value: watch.value }),
-        expirationDateTime: expires,
-        clientState: deps.openSecret(sub),
+    const res = await call(
+      sub,
+      {
+        method: "POST",
+        path: SUBSCRIPTIONS,
+        body: {
+          changeType: g.changeType,
+          notificationUrl: url,
+          lifecycleNotificationUrl: url,
+          resource: fill(g.resource, { value: watch.value }),
+          expirationDateTime: expires,
+          clientState: deps.openSecret(sub),
+        },
       },
-    });
+      signal,
+    );
     const remoteId = ok(res) ? rawAt(res!.data, "id") : null;
     if (typeof remoteId !== "string") {
       await events.watchSubscribed(watch.id, null, null, `Subscribing: ${why(res)}`);
@@ -264,6 +305,7 @@ export function createGraphSource(deps: GraphDeps) {
     sub: SubscriptionRow,
     connector: Connector,
     watch: WatchRow,
+    signal: AbortSignal,
   ): Promise<number | undefined> {
     const g = connector.events!.graph!;
     let link =
@@ -273,10 +315,7 @@ export function createGraphSource(deps: GraphDeps) {
         since: watch.createdAt,
       }) as string);
     for (let page = 0; page < DELTA_PAGES; page++) {
-      const res = await call(sub, {
-        method: g.delta.method,
-        path: link,
-      } as VendorRequest);
+      const res = await call(sub, { method: g.delta.method, path: link } as VendorRequest, signal);
       // A delta link Graph no longer knows: start again from the watch's start.
       if (res?.status === 410) {
         await events.watchCaughtUp(watch.id, null);
@@ -316,12 +355,13 @@ export function createGraphSource(deps: GraphDeps) {
     );
   }
 
-  async function release(sub: SubscriptionRow, watch: WatchRow) {
+  async function release(sub: SubscriptionRow, watch: WatchRow, signal: AbortSignal) {
     if (watch.remoteId) {
-      const res = await call(sub, {
-        method: "DELETE",
-        path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
-      });
+      const res = await call(
+        sub,
+        { method: "DELETE", path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}` },
+        signal,
+      );
       // It lapses at its expiry anyway, and its notifications find no watch here.
       if (!ok(res) && res?.status !== 404)
         await failed(sub, `unsubscribe ${watch.value}`, why(res), res?.status);
@@ -334,19 +374,20 @@ export function createGraphSource(deps: GraphDeps) {
   /** Watches exactly the values agents with a trigger hold, renews subscriptions past half their
    *  life, and catches each one up. Answers the first failing watch's error and the HTTP status of
    *  this round's first refused call. */
-  async function syncOnce(sub: SubscriptionRow, connector: Connector) {
+  async function syncOnce(sub: SubscriptionRow, connector: Connector, signal: AbortSignal) {
     const g = connector.events!.graph!;
     const want = await wanted(sub, g);
-    for (const w of await events.watches(sub.id)) if (!want.has(w.value)) await release(sub, w);
+    for (const w of await events.watches(sub.id))
+      if (!want.has(w.value)) await release(sub, w, signal);
     for (const v of want) await events.addWatch(sub.id, v);
     const halfLife = (g.maxMinutes * 60_000) / 2;
     let status: number | undefined;
     for (const w of await events.watches(sub.id)) {
       if (!w.remoteId || !w.expiresAt || Date.parse(w.expiresAt) - Date.now() < halfLife) {
-        const refused = await subscribe(sub, g, w);
+        const refused = await subscribe(sub, g, w, signal);
         status ??= refused;
       }
-      const refused = await catchUp(sub, connector, w);
+      const refused = await catchUp(sub, connector, w, signal);
       status ??= refused;
     }
     const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
@@ -356,31 +397,37 @@ export function createGraphSource(deps: GraphDeps) {
     };
   }
 
-  // One sync per subscription at a time (the service runs as one replica): the poll scheduler
-  // and a trigger change can both start one, and two would each make a Graph subscription for
-  // the same watch, the one refused clearing the other's id.
-  const syncing = new Map<string, ReturnType<typeof syncOnce>>();
+  // One change to a subscription's watches at a time, in this process and across them: the poll
+  // scheduler, a trigger change, a lifecycle notification and an unsubscribe can each start one,
+  // on any process, and two would each make a Graph subscription for the same watch, the one
+  // refused clearing the other's id. A sync waits on Graph for as long as it needs, so a lease
+  // (each call its own), not a lock held on one of the pool's few connections. One that loses it
+  // (stalled past its term, another took it) makes no further Graph call. Waiting for the turn
+  // gives up after TURN_WAIT_MS with SubscriptionBusy.
+  async function inTurn<T>(sub: SubscriptionRow, work: (signal: AbortSignal) => Promise<T>) {
+    const until = Date.now() + TURN_WAIT_MS;
+    for (;;) {
+      const done = await events.withLease(`graph-sync:${sub.id}`, LEASE_SECONDS, work);
+      if (done) return done.value;
+      if (Date.now() >= until) throw new SubscriptionBusy();
+      await new Promise((r) => setTimeout(r, LEASE_WAIT_MS));
+    }
+  }
 
   return {
     inbound,
     /** On the poll scheduler and after trigger changes. One started while another runs waits
-     *  for it, then runs on what changed meanwhile. */
-    sync(sub: SubscriptionRow, connector: Connector) {
-      // The earlier sync's failure went to its own caller.
-      const run = (syncing.get(sub.id) ?? Promise.resolve())
-        .catch(() => {})
-        .then(() => syncOnce(sub, connector));
-      syncing.set(sub.id, run);
-      const done = () => {
-        if (syncing.get(sub.id) === run) syncing.delete(sub.id);
-      };
-      run.then(done, done);
-      return run;
-    },
-    /** Removes every watch's Graph subscription, before the organization's goes. */
-    async releaseAll(sub: SubscriptionRow) {
-      for (const w of await events.watches(sub.id)) await release(sub, w);
-    },
+     *  for it, then runs on what changed meanwhile; SubscriptionBusy past the wait. */
+    sync: (sub: SubscriptionRow, connector: Connector) =>
+      inTurn(sub, (signal) => syncOnce(sub, connector, signal)),
+    /** Removes every watch's Graph subscription, then `remove`s the organization's, in its
+     *  turn: a sync on any process waits for it, so none makes a Graph subscription meanwhile
+     *  that nothing would delete. SubscriptionBusy (the admin's "try again") past the wait. */
+    releaseAll: <T>(sub: SubscriptionRow, remove: () => Promise<T>) =>
+      inTurn(sub, async (signal) => {
+        for (const w of await events.watches(sub.id)) await release(sub, w, signal);
+        return remove();
+      }),
     async settle() {
       while (working.size) await Promise.all([...working]);
     },
