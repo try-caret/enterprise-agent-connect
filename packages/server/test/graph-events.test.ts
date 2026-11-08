@@ -8,6 +8,7 @@ import type { VendorRequest, VendorResponse } from "../../connector-kit/src/type
 import { createApp } from "../src/app.ts";
 import { createEventsAdmin } from "../src/events/admin.ts";
 import { createEventsRuntime } from "../src/events/runtime.ts";
+import type { ReportTags } from "../src/report.ts";
 import { createEventsStore } from "../src/events/store.ts";
 import { migrate } from "../src/migrate.ts";
 import { CredentialKey } from "../src/secrets.ts";
@@ -173,6 +174,7 @@ async function setup(runner: TriggerRunner) {
              values (${org}, 'mailer', ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["read"])})`;
   const agentId = await agent("Helper", MAILBOX);
   const graph = fakeGraph();
+  const reports: { kind: string; tags?: ReportTags }[] = [];
   const deps = {
     store,
     events,
@@ -181,6 +183,7 @@ async function setup(runner: TriggerRunner) {
     appCall: graph.appCall,
     runners: new Map([[runner.id, runner]]),
     publicUrl: PUBLIC,
+    report: (kind: string, _error: unknown, tags?: ReportTags) => reports.push({ kind, tags }),
   };
   const runtime = createEventsRuntime(deps);
   const admin = createEventsAdmin({ ...deps, runtime });
@@ -259,6 +262,7 @@ async function setup(runner: TriggerRunner) {
     notify,
     audit,
     graph,
+    reports,
   };
 }
 
@@ -654,5 +658,17 @@ test("an app's graph block needs its limit, so no trigger hears another agent's 
     () =>
       parseConnector({ ...base, id: "mailer", events: { ...events, thread: "nope" } }, "mailer"),
     /thread name fields/,
+  );
+});
+
+test("a Graph catch-up Microsoft refuses is reported with its status", { skip: !sql }, async () => {
+  const t = await setup(fakeRunner().runner);
+  const { subscription } = await t.subscribe();
+  await t.trigger();
+  t.graph.setDelta([{ status: 403, data: null }]);
+  await t.runtime.syncApp(t.org, "mailer");
+  assert.deepEqual(
+    t.reports.filter((r) => r.kind === "event_poll_failed").map((r) => r.tags),
+    [{ app: "mailer", org: t.org, subscription: subscription.id, source: "graph", status: 403 }],
   );
 });

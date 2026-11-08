@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { serve } from "@hono/node-server";
 import { builtinConnectors, createAgentConnect, type AgentConnectOptions } from "./index.js";
@@ -96,4 +97,6 @@ export async function serveFromEnv(overrides: Partial<AgentConnectOptions> = {})
   console.log(`[agent-connect] listening on :${port} with ${service.connectors.join(", ")}`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) await serveFromEnv();
+// Run as the entry, also through a symlink (an npm bin); not when a host imports serveFromEnv.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
+  await serveFromEnv();

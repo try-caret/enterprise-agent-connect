@@ -334,15 +334,26 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       threadValue === null || threadValue === undefined || Array.isArray(threadValue)
         ? null
         : threadId(trigger.id, String(threadValue));
-    const runId = await events.startRun({
-      agentId: trigger.agentId,
-      triggerId: trigger.id,
-      eventId: event.id,
-      eventType: event.eventType,
-      deliveryId: event.deliveryId,
-      thread,
+    const runTags = {
+      app: connector.id,
+      org: event.organizationId,
+      agent: trigger.agentId,
       runner: trigger.runner,
-    });
+    };
+    const runId = await events
+      .startRun({
+        agentId: trigger.agentId,
+        triggerId: trigger.id,
+        eventId: event.id,
+        eventType: event.eventType,
+        deliveryId: event.deliveryId,
+        thread,
+        runner: trigger.runner,
+      })
+      .catch((error: unknown) => {
+        report("event_run_start_failed", error, runTags);
+        throw error;
+      });
     try {
       const secret = trigger.secret
         ? key.open(
@@ -374,12 +385,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       if (!(error instanceof ConnectError)) console.error(`[events] run ${runId}`, error);
-      report("event_run_start_failed", error, {
-        app: connector.id,
-        org: event.organizationId,
-        agent: trigger.agentId,
-        runner: trigger.runner,
-      });
+      report("event_run_start_failed", error, runTags);
       await events.updateRun(runId, { state: "failed", error: why.slice(0, 500) });
       return decide("failed", `Run ${runId} could not start: ${why}`);
     }
@@ -485,7 +491,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (!connector?.events?.graph)
       return polled(sub, null, `${sub.connectorId} sends no Graph notifications`);
     try {
-      await polled(sub, null, await graph.sync(sub, connector));
+      const { error, status } = await graph.sync(sub, connector);
+      await polled(sub, null, error, null, status);
     } catch (error) {
       console.error(`[events] graph sync ${sub.id}`, error);
       const why = error instanceof ConnectError ? error.message : "Internal error";

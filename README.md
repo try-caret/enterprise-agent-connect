@@ -251,9 +251,10 @@ await serveFromEnv({
 });
 ```
 
-Each kind is reported where it is decided, at most once a minute per kind and app in each
-process (so a broken app cannot flood the sink). What the hook throws is logged and never
-reaches the service; a hook that sends over the network should not block (fire and forget).
+Each kind is reported where it is decided, at most once a minute per kind, app, organization,
+subscription and bot in each process (so a broken one cannot flood the sink or hide another).
+What the hook throws, or an async hook rejects with, is logged and never reaches the service;
+a hook that sends over the network should not block (fire and forget).
 
 | Kind | When |
 | --- | --- |

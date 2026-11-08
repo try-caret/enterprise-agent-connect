@@ -820,3 +820,18 @@ test(
     assert.ok(start.error instanceof Error);
   },
 );
+
+test("a run whose row cannot be written is reported", { skip: !sql }, async () => {
+  const f = fakeRunner();
+  const t = await setup([f.runner]);
+  const { subscription, secret } = await t.subscribe();
+  await t.trigger();
+  t.events.startRun = async () => {
+    throw new Error("the database is gone");
+  };
+  assert.equal(await t.deliver(subscription.id, secret!, item()), 200);
+  const start = t.reports.find((r) => r.kind === "event_run_start_failed")!;
+  assert.deepEqual(start.tags, { app: "tracker", org: t.org, agent: t.agentId, runner: "fake" });
+  assert.match((start.error as Error).message, /database is gone/);
+  assert.equal(f.started.length, 0);
+});

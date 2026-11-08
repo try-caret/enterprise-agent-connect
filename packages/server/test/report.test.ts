@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   errorReporter,
@@ -90,6 +94,52 @@ test("a hook that throws is logged, never thrown into the service", () => {
   );
   assert.doesNotThrow(() => report("event_failed", new Error("x")));
   assert.equal(logged.length, 1);
+});
+
+test("an async hook that rejects is logged, never an unhandled rejection", async () => {
+  const logged: unknown[] = [];
+  const report = errorReporter(
+    async () => {
+      throw new Error("sink down");
+    },
+    { log: { error: (...a: unknown[]) => logged.push(a) } },
+  );
+  report("event_failed", new Error("x"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(logged.length, 1);
+});
+
+test("the minute's limit is per organization, subscription and bot too", () => {
+  const seen: AgentConnectError[] = [];
+  const report = errorReporter((e) => seen.push(e), { now: () => 0 });
+  report("event_poll_failed", null, { app: "jira", org: "o1", subscription: "s1" });
+  report("event_poll_failed", null, { app: "jira", org: "o1", subscription: "s1" });
+  report("event_poll_failed", null, { app: "jira", org: "o1", subscription: "s2" });
+  report("event_poll_failed", null, { app: "jira", org: "o2", subscription: "s3" });
+  report("teams_send_failed", null, { app: "teams", org: "o1", bot: "b1" });
+  report("teams_send_failed", null, { app: "teams", org: "o1", bot: "b1" });
+  report("teams_send_failed", null, { app: "teams", org: "o1", bot: "b2" });
+  assert.deepEqual(
+    seen.map((e) => `${e.kind} ${e.tags.org} ${e.tags.subscription ?? e.tags.bot}`),
+    [
+      "event_poll_failed o1 s1",
+      "event_poll_failed o1 s2",
+      "event_poll_failed o2 s3",
+      "teams_send_failed o1 b1",
+      "teams_send_failed o1 b2",
+    ],
+  );
+});
+
+test("the server entry starts when launched through a symlink", () => {
+  const link = join(mkdtempSync(join(tmpdir(), "eac-entry-")), "server.ts");
+  symlinkSync(new URL("../src/server.ts", import.meta.url).pathname, link);
+  const env = { ...process.env };
+  delete env.DATABASE_URL;
+  const run = spawnSync(process.execPath, ["--import", "tsx", link], { env, encoding: "utf8" });
+  // It ran serveFromEnv, which stops at the first missing setting.
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /Missing required env var: DATABASE_URL/);
 });
 
 test("an audited call the app refused with 401 or 403 is reported after its row is written", async () => {
