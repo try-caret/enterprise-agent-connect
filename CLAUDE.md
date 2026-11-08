@@ -634,16 +634,19 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   `jsm/assets/workspace/{workspaceId}/v1/`; the vendor finds the workspace id once per cloudId
   (`GET /rest/servicedeskapi/assets/workspace`). Limit `asset_schemas`: AQL becomes
   `objectSchemaId = N AND (<agent's AQL>)`, AQL that could look through references (`HAVING`,
-  `...References(`, `connectedTickets(`, dot notation, also in ORDER BY) or uses single quotes is
-  refused, and every object answered or changed is checked on its schema; a referenced object
+  `...References(`, dot notation, also in ORDER BY) or uses single quotes is refused; with a
+  schema or a projects limit, `connectedTickets(` (JQL the projects limit does not hold) and any
+  backslash but `\"` (AQL's only documented escape) are refused too, and every object answered or changed is checked on its schema; a referenced object
   outside them (or a reference value with no `referencedObject`) is shown as a placeholder
   (reads only: AQL like `Owner LIKE "Al"` still matches a reference's label, so an agent can
   probe the labels its allowed objects point to). Update sends only the named attributes after
   checking each (editable, a Select option; Object references refused; at most 20) and reads the
-  object back; a failed read-back answers the change with a warning, never an error. A Status id
-  in the attribute's `typeValueMulti` is taken as given; a name is looked up on one object of the
-  type holding it (AQL), since service accounts are not offered `read:cmdb-config:jira` for the
-  status list, so a status no object holds yet must be given by id. No create or delete. Errors
+  object back; a failed read-back answers the change with a warning, never an error. Only null
+  clears (an empty list is refused). A Status id in the attribute's `typeValueMulti` is taken as
+  given; anything else is looked up by name on one object of the type holding it (AQL), since
+  service accounts are not offered `read:cmdb-config:jira` for the status list; a status no
+  object holds yet is refused without listing ids to guess. Select options are one
+  comma-separated text in Assets: matched against pieces joined again, listed as the text. No create or delete. Errors
   read through `answers.ts`, shared with the issue tools. Checked live
   November 8, 2026 (with all 15 cmdb scopes, not only the listed ones): a service account needs a
   JSM agent seat, no schema role; a partial PUT leaves other attributes as they were. Source:

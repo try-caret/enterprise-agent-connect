@@ -119,7 +119,7 @@
         "read:cmdb-attribute:jira"
       ],
       "permissions": [],
-      "forbidden": "Give the service account a role on the object schema (Assets > the schema > Configure > Roles) and the Assets scopes listed in the setup steps.",
+      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has a role on the object schema (Assets > the schema > Configure > Roles) unless the schema lets agents in.",
       "tools": ["jira_assets_search", "jira_assets_get_object", "jira_assets_list_attributes"]
     },
     {
@@ -134,7 +134,7 @@
         "write:cmdb-object:jira"
       ],
       "permissions": [],
-      "forbidden": "Give the service account the Object schema users role on the object schema (Assets > the schema > Configure > Roles) and the Assets scopes listed in the setup steps.",
+      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has the Object schema users role on the object schema (Assets > the schema > Configure > Roles) unless the schema lets agents change objects.",
       "tools": ["jira_assets_update_object"]
     }
   ],

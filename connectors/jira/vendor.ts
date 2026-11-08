@@ -123,6 +123,17 @@ export function jiraVendor(unguarded: Fetch = fetch): Vendor {
       let workspace = workspaces.get(cloudId);
       if (!workspace) {
         const found = await send("GET", "/rest/servicedeskapi/assets/workspace");
+        if (found.status === 401 || found.status === 403)
+          return {
+            ...found,
+            data: {
+              errorMessages: [
+                "Jira Service Management refused the Assets workspace lookup: the service " +
+                  "account needs Jira Service Management access as User (an agent seat) and " +
+                  "the read:servicedesk-request scope",
+              ],
+            },
+          };
         if (found.status < 200 || found.status >= 300) return found;
         const id = (found.data as { values?: { workspaceId?: unknown }[] } | null)?.values?.[0]
           ?.workspaceId;

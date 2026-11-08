@@ -79,7 +79,7 @@ const ATTRS = [
     name: "Location",
     type: 0,
     defaultType: { id: 10, name: "Select" },
-    options: "Boston, London",
+    options: "Boston, London,Needham, MA",
     editable: true,
     system: false,
     maximumCardinality: 1,
@@ -89,7 +89,7 @@ const ATTRS = [
     id: "9",
     name: "Condition",
     type: 7,
-    typeValueMulti: ["30", "31"],
+    typeValueMulti: ["30", "31", "32"],
     editable: true,
     system: false,
     maximumCardinality: 1,
@@ -110,7 +110,7 @@ const value = (v: string, extra: object = {}) => ({ value: v, displayValue: v, .
 // Status ids by attribute and name, as objects hold them.
 const STATUSES: Record<string, Record<string, string>> = {
   "3": { "In stock": "20", "In use": "21", Retired: "22" },
-  "9": { Good: "30", Damaged: "31" },
+  "9": { Good: "30", Damaged: "31", "2024": "32" },
 };
 const laptop = (id: string, status: string, received: string, embed: boolean, type = LAPTOP) => ({
   id,
@@ -322,7 +322,7 @@ test("jira_assets_list_attributes lists names and kinds, and refuses another sch
   assert.equal(byName.Status.kind, "Status");
   assert.equal(byName.Recipient.kind, "User");
   assert.equal(byName["Date Received"].kind, "Date");
-  assert.deepEqual(byName.Location.options, ["Boston", "London"]);
+  assert.equal(byName.Location.options, "Boston, London,Needham, MA");
   assert.equal(byName.Key.editable, false);
   const other = await call(h, key, "jira_assets_list_attributes", { object_type_id: "77" });
   assert.match(other.text!, /not allowed/);
@@ -375,8 +375,11 @@ test("jira_assets_update_object refuses before any write: other schema, unknown,
     [{ object_id: "11", attributes: { Key: "IT-1" } }, /Key cannot be edited/],
     // Retired exists but this Status attribute allows only 20 and 21.
     [{ object_id: "11", attributes: { Status: "Retired" } }, /does not allow status Retired/],
-    [{ object_id: "11", attributes: { Status: "22" } }, /does not allow status 22/],
-    [{ object_id: "11", attributes: { Status: 'In "use' } }, /Give Status's status by its id/],
+    // Not an allowed id and no status of that name: refused, never sent as an id.
+    [{ object_id: "11", attributes: { Status: "22" } }, /no status 22 on any object/],
+    [{ object_id: "11", attributes: { Status: 'In "use' } }, /cannot be looked up by name/],
+    // An empty list is not a way to clear: only null is.
+    [{ object_id: "11", attributes: { Notes: [] } }, /./],
     [{ object_id: "11", attributes: { Notes: ["a", "b"] } }, /takes one value/],
     [{ object_id: "11", attributes: {} }, /at least one/],
   ];
@@ -393,12 +396,26 @@ test("a status no object holds yet is refused by name and taken by id; each Stat
   const h = harness();
   const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
   const { sent } = assets(h, { held: ["In stock", "Damaged"] });
+  // A status whose name is digits is found by name when the digits are not an allowed id.
+  const named = harness();
+  const namedKey = named.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
+  const { sent: namedSent } = assets(named);
+  const byName = await call(named, namedKey, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Condition: "2024" },
+  });
+  assert.equal(byName.isError, false, byName.text ?? "");
+  assert.deepEqual((namedSent.find((s) => s.method === "PUT")!.body as any).attributes, [
+    { objectTypeAttributeId: "9", objectAttributeValues: [{ value: "32" }] },
+  ]);
   const unheld = await call(h, key, "jira_assets_update_object", {
     object_id: "11",
     attributes: { Status: "In use" },
   });
   assert.equal(unheld.isError, true);
-  assert.match(unheld.text!, /no status In use on any object.*Give the status id instead\. Ids it allows: 20, 21\./);
+  assert.match(unheld.text!, /no status In use on any object.*Ask a person to set it in Assets/);
+  // No ids are offered to guess from.
+  assert.doesNotMatch(unheld.text!, /20|21/);
   const byId = await call(h, key, "jira_assets_update_object", {
     object_id: "11",
     attributes: { Status: "21", Condition: "damaged" },
@@ -497,6 +514,8 @@ test("the vendor finds the Assets workspace once per site and fills it into Asse
   workspaces = 401;
   const refused = await jiraVendor(fake).call(conn, { method: "GET", path: `${WS}object/1` });
   assert.equal(refused.status, 401);
+  // The refusal names the seat and scope, not the schema role the capability's hint is about.
+  assert.match(JSON.stringify(refused.data), /refused the Assets workspace lookup.*agent seat/);
   // A site without Assets.
   workspaces = { values: [] };
   const none = await jiraVendor(fake).call(conn, { method: "GET", path: `${WS}object/1` });
@@ -523,18 +542,18 @@ test("the vendor finds the Assets workspace once per site and fills it into Asse
 
 test("scopeAql refuses, for a limited agent, AQL that looks through references or uses single quotes", () => {
   for (const [aql, message] of [
-    ['object HAVING outboundReferences(objectSchemaId = 5 AND "Cost" > 5000)', /References and connected tickets cannot/],
-    ["objectType = Laptop AND inboundReferences(Name = x)", /References and connected tickets cannot/],
+    ['object HAVING outboundReferences(objectSchemaId = 5 AND "Cost" > 5000)', /References cannot/],
+    ["objectType = Laptop AND inboundReferences(Name = x)", /References cannot/],
     ['Owner.Department = "IT"', /dot notation/],
     ['"Owner"."Name" = "Kim"', /dot notation/],
     ["Name = '(' ) OR (objectSchemaId = 5 OR Name = ')'", /single quotes|Unbalanced/],
     ["objectType = Laptop ORDER BY Owner.Name", /dot notation/],
     ['Owner.2FA = "a"', /dot notation/],
     ["Owner1.Name = x", /dot notation/],
-    ['connectedTickets(project = SECRET AND summary ~ "merger")', /connected tickets/],
+    ['connectedTickets(project = SECRET AND summary ~ "merger")', /Connected tickets/],
     [
       'Name = "a\\\n" AND object HAVING outboundReferences(objectSchemaId = 5 AND Name = "x")',
-      /References/,
+      /backslash/,
     ],
     ['2024.Name = "x"', /dot notation/],
     ['Owner-1.Name = "x"', /dot notation/],
@@ -558,7 +577,7 @@ test("jira_assets_update_object checks Select options, refuses references and an
   const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
   const { sent } = assets(h);
   const refused: [object, RegExp][] = [
-    [{ Location: "Paris" }, /no option Paris. Use one of: Boston, London/],
+    [{ Location: "Paris" }, /no option Paris. Use one of: Boston, London,Needham, MA/],
     [{ Owner: "IT-12" }, /Owner links to other objects/],
     [{ Status: "In use", status: "In use" }, /Status is named twice/],
   ];
@@ -575,6 +594,15 @@ test("jira_assets_update_object checks Select options, refuses references and an
   assert.equal(r.isError, false, r.text ?? "");
   assert.deepEqual((sent.find((s) => s.method === "PUT")!.body as any).attributes, [
     { objectTypeAttributeId: "7", objectAttributeValues: [{ value: "Boston" }] },
+  ]);
+  // An option holding a comma ("Needham, MA") is matched whole.
+  const comma = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Location: "needham, ma" },
+  });
+  assert.equal(comma.isError, false, comma.text ?? "");
+  assert.deepEqual((sent.filter((s) => s.method === "PUT").at(-1)!.body as any).attributes, [
+    { objectTypeAttributeId: "7", objectAttributeValues: [{ value: "Needham, MA" }] },
   ]);
 });
 
@@ -614,4 +642,53 @@ test("a referenced object outside the agent's schemas is not named", async () =>
   const hidden = "(an object in a schema this agent may not use)";
   // The last value has no reference marks at all: Owner's definition (type 1) hides it.
   assert.deepEqual(r.data.attributes.Owner, ["Owner 12", hidden, hidden, hidden]);
+});
+
+test("scopeAql: a projects limit alone refuses connectedTickets; only \\\" may follow a backslash", () => {
+  const BS = "\\";
+  assert.throws(
+    () => scopeAql("object HAVING connectedTickets(project = SECRET)", null, true),
+    /Connected tickets/,
+  );
+  // To this check every parenthesis below sits in a string; if Atlassian does not read \\ as
+  // an escaped backslash they would be live, so a backslash before anything but " is refused.
+  const split = `Name = "a${BS}${BS}" AND Notes = ") OR objectSchemaId = 5 OR (Name = "x${BS}${BS}" y"`;
+  assert.throws(() => scopeAql(split, ["137"]), /backslash/);
+  assert.throws(() => scopeAql(`Name = "a${BS}${BS}"`, null, true), /backslash/);
+  assert.equal(
+    scopeAql(`Name = "say ${BS}"hi${BS}""`, ["137"]),
+    `objectSchemaId = 137 AND (Name = "say ${BS}"hi${BS}"")`,
+  );
+  // With no limit at all, nothing is refused here.
+  assert.equal(
+    scopeAql("object HAVING connectedTickets(project = X)", null),
+    "object HAVING connectedTickets(project = X)",
+  );
+});
+
+test("search: an empty page that is not marked last has no next start", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_read"], { asset_schemas: ["137"] });
+  assets(h);
+  const prev = h.vendor.call;
+  h.vendor.call = async (conn, req) =>
+    req.path.includes("object/aql")
+      ? { status: 200, data: { values: [], isLast: false, total: 3 } }
+      : prev(conn, req);
+  const r = await call(h, key, "jira_assets_search", { aql: "objectType = Laptop", start_at: 40 });
+  assert.equal(r.isError, false, r.text ?? "");
+  assert.equal(r.data.more, false);
+  assert.equal(r.data.next_start_at, null);
+});
+
+test("search: a projects limit refuses connectedTickets even with no schema limit", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_read"], { projects: ["HELP"] });
+  const { sent } = assets(h);
+  const r = await call(h, key, "jira_assets_search", {
+    aql: 'object HAVING connectedTickets(project = SECRET AND summary ~ "merger")',
+  });
+  assert.equal(r.isError, true);
+  assert.match(r.text!, /Connected tickets/);
+  assert.equal(sent.length, 0);
 });

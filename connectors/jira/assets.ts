@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isSchemaId, scopeAql } from "./aql.js";
+import { isAssetsId, scopeAql } from "./aql.js";
 import { JqlRejected } from "./jql.js";
 import { answerOf } from "./answers.js";
 import { ASSETS_PATH } from "./vendor.js";
@@ -22,7 +22,6 @@ import {
 type Mark = (status: number) => void;
 type Obj = Record<string, any>;
 
-const OBJECT_ID = /^[1-9][0-9]{0,17}$/;
 const path = (rest: string) => `${ASSETS_PATH}${rest}`;
 // An object type attribute's `type` (ObjectTypeAttribute in the OpenAPI): 0 is a plain value
 // whose kind is `defaultType.name` (Text, Date, Select...).
@@ -37,6 +36,8 @@ const STATUS = 7;
 const SELECT = 10; // defaultType.id of a plain Select value
 
 const ok = answerOf("Jira Assets");
+
+const canEdit = (def: Obj) => def.editable === true && def.system !== true;
 
 function allowedSchema(schemas: string[] | null, id: unknown): boolean {
   return schemas === null || (id !== undefined && id !== null && schemas.includes(String(id)));
@@ -86,7 +87,7 @@ function shownObject(o: Obj, schemas: string[] | null, defs: Map<string, Obj> = 
 }
 
 async function fetchObject(ctx: ToolContext, mark: Mark, id: string): Promise<Obj> {
-  if (!OBJECT_ID.test(id)) throw new Denied("Give an Assets object id, a number such as 88");
+  if (!isAssetsId(id)) throw new Denied("Give an Assets object id, a number such as 88");
   const object = await ok(ctx, mark, { method: "GET", path: path(`object/${id}`) });
   if (!allowedSchema(listLimit(ctx.limits, "asset_schemas"), object?.objectType?.objectSchemaId))
     throw new Denied(`Assets object ${id} is in an object schema this agent is not allowed to use`);
@@ -102,7 +103,7 @@ async function typeAttributes(
   typeId: string,
   checked = false,
 ): Promise<Obj[]> {
-  if (!OBJECT_ID.test(typeId)) throw new Denied("Give an object type id, a number such as 23");
+  if (!isAssetsId(typeId)) throw new Denied("Give an object type id, a number such as 23");
   const attrs = (await ok(ctx, mark, {
     method: "GET",
     path: path(`objecttype/${typeId}/attributes`),
@@ -119,9 +120,10 @@ async function typeAttributes(
   return attrs;
 }
 
-// A Status value's id. An id the attribute allows (`typeValueMulti`) is taken as given. A name
-// is looked up on an object of the type that already holds it: the status list needs
-// read:cmdb-config:jira, which service accounts are not offered (401, checked November 8, 2026).
+// A Status value's id. An id the attribute allows (`typeValueMulti`) is taken as given; anything
+// else is looked up by name on an object of the type that already holds it, since the status
+// list needs read:cmdb-config:jira, which service accounts are not offered (401, checked
+// November 8, 2026). A status no object holds yet is refused without listing ids to guess from.
 async function statusId(
   ctx: ToolContext,
   mark: Mark,
@@ -132,14 +134,9 @@ async function statusId(
 ): Promise<string> {
   const allowed = ((def.typeValueMulti ?? []) as unknown[]).map(String);
   const want = value.trim();
-  const ids = allowed.length ? ` Ids it allows: ${allowed.join(", ")}.` : "";
-  if (OBJECT_ID.test(want)) {
-    if (allowed.length && !allowed.includes(want))
-      throw new Denied(`${def.name} does not allow status ${want}.${ids}`);
-    return want;
-  }
+  if (isAssetsId(want) && allowed.includes(want)) return want;
   if (/["\\]/.test(want) || /["\\]/.test(String(def.name)))
-    throw new Denied(`Give ${def.name}'s status by its id`);
+    throw new Denied(`${def.name}'s status ${value} cannot be looked up by name`);
   const data = await ok(ctx, mark, {
     method: "POST",
     path: path("object/aql?startAt=0&maxResults=1&includeAttributes=true"),
@@ -156,14 +153,16 @@ async function statusId(
           const id = v?.status?.id === undefined ? null : String(v.status.id);
           if (id && String(v.status.name ?? "").toLowerCase() === want.toLowerCase()) {
             if (allowed.length && !allowed.includes(id))
-              throw new Denied(`${def.name} does not allow status ${value}.${ids}`);
+              throw new Denied(`${def.name} does not allow status ${value}`);
             return id;
           }
         }
+  // With no allowed list, digits no name matched are an id, as before.
+  if (isAssetsId(want) && !allowed.length) return want;
   throw new Denied(
-    `${def.name} has no status ${value} on any object of this type, so its id cannot be ` +
-      `looked up (Atlassian does not let a service account read the status list). ` +
-      `Give the status id instead.${ids}`,
+    `${def.name} has no status ${value} on any object of this type, so it cannot be looked up ` +
+      "(Atlassian does not let a service account read the status list). Ask a person to set " +
+      "it in Assets, or for its status id.",
   );
 }
 
@@ -171,10 +170,18 @@ async function statusId(
 const shownError = (error: unknown) =>
   error instanceof VendorFailed || error instanceof Denied ? error.message : "";
 
-const selectOptions = (def: Obj): string[] =>
-  typeof def.options === "string" && def.options
-    ? def.options.split(",").map((o: string) => o.trim())
-    : [];
+// A Select value as one of its options. Assets keeps the options as one comma-separated text,
+// so an option holding a comma is matched against neighbouring pieces joined again.
+function selectOption(def: Obj, value: string): string | null {
+  const pieces = typeof def.options === "string" && def.options ? def.options.split(",") : [];
+  const want = value.trim().toLowerCase();
+  for (let i = 0; i < pieces.length; i++)
+    for (let j = i; j < pieces.length; j++) {
+      const option = pieces.slice(i, j + 1).join(",").trim();
+      if (option.toLowerCase() === want) return option;
+    }
+  return null;
+}
 
 const attributeKind = (a: Obj) =>
   a.type === 0 || a.type === undefined
@@ -215,7 +222,7 @@ export const assetsTools: Toolset = {
             const schemas = listLimit(ctx.limits, "asset_schemas");
             let scoped: string;
             try {
-              scoped = scopeAql(aql, schemas);
+              scoped = scopeAql(aql, schemas, listLimit(ctx.limits, "projects") !== null);
             } catch (error) {
               if (error instanceof JqlRejected) throw new Denied(error.message);
               throw error;
@@ -241,7 +248,7 @@ export const assetsTools: Toolset = {
               objects,
               total: typeof data?.total === "number" ? data.total : null,
               more: !last && values.length > 0,
-              next_start_at: last ? null : start_at + values.length,
+              next_start_at: !last && values.length > 0 ? start_at + values.length : null,
             });
           }),
       );
@@ -275,7 +282,7 @@ export const assetsTools: Toolset = {
             "List the attributes of a Jira Assets object type (its object_type_id from a search " +
             "or object): name, kind (Text, Date, Select, Status, User, Object reference...), " +
             "whether it can be edited, is required or takes several values, and the options of " +
-            "a Select.",
+            "a Select (comma-separated, as Assets keeps them).",
           inputSchema: z.object({
             object_type_id: z.string().max(20).describe("Object type id, e.g. 23."),
           }),
@@ -288,10 +295,11 @@ export const assetsTools: Toolset = {
                 id: String(a.id),
                 name: a.name,
                 kind: attributeKind(a),
-                editable: a.editable === true && a.system !== true,
+                editable: canEdit(a),
                 required: (a.minimumCardinality ?? 0) > 0,
                 multiple: a.maximumCardinality !== 1,
-                options: selectOptions(a).length ? selectOptions(a) : null,
+                // As Assets keeps them: one comma-separated text, so an option may hold a comma.
+                options: typeof a.options === "string" && a.options ? a.options : null,
                 description: a.description ?? null,
               })),
             ),
@@ -313,7 +321,11 @@ export const assetsTools: Toolset = {
             attributes: z
               .record(
                 z.string().min(1).max(200),
-                z.union([z.string().max(10000), z.array(z.string().max(10000)).max(50), z.null()]),
+                z.union([
+                  z.string().max(10000),
+                  z.array(z.string().max(10000)).min(1).max(50),
+                  z.null(),
+                ]),
               )
               .refine((a) => Object.keys(a).length <= 20, "Change at most 20 attributes at a time")
               .describe('Attribute name to new value, e.g. {"Status": "In use"}.'),
@@ -324,17 +336,16 @@ export const assetsTools: Toolset = {
           audited(
             ctx,
             "jira_assets_update_object",
-            `${object_id} (${Object.keys(attributes).slice(0, 20).join(", ")})`.slice(0, 300),
+            `${object_id} (${Object.keys(attributes).join(", ")})`,
             async (mark) => {
               const changes = Object.entries(attributes);
               if (changes.length === 0) throw new Denied("Name at least one attribute to change");
-              if (changes.length > 20) throw new Denied("Change at most 20 attributes at a time");
               const object = await fetchObject(ctx, mark, object_id);
               const typeId = String(object.objectType?.id ?? "");
               const schemaId = String(object.objectType?.objectSchemaId ?? "");
               const defs = await typeAttributes(ctx, mark, typeId, true);
               const byName = new Map(defs.map((a) => [String(a.name).toLowerCase(), a]));
-              const editable = defs.filter((a) => a.editable === true && a.system !== true);
+              const editable = defs.filter(canEdit);
               const body = [];
               const named = new Set<string>();
               for (const [name, value] of changes) {
@@ -347,7 +358,7 @@ export const assetsTools: Toolset = {
                   );
                 if (named.has(String(def.id))) throw new Denied(`${def.name} is named twice`);
                 named.add(String(def.id));
-                if (def.editable !== true || def.system === true)
+                if (!canEdit(def))
                   throw new Denied(`${def.name} cannot be edited`);
                 if (def.type === REFERENCE)
                   throw new Denied(
@@ -357,20 +368,18 @@ export const assetsTools: Toolset = {
                 if (values.length > 1 && def.maximumCardinality === 1)
                   throw new Denied(`${def.name} takes one value`);
                 if (def.type === STATUS && values.length) {
-                  if (!isSchemaId(schemaId)) throw new Error("Object has no schema id");
+                  if (!isAssetsId(schemaId)) throw new Error("Object has no schema id");
                   const resolved = [];
                   for (const v of values)
                     resolved.push(await statusId(ctx, mark, schemaId, typeId, def, v));
                   values = resolved;
                 }
                 if (def.type === 0 && def.defaultType?.id === SELECT && values.length) {
-                  const options = selectOptions(def);
                   values = values.map((v) => {
-                    const want = v.trim().toLowerCase();
-                    const found = options.find((o) => o.toLowerCase() === want);
+                    const found = selectOption(def, v);
                     if (!found)
                       throw new Denied(
-                        `${def.name} has no option ${v}. Use one of: ${options.join(", ")}`,
+                        `${def.name} has no option ${v}. Use one of: ${def.options}`,
                       );
                     return found;
                   });
@@ -396,7 +405,10 @@ export const assetsTools: Toolset = {
                 });
               } catch (error) {
                 if (!shownError(error))
-                  console.error("[agent-connect] jira_assets_update_object read-back failed", error);
+                  console.error(
+                    "[agent-connect] jira_assets_update_object read-back failed",
+                    error,
+                  );
                 mark(200);
                 return json({
                   updated,

@@ -12,33 +12,45 @@ const STRING = /"(?:\\[\s\S]|[^"\\])*"/g;
 // start), with nothing of a name right after it. Anything else with a dot is dot notation.
 const DECIMAL = /(?<=(?:^|[(,=<>!~])\s*-?)(?:\d*\.\d+|\d+\.)(?![\p{L}\p{N}\p{M}_.$])/gu;
 
-export function isSchemaId(id: string): boolean {
+// Object schema, object type and object ids are all positive numbers.
+export function isAssetsId(id: string): boolean {
   return SCHEMA_ID.test(id);
 }
 
-export function scopeAql(aql: string, schemas: string[] | null): string {
+// `projectsLimited`: the agent's Jira projects limit is set. connectedTickets( runs JQL inside
+// AQL that the projects limit does not hold, so it is refused then, schema limit or not.
+export function scopeAql(aql: string, schemas: string[] | null, projectsLimited = false): string {
   const { where, orderBy } = splitOrderBy(aql, '"');
   if (orderBy && !ORDER_BY.test(orderBy.replace(STRING, '""')))
     throw new JqlRejected("ORDER BY must be the last part of the query and name only an attribute");
+  if (schemas !== null || projectsLimited) {
+    // AQL documents only \" as an escape, so any other backslash is refused: the strings read
+    // here are then the strings Atlassian reads.
+    if (/\\(?!")/.test(aql))
+      throw new JqlRejected('A backslash may only escape a double quote (\\")');
+    if (/connectedtickets\s*\(/i.test(aql.replace(STRING, '""')))
+      throw new JqlRejected(
+        "Connected tickets cannot be searched by an agent limited to projects or schemas",
+      );
+  }
   if (schemas === null) {
     if (!where) throw new JqlRejected("Give an AQL condition, e.g. objectType = Laptop");
     return aql.trim();
   }
   if (schemas.length === 0) throw new JqlRejected("No object schemas are allowed");
   // Looking through references (HAVING, ...References(, Owner.Name, also in ORDER BY) could test
-  // objects in other schemas, connectedTickets( runs JQL no project limit holds, and a single
-  // quote might start a string this check does not know: all refused. Numbers keep their dot.
+  // objects in other schemas, and a single quote might start a string this check does not know:
+  // both refused. Numbers keep their dot.
   const bare = aql.replace(STRING, '""').replace(DECIMAL, "0");
   if (/'/.test(bare))
     throw new JqlRejected('Quote values with double quotes ("), not single quotes');
-  if (/\bhaving\b|references\s*\(|connectedtickets\s*\(/i.test(bare))
+  if (/\bhaving\b|references\s*\(/i.test(bare))
     throw new JqlRejected(
-      "References and connected tickets cannot be searched: " +
-        "give conditions on the objects' own attributes",
+      "References cannot be searched: give conditions on the objects' own attributes",
     );
   if (bare.includes("."))
     throw new JqlRejected("Attributes of referenced objects (dot notation) cannot be searched");
-  for (const s of schemas) if (!isSchemaId(s)) throw new Error(`Invalid object schema id ${s}`);
+  for (const s of schemas) if (!isAssetsId(s)) throw new Error(`Invalid object schema id ${s}`);
   const filter =
     schemas.length === 1
       ? `objectSchemaId = ${schemas[0]}`
