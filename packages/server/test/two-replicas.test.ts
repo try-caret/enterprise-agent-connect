@@ -384,6 +384,31 @@ test(
   },
 );
 
+test(
+  "removing a subscription waits for another process's sync, and deletes what it made",
+  { skip: !sql },
+  async () => {
+    const t = await eventsSetup("graph");
+    const posting = gate();
+    t.before.call = async (req) => {
+      if (req.method === "POST") await posting.pass();
+    };
+    const syncing = t.pod().syncApp(t.org, "app");
+    await posting.entered;
+    const removing = t
+      .pod()
+      .releaseAll(t.sub, () => t.events.deleteSubscription(t.org, t.sub.id));
+    await sleep(100);
+    posting.open();
+    await Promise.all([syncing, removing]);
+    assert.deepEqual(
+      t.calls.filter((c) => c.method === "DELETE").map((c) => c.path),
+      ["/v1.0/subscriptions/g-1"],
+    );
+    assert.equal(await t.events.subscription(t.sub.id), null);
+  },
+);
+
 test("one process makes each due poll", { skip: !sql }, async () => {
   const t = await eventsSetup("poll");
   const first = t.pod().pollDue();

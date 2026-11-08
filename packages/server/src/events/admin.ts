@@ -237,9 +237,11 @@ export function createEventsAdmin(deps: {
 
     async unsubscribe(org: string, subId: string, who: string) {
       const existing = await events.subscription(subId);
-      if (existing?.organizationId === org && existing.source === "graph")
-        await deps.runtime.releaseAll(existing);
-      const sub = await events.deleteSubscription(org, subId);
+      const remove = () => events.deleteSubscription(org, subId);
+      const sub =
+        existing?.organizationId === org && existing.source === "graph"
+          ? await deps.runtime.releaseAll(existing, remove)
+          : await remove();
       if (sub) await log(org, who, sub.connectorId, "unsubscribe_events", subId);
       return sub !== null;
     },

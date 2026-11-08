@@ -411,11 +411,14 @@ export function createGraphSource(deps: GraphDeps) {
      *  for it, then runs on what changed meanwhile. */
     sync: (sub: SubscriptionRow, connector: Connector) =>
       inTurn(sub, (signal) => syncOnce(sub, connector, signal)),
-    /** Removes every watch's Graph subscription, before the organization's goes. */
-    async releaseAll(sub: SubscriptionRow) {
-      const never = new AbortController().signal;
-      for (const w of await events.watches(sub.id)) await release(sub, w, never);
-    },
+    /** Removes every watch's Graph subscription, then `remove`s the organization's, in its
+     *  turn: a sync on any process waits for it, so none makes a Graph subscription meanwhile
+     *  that nothing would delete. */
+    releaseAll: <T>(sub: SubscriptionRow, remove: () => Promise<T>) =>
+      inTurn(sub, async (signal) => {
+        for (const w of await events.watches(sub.id)) await release(sub, w, signal);
+        return remove();
+      }),
     async settle() {
       while (working.size) await Promise.all([...working]);
     },
