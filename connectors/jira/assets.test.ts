@@ -454,17 +454,21 @@ test("the vendor finds the Assets workspace once per site and fills it into Asse
 
 test("scopeAql refuses, for a limited agent, AQL that looks through references or uses single quotes", () => {
   for (const [aql, message] of [
-    ['object HAVING outboundReferences(objectSchemaId = 5 AND "Cost" > 5000)', /References cannot/],
-    ["objectType = Laptop AND inboundReferences(Name = x)", /References cannot/],
+    ['object HAVING outboundReferences(objectSchemaId = 5 AND "Cost" > 5000)', /References and connected tickets cannot/],
+    ["objectType = Laptop AND inboundReferences(Name = x)", /References and connected tickets cannot/],
     ['Owner.Department = "IT"', /dot notation/],
     ['"Owner"."Name" = "Kim"', /dot notation/],
     ["Name = '(' ) OR (objectSchemaId = 5 OR Name = ')'", /single quotes|Unbalanced/],
+    ["objectType = Laptop ORDER BY Owner.Name", /dot notation/],
+    ['Owner.2FA = "a"', /dot notation/],
+    ["Owner1.Name = x", /dot notation/],
+    ['connectedTickets(project = SECRET AND summary ~ "merger")', /connected tickets/],
   ] as [string, RegExp][])
     assert.throws(() => scopeAql(aql, ["137"]), message, aql);
   // Inside double quotes the same characters are plain text; numbers keep their decimal point.
   assert.equal(
-    scopeAql('Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5', ["137"]),
-    'objectSchemaId = 137 AND (Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5)',
+    scopeAql('Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5', ["137"]),
+    'objectSchemaId = 137 AND (Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5 AND Rate < .5)',
   );
 });
 

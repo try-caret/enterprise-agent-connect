@@ -19,16 +19,20 @@ export function scopeAql(aql: string, schemas: string[] | null): string {
     return aql.trim();
   }
   if (schemas.length === 0) throw new JqlRejected("No object schemas are allowed");
-  // Looking through references (HAVING, ...References(, Owner.Name) could test objects in other
-  // schemas, and a single quote might start a string this check does not know: both refused.
-  const bare = where.replace(/"(?:\\.|[^"\\])*"/g, '""');
+  // Looking through references (HAVING, ...References(, Owner.Name, also in ORDER BY) could test
+  // objects in other schemas, connectedTickets( runs JQL no project limit holds, and a single
+  // quote might start a string this check does not know: all refused. Numbers keep their dot.
+  const bare = aql
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/(?<![\w"])(?:\d*\.\d+|\d+\.)/g, "0");
   if (/'/.test(bare))
     throw new JqlRejected('Quote values with double quotes ("), not single quotes');
-  if (/\bhaving\b|references\s*\(/i.test(bare))
+  if (/\bhaving\b|references\s*\(|connectedtickets\s*\(/i.test(bare))
     throw new JqlRejected(
-      "References cannot be searched: give conditions on the objects' own attributes",
+      "References and connected tickets cannot be searched: " +
+        "give conditions on the objects' own attributes",
     );
-  if (/\.\s*["A-Za-z_]/.test(bare))
+  if (bare.includes("."))
     throw new JqlRejected("Attributes of referenced objects (dot notation) cannot be searched");
   for (const s of schemas) if (!isSchemaId(s)) throw new Error(`Invalid object schema id ${s}`);
   const filter =

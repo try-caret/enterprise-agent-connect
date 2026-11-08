@@ -633,8 +633,10 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   `jsm/assets/workspace/{workspaceId}/v1/`; the vendor finds the workspace id once per cloudId
   (`GET /rest/servicedeskapi/assets/workspace`). Limit `asset_schemas`: AQL becomes
   `objectSchemaId = N AND (<agent's AQL>)`, AQL that could look through references (`HAVING`,
-  `...References(`, dot notation) or uses single quotes is refused, and every object answered or
-  changed is checked on its schema; a referenced object outside them is shown as a placeholder.
+  `...References(`, `connectedTickets(`, dot notation, also in ORDER BY) or uses single quotes is
+  refused, and every object answered or changed is checked on its schema; a referenced object
+  outside them is shown as a placeholder (reads only: AQL like `Owner LIKE "Al"` still matches a
+  reference's label, so an agent can probe the labels its allowed objects point to).
   Update sends only the named attributes after checking each (editable, a Status the attribute
   allows, a Select option; Object references are refused) and reads the object back. No create
   or delete. Service accounts are not offered `read:cmdb-config:jira`, so on a 401 from
