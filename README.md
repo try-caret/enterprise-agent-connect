@@ -233,6 +233,28 @@ const inventory: ConnectorModule = {
 - Claude Managed Agents: a vault `static_bearer` credential holding the key, keyed on the same URL.
 - Any MCP client over Streamable HTTP: `Authorization: Bearer <key>`; the quick start's `curl` shows the raw call.
 
+## Error reporting
+
+Set `SENTRY_DSN` (a Sentry project's DSN) to report failures to Sentry as they happen, with
+`SENTRY_ENVIRONMENT` and `SENTRY_RELEASE` optional. Embedded, pass
+`errorReporting: { dsn, environment, release }` to `createAgentConnect`. Unset, nothing is sent.
+Each kind is reported where it is decided, grouped by its own fingerprint
+(`["agent-connect", <kind>]`), at most once a minute per kind and app in each process:
+
+| Kind | When |
+| --- | --- |
+| `teams_send_failed` | a file, file card, approval card edit or notice the bot sends in Teams fails |
+| `teams_event_failed` | a message from Teams could not be handled |
+| `teams_run_start_failed` | a Teams trigger's run could not start |
+| `event_failed` | an app event could not be handled |
+| `event_run_start_failed` | an app event trigger's run could not start |
+| `event_poll_failed` | an app event subscription's poll or Graph sync starts failing (not each retry) |
+| `vendor_auth_failed` | an app answers 401 or 403 to an audited call |
+
+An event carries ids only (organization, agent, app, bot, subscription, tool, runner) and the
+error's class, code and HTTP status, with its stack frames. Never its message, a message body, a
+token or a person's details. The log lines stay as they were.
+
 ## Kubernetes
 
 To offer only some built-in apps, set `BUILTIN_APPS` to their ids, comma-separated (for example

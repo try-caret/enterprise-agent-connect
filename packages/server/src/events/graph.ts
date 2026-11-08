@@ -321,12 +321,9 @@ export function createGraphSource(deps: GraphDeps) {
           await subscribe(sub, g, w);
         await catchUp(sub, connector, w);
       }
+      // The subscription's error, the first failing watch's (null when none is).
       const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
-      await events.polled(
-        sub.id,
-        null,
-        errors.length ? `${errors[0].value}: ${errors[0].lastError}` : null,
-      );
+      return errors.length ? `${errors[0].value}: ${errors[0].lastError}` : null;
     },
     /** Removes every watch's Graph subscription, before the organization's goes. */
     async releaseAll(sub: SubscriptionRow) {

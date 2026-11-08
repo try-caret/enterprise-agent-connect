@@ -11,6 +11,7 @@ import { createEventsRuntime } from "../src/events/runtime.ts";
 import { createEventsStore } from "../src/events/store.ts";
 import { migrate } from "../src/migrate.ts";
 import { CredentialKey } from "../src/secrets.ts";
+import type { ReportTags } from "../src/report.ts";
 import { connectDatabase, createStore } from "../src/store.ts";
 import {
   signedWebhook,
@@ -133,6 +134,7 @@ async function setup(
     calls.push(request);
     return answers.get(request.path) ?? { status: 404, data: null };
   };
+  const reports: { kind: string; error: unknown; tags?: ReportTags }[] = [];
   const deps = {
     store,
     events,
@@ -141,6 +143,8 @@ async function setup(
     appCall,
     runners: new Map(runners.map((r) => [r.id, r])),
     publicUrl: PUBLIC,
+    report: (kind: string, error: unknown, tags?: ReportTags) =>
+      reports.push({ kind, error, tags }),
   };
   const runtime = createEventsRuntime(deps);
   const admin = createEventsAdmin({ ...deps, runtime });
@@ -232,6 +236,7 @@ async function setup(
     runs,
     calls,
     answers,
+    reports,
   };
 }
 
@@ -767,5 +772,51 @@ test(
     });
     assert.equal(given.status, 400);
     assert.match(JSON.stringify(given.body), /made here/);
+  },
+);
+
+test(
+  "a poll is reported when it starts failing, not on each retry; a run that cannot start is reported",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    f.runner.startEvent = async () => {
+      throw new Error("the runner said no to someone@example.com");
+    };
+    const t = await setup([f.runner]);
+    const { subscription } = await t.subscribe("poll", { filter: "project = KAN" });
+    await t.trigger();
+    const sub = async () => (await t.events.subscription(subscription.id))!;
+    const polls = () => t.reports.filter((r) => r.kind === "event_poll_failed");
+
+    t.answers.set("/search", { status: 401, data: null });
+    await t.runtime.poll(await sub());
+    await t.runtime.poll(await sub());
+    assert.equal(polls().length, 1);
+    assert.deepEqual(polls()[0].tags, {
+      app: "tracker",
+      org: t.org,
+      subscription: subscription.id,
+      source: "poll",
+      status: 401,
+    });
+
+    // Recovered, then failing again: reported again.
+    t.answers.set("/search", { status: 200, data: { items: [] } });
+    await t.runtime.poll(await sub());
+    t.answers.set("/search", { status: 500, data: null });
+    await t.runtime.poll(await sub());
+    assert.equal(polls().length, 2);
+
+    const later = new Date(Date.now() + 1000).toISOString();
+    t.answers.set("/search", {
+      status: 200,
+      data: { items: [{ key: "KAN-9", project: "KAN", created: later, updated: later }] },
+    });
+    await t.runtime.poll(await sub());
+    await t.runtime.idle();
+    const start = t.reports.find((r) => r.kind === "event_run_start_failed")!;
+    assert.deepEqual(start.tags, { app: "tracker", org: t.org, agent: t.agentId, runner: "fake" });
+    assert.ok(start.error instanceof Error);
   },
 );

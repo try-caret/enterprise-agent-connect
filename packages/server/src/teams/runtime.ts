@@ -40,6 +40,7 @@ import {
   OFFER_HOURS,
 } from "./offer.js";
 import { drainer } from "../queue.js";
+import { noReport, type Report } from "../report.js";
 import { openTriggerSecret, type TriggerRunner } from "./runner.js";
 import { Unauthorized, type BotAuth } from "./jwt.js";
 import type { BotRow, ConversationRow, EventRow, RunRow, TeamsStore, TriggerRow } from "./store.js";
@@ -129,11 +130,19 @@ export type TeamsRuntimeDeps = {
   publicUrl: string | null;
   // Fetches the files an agent sends and puts them in the recipient's OneDrive.
   fetch?: typeof fetch;
+  report?: Report;
 };
 
 export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
   const { teams, key, bots } = deps;
   const fetchImpl = deps.fetch ?? fetch;
+  const report = deps.report ?? noReport;
+  const botTags = (bot: BotRow) => ({
+    app: "teams",
+    org: bot.organizationId,
+    agent: bot.agentId,
+    bot: bot.id,
+  });
   // Uploads of accepted files, which outlive the invoke that started them.
   const uploads = new Set<Promise<void>>();
 
@@ -393,12 +402,20 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         fileInfoCard(upload!, offer.name),
       );
       if (sent.status < 200 || sent.status >= 300) {
+        report("teams_send_failed", null, {
+          ...botTags(bot),
+          what: "file_card",
+          status: sent.status,
+        });
         await audit("denied", `${offer.name} saved, but Teams refused its file card: ${sent.status}`);
         return;
       }
       await audit("allowed", `${offer.name} saved to their OneDrive`);
       await dropCard();
-    })().catch((e) => console.error(`[teams] sending file ${offer.id}`, e));
+    })().catch((e) => {
+      console.error(`[teams] sending file ${offer.id}`, e);
+      report("teams_send_failed", e, { ...botTags(bot), what: "file" });
+    });
     uploads.add(work);
     void work.finally(() => uploads.delete(work));
   }
@@ -417,10 +434,17 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
           attachments: [cardAttachment(approvalCard(approval))],
         },
       });
-      if (res.status < 200 || res.status >= 300)
+      if (res.status < 200 || res.status >= 300) {
         console.error(`[teams] editing approval card ${approval.id}: ${res.status}`);
+        report("teams_send_failed", null, {
+          ...botTags(bot),
+          what: "approval_card",
+          status: res.status,
+        });
+      }
     } catch (error) {
       console.error(`[teams] editing approval card ${approval.id}`, error);
+      report("teams_send_failed", error, { ...botTags(bot), what: "approval_card" });
     }
   }
 
@@ -433,6 +457,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       await handle(event);
     } catch (error) {
       console.error(`[teams] event ${event.id} failed`, error);
+      report("teams_event_failed", error, { app: "teams", bot: event.botId });
       await teams.finishEvent(event.id, "failed", "Internal error");
     }
     return true;
@@ -607,13 +632,15 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       await teams.finishEvent(event.id, "run", null);
     } catch (error) {
       console.error(`[teams] run ${run.id} failed to start`, error);
+      report("teams_run_start_failed", error, { ...botTags(bot), runner: run.runner });
       await teams.updateRun(run.id, {
         state: "failed",
         error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
       });
-      await notice(bot, a.serviceUrl!, place.threadId, FAILED_NOTICE, a.id).catch((e) =>
-        console.error(`[teams] notice for run ${run.id}`, e),
-      );
+      await notice(bot, a.serviceUrl!, place.threadId, FAILED_NOTICE, a.id).catch((e) => {
+        console.error(`[teams] notice for run ${run.id}`, e);
+        report("teams_send_failed", e, { ...botTags(bot), what: "notice" });
+      });
       await teams.finishEvent(event.id, "failed", "could not start the response");
     }
   }
@@ -823,9 +850,10 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       (c) => c.conversationId === run.conversationId,
     );
     if (place)
-      await notice(bot, place.serviceUrl, run.threadId, text, run.triggerActivityId).catch((e) =>
-        console.error(`[teams] notice for run ${run.id}`, e),
-      );
+      await notice(bot, place.serviceUrl, run.threadId, text, run.triggerActivityId).catch((e) => {
+        console.error(`[teams] notice for run ${run.id}`, e);
+        report("teams_send_failed", e, { ...botTags(bot), what: "notice" });
+      });
   }
 
   let timers: NodeJS.Timeout[] = [];

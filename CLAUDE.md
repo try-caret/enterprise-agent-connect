@@ -152,6 +152,10 @@ Branding), `BUILTIN_APPS` (comma-separated built-in app ids this deployment offe
 docs/http-connector.md, docs/soap-connector.md, docs/odata-connector.md, docs/sql-connector.md;
 any other needs a
 `ConnectorModule` passed to `createAgentConnect`).
+`SENTRY_DSN` (+ optional `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`; option `errorReporting`):
+failures reported to Sentry as they happen (packages/server/src/report.ts, README "Error
+reporting": the kinds, ids and error class/code/status only, never a message; once a minute per
+kind and app); unset sends nothing.
 `MICROSOFT_SHARED_APP=enabled` (off by default) offers approving the deployment's own
 multi-tenant Entra app instead of the customer's own, and then needs
 `MICROSOFT_SHARED_APP_CLIENT_ID` / `MICROSOFT_SHARED_APP_CLIENT_SECRET`: only for a deployment
@@ -462,6 +466,9 @@ packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window
                       # (public inbound, queue, decisions per trigger, polls, run watcher),
                       # admin.ts (subscriptions, triggers, runs, secret re-seal), store.ts
 packages/server/src/queue.ts # the one-process queue worker Teams and app events share
+packages/server/src/report.ts # Sentry envelopes by fetch (SENTRY_DSN): a kind per failure, its
+                      # fingerprint, id tags, a per-kind-and-app minute limit; the store
+                      # wrapper reporting audited vendor 401/403s
 deploy/docker/        # Dockerfile (context: the repository root),
                       # docker-compose.yml (Postgres + the service) and .env.example
 deploy/helm/agent-connect/ # small standalone chart (Deployment, Service, optional Ingress with

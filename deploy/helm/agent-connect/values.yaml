@@ -16,7 +16,8 @@ existingSecret: ""
 publicBaseUrl: ""
 # Names shown and created in tenants, e.g. {productName: Acme Agents}. Empty keeps the defaults.
 branding: {}
-# Further environment, e.g. DATABASE_SSL: disable.
+# Further environment, e.g. DATABASE_SSL: disable, or SENTRY_DSN to report failures to Sentry
+# (README "Error reporting"; a DSN is not a secret, but existingSecret may carry it instead).
 env: {}
 
 # Your own certificate authorities (PEM, one or more), for apps inside your network whose

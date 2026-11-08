@@ -80,6 +80,13 @@ const service = await createAgentConnect({
           ),
         }
       : null,
+  errorReporting: process.env.SENTRY_DSN?.trim()
+    ? {
+        dsn: process.env.SENTRY_DSN.trim(),
+        environment: process.env.SENTRY_ENVIRONMENT?.trim() || undefined,
+        release: process.env.SENTRY_RELEASE?.trim() || undefined,
+      }
+    : null,
 });
 service.start();
 process.on("SIGTERM", () => {
