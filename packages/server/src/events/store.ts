@@ -252,10 +252,13 @@ export function createEventsStore(sql: Sql, schema: string) {
       await sql`update ${t.event_subscriptions} set polled_at = null where id = ${id}`;
     },
 
+    // A round's end. A null polled_at is kept: pollSoon set it while the round ran (a change the
+    // round may have read before), and the next round must still come at once.
     async polled(id: string, cursor: string | null, error: string | null): Promise<void> {
       await sql`
         update ${t.event_subscriptions}
-           set polled_at = now(), cursor = coalesce(${cursor}, cursor), last_error = ${error}
+           set polled_at = case when polled_at is null then null else now() end,
+               cursor = coalesce(${cursor}, cursor), last_error = ${error}
          where id = ${id}`;
     },
 
@@ -337,6 +340,18 @@ export function createEventsStore(sql: Sql, schema: string) {
         update ${t.event_watches}
            set remote_id = ${remoteId}, expires_at = ${expiresAt}, last_error = ${error}
          where id = ${id}`;
+    },
+
+    // A lifecycle event left to the next sync (its turn was busy), while the watch still holds
+    // the Graph subscription it named: no expiry makes the sync renew it, and no Graph
+    // subscription (`removed`) subscribe again.
+    async watchLapsed(id: string, remoteId: string, removed: boolean): Promise<void> {
+      await sql`
+        update ${t.event_watches}
+           set expires_at = null,
+               remote_id = case when ${removed} then null else remote_id end,
+               last_error = case when ${removed} then 'Removed by Microsoft' else last_error end
+         where id = ${id} and remote_id = ${remoteId}`;
     },
 
     async watchFailed(id: string, error: string): Promise<void> {

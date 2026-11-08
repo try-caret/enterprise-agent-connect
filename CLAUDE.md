@@ -302,7 +302,8 @@ transaction under an advisory lock per agent or trigger (`admit`, `admitRun`); e
 claimed (`claimDuePoll`); a Graph subscription's watches change, and an unsubscribe removes them,
 under a lease renewed while the work lasts (store.ts `withLease`, `graph.ts` `inTurn`; work
 whose renewal finds the lease taken makes no further Graph call; waiting for the lease gives up
-after 15 s, `SubscriptionBusy`); and the watcher makes one
+after 15 s, `SubscriptionBusy`, and the work goes to the scheduler's next round: `pollSoon`, which
+a round ending meanwhile keeps, and a lifecycle event marks its watch first, `watchLapsed`); and the watcher makes one
 pass at a time, across the processes and in each (`watchTurn`, under a lease held while the pass
 lasts), a run's finish recorded and told once however passes overlap (`updateRun` with
 `from`). A rollout overlaps two versions, so a migration must leave the previous image working. The admin API is never public: it refuses any

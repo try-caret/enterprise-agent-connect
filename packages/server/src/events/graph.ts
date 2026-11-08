@@ -189,6 +189,13 @@ export function createGraphSource(deps: GraphDeps) {
           await subscribe(sub, g, { ...now, remoteId: null }, signal);
           await catchUp(sub, connector, now, signal);
         } else if (lifecycle === "missed") await catchUp(sub, connector, now, signal);
+      }).catch(async (error) => {
+        if (!(error instanceof SubscriptionBusy)) throw error;
+        // Left to the scheduler's next round, which renews a watch with no expiry, subscribes
+        // one with no Graph subscription and catches every watch up.
+        if (lifecycle === "reauthorizationRequired" || lifecycle === "subscriptionRemoved")
+          await events.watchLapsed(watch.id, watch.remoteId!, lifecycle === "subscriptionRemoved");
+        await events.pollSoon(sub.id);
       });
     }
     await events.watchNotified(watch.id);

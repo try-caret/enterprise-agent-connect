@@ -418,6 +418,11 @@ test(
   },
 );
 
+// Polled just now, so not due until its interval.
+async function notDue(id: string) {
+  await sql!`update ${name("event_subscriptions")} set polled_at = now() where id = ${id}`;
+}
+
 // The events store, telling when a try for `lease` found it held.
 function refusedOnce(events: EventsStore, lease: string) {
   let refused!: () => void;
@@ -458,8 +463,7 @@ test(
   async (ctx) => {
     ctx.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const t = await eventsSetup("graph");
-    // Not due until its interval.
-    await t.events.polled(t.sub.id, null, null);
+    await notDue(t.sub.id);
     const lease = `graph-sync:${t.sub.id}`;
     const other = (await t.events.takeLease(lease, 60))!;
     const { store, tried } = refusedOnce(t.events, lease);
@@ -469,10 +473,54 @@ test(
     ctx.mock.timers.tick(15_000);
     await changing;
     assert.equal(t.calls.length, 0);
+    // The other process's sync, which read the triggers before the change, ends its round.
+    await t.events.polled(t.sub.id, null, null);
     await t.events.dropLease(lease, other);
     await a.pollDue();
     const [w] = await t.events.watches(t.sub.id);
     assert.ok(w?.remoteId, "subscribed at the scheduler's next round");
+  },
+);
+
+test(
+  "a lifecycle notification waiting on another process's long work is left to the next round",
+  { skip: !sql, timeout: 10_000 },
+  async (ctx) => {
+    const t = await eventsSetup("graph");
+    await t.pod().syncApp(t.org, "app");
+    const [w] = await t.events.watches(t.sub.id);
+    await notDue(t.sub.id);
+    ctx.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const lease = `graph-sync:${t.sub.id}`;
+    const other = (await t.events.takeLease(lease, 60))!;
+    const { store, tried } = refusedOnce(t.events, lease);
+    const b = t.pod(store);
+    t.calls.length = 0;
+    const res = await b.inbound(
+      t.sub.id,
+      new Request(`${PUBLIC}/events/${t.sub.id}`, {
+        method: "POST",
+        body: JSON.stringify({
+          value: [
+            { subscriptionId: w.remoteId, clientState: SECRET, lifecycleEvent: "subscriptionRemoved" },
+          ],
+        }),
+      }),
+    );
+    assert.equal(res.status, 202);
+    await tried;
+    ctx.mock.timers.tick(15_000);
+    await b.settle();
+    assert.equal(t.calls.length, 0);
+    const [lapsed] = await t.events.watches(t.sub.id);
+    assert.equal(lapsed.remoteId, null, "Microsoft's removal recorded");
+    await t.events.polled(t.sub.id, null, null);
+    await t.events.dropLease(lease, other);
+    await b.pollDue();
+    assert.ok(
+      t.calls.some((c) => c.method === "POST" && c.path === "/v1.0/subscriptions"),
+      "subscribed again at the scheduler's next round",
+    );
   },
 );
 
