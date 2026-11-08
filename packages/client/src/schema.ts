@@ -1456,6 +1456,8 @@ export interface components {
                     readOnly: boolean;
                     /** @default false */
                     binary: boolean;
+                    /** @default false */
+                    text: boolean;
                 }[];
                 /** @default false */
                 allowInsecureHttp: boolean;

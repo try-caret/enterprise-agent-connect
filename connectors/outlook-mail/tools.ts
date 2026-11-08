@@ -111,8 +111,10 @@ function summary(m: Message, self: string) {
     from: address(m.from),
     to,
     cc,
-    // Nobody but this mailbox among the recipients: a message to the agent alone, not one it is copied on.
-    only_to_me: [...to, ...cc].every((a) => a?.toLowerCase() === self.toLowerCase()),
+    // Nobody but this mailbox among the recipients: a message to the agent alone, not one it is copied on
+    // (and not a draft addressed to nobody yet).
+    only_to_me:
+      to.length + cc.length > 0 && [...to, ...cc].every((a) => a?.toLowerCase() === self.toLowerCase()),
     received: m.receivedDateTime ?? null,
     read: m.isRead ?? null,
     preview: m.bodyPreview ?? "",

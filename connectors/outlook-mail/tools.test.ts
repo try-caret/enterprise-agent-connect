@@ -134,3 +134,13 @@ test("mail_list_messages lists a conversation and says when the mailbox is only 
   assert.match((await run("mail_list_messages", { conversation: "C", search: "hi" })).text, /not both/);
   assert.equal(requests.length, 1);
 });
+
+test("a draft addressed to nobody yet is not only to this mailbox", async () => {
+  const { run } = setup(() => ({
+    status: 200,
+    data: { value: [{ id: "D1", toRecipients: [], ccRecipients: [], isDraft: true }] },
+  }));
+  const r = await run("mail_list_messages", { folder: "drafts" });
+  assert.equal(r.isError, false, r.text);
+  assert.equal(r.body.messages[0].only_to_me, false);
+});

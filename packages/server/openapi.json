@@ -9275,6 +9275,10 @@
                     "binary": {
                       "default": false,
                       "type": "boolean"
+                    },
+                    "text": {
+                      "default": false,
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -9287,7 +9291,8 @@
                     "answerLimits",
                     "nestedBody",
                     "readOnly",
-                    "binary"
+                    "binary",
+                    "text"
                   ],
                   "additionalProperties": false
                 }

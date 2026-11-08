@@ -396,7 +396,7 @@ connectors/http/      # the generic module for a connector.json `http` block; ex
                       # marks a POST search read-only to clients; a param's `pattern` (a string's
                       # regex, checked by the tool's schema); a tool's `binary` (a GET answering
                       # a file: any type, read up to MAX_BINARY_BYTES by a second guarded fetch,
-                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
+                      # handed back with kit `binary`; OAuth tokens shared with the JSON calls); a tool's `text` (a GET whose answer, e.g. a file, is handed back as the app sent it, never parsed as JSON: request `responseType: "text"`). Auth `oauth2_jwt` is the RFC 7523 JWT bearer grant (RS256,
                       # connector-kit oauth.ts jwtAssertion, http blocks only);
                       # openapi.ts: draftConnector (the OpenAPI drafter the script and the
                       # admin API's internal app drafts share)
