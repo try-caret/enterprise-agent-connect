@@ -8,10 +8,7 @@ export class JqlRejected extends Error {}
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,254}$/;
 // After strings are blanked to "": fields (cf[10010], "Story Points") with optional direction.
 const SORT_FIELD = String.raw`(?:""|[A-Za-z_][\w.]*(?:\[\d+\])?)(?:\s+(?:asc|desc))?`;
-export const ORDER_BY = new RegExp(
-  String.raw`^order\s+by\s+${SORT_FIELD}(?:\s*,\s*${SORT_FIELD})*$`,
-  "i",
-);
+const ORDER_BY = new RegExp(String.raw`^order\s+by\s+${SORT_FIELD}(?:\s*,\s*${SORT_FIELD})*$`, "i");
 
 export function isProjectKey(key: string): boolean {
   return PROJECT_KEY.test(key);
@@ -43,7 +40,7 @@ export function splitOrderBy(
       orderAt < 0 &&
       depth === 0 &&
       /^order\s+by\b/i.test(jql.slice(i)) &&
-      (i === 0 || /[\s)]/.test(jql[i - 1]))
+      (i === 0 || /[\s)"']/.test(jql[i - 1]))
     ) {
       orderAt = i;
     }

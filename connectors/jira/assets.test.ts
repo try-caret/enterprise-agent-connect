@@ -462,7 +462,7 @@ test("more than 20 attributes are refused before the tool, with a short audit ta
   assert.ok(String(h.state.audit.at(-1)!.target ?? "").length <= 400);
 });
 
-test("Assets 401, 403 and 404 come back as Jira errors do, 403 with the capability's hint", async () => {
+test("Assets 401, 403 and 404 come back as Jira errors do, 401 and 403 with the capability's hint", async () => {
   for (const status of [401, 403, 404]) {
     const h = harness();
     const key = h.addAgent(["read", "assets_read"]);
@@ -470,7 +470,8 @@ test("Assets 401, 403 and 404 come back as Jira errors do, 403 with the capabili
     const r = await call(h, key, "jira_assets_get_object", { object_id: "11" });
     assert.equal(r.isError, true);
     assert.match(r.text!, new RegExp(`^Jira Assets answered ${status}: No access to this schema`));
-    assert.equal(/role on the object schema/.test(r.text!), status === 403);
+    // Assets documents 401, not 403, for a missing seat, scope or role.
+    assert.equal(/role on the object schema/.test(r.text!), status !== 404);
     const row = h.state.audit.at(-1)!;
     assert.equal(row.decision, "failed");
     assert.equal(row.vendorStatus, status);
@@ -878,4 +879,74 @@ test("a required attribute is not cleared; an empty attribute list under a limit
     req.path.endsWith("objecttype/606/attributes") ? { status: 200, data: [] } : prev(conn, req);
   const empty = await call(h, key, "jira_assets_list_attributes", { object_type_id: "606" });
   assert.equal(empty.text, "Object type 606 is not in an object schema this agent may use");
+});
+
+test("scopeAql: ORDER BY right after a quote is found; names of any script sort; dotted values say to quote", () => {
+  assert.throws(() => scopeAql('x="a"ORDER BY "Owner.Name"', ["5"]), /dot notation/);
+  assert.equal(
+    scopeAql('x = "a"ORDER BY "Date Received"', ["5"]),
+    'objectSchemaId = 5 AND (x = "a") ORDER BY "Date Received"',
+  );
+  assert.equal(
+    scopeAql("objectType = Laptop ORDER BY Gerät DESC", null),
+    "objectType = Laptop ORDER BY Gerät DESC",
+  );
+  assert.throws(() => scopeAql("IP = 10.0.0.1", ["5"]), /quote values that hold a dot/);
+  assert.equal(scopeAql('IP = "10.0.0.1"', ["5"]), 'objectSchemaId = 5 AND (IP = "10.0.0.1")');
+});
+
+test("a 401 on the update carries the update capability's hint; long text is shortened", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_read", "assets_update"], { asset_schemas: ["137"] });
+  const { objects } = assets(h);
+  const prev = h.vendor.call;
+  h.vendor.call = async (conn, req) =>
+    req.method === "PUT"
+      ? { status: 401, data: { message: "Unauthorized; scope does not match" } }
+      : prev(conn, req);
+  const r = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Notes: "x" },
+  });
+  assert.equal(r.isError, true);
+  assert.match(r.text!, /^Jira Assets answered 401: Unauthorized; scope does not match\. Check/);
+  assert.match(r.text!, /Object schema developers/);
+  h.vendor.call = prev;
+  objects["12"].attributes.push({
+    objectTypeAttributeId: "6",
+    objectAttributeValues: [{ value: "y".repeat(5000) }],
+    objectTypeAttribute: ATTRS.find((d) => d.id === "6"),
+  } as any);
+  const long = await call(h, key, "jira_assets_get_object", { object_id: "12" });
+  assert.equal(long.data.attributes.Notes.length, 2000 + "... (shortened)".length);
+});
+
+test("the workspace is kept per site and credential", async () => {
+  const CLOUD = "11111111-2222-3333-4444-555555555555";
+  let lookups = 0;
+  const fake = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "https://auth.atlassian.com/oauth/token")
+      return Response.json({
+        access_token: String(init?.body).includes("id-b") ? "b" : "a",
+        expires_in: 3600,
+      });
+    if (url.endsWith("/rest/servicedeskapi/assets/workspace")) {
+      lookups++;
+      const seat = (init?.headers as Record<string, string>).authorization === "Bearer a";
+      return seat
+        ? Response.json({ values: [{ workspaceId: "ws-1" }] })
+        : Response.json({ errorMessages: ["no"] }, { status: 403 });
+    }
+    return Response.json({ ok: url });
+  }) as typeof fetch;
+  const vendor = jiraVendor(fake);
+  const a = { config: { cloudId: CLOUD }, secret: { client_id: "id-a", client_secret: "s" } };
+  const b = { config: { cloudId: CLOUD }, secret: { client_id: "id-b", client_secret: "s" } };
+  assert.equal((await vendor.call(a, { method: "GET", path: `${WS}object/1` })).status, 200);
+  // Another credential on the same site does its own lookup and gets its own refusal.
+  const refused = await vendor.call(b, { method: "GET", path: `${WS}object/1` });
+  assert.equal(refused.status, 403);
+  assert.match(JSON.stringify(refused.data), /agent seat/);
+  assert.equal(lookups, 2);
 });

@@ -49,7 +49,21 @@ const isPlain = (def: Obj) => (def.type ?? 0) === 0 && !isReference(def);
 const attributeId = (a: Obj) =>
   String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "");
 
-const ok = answerOf("Jira Assets");
+const answer = answerOf("Jira Assets");
+// Assets documents 401, not 403, for a missing seat, scope or role (seen live for a scope), and
+// the framework adds a capability's `forbidden` hint only to a 403, so it is added to a 401
+// here: the read capability's for reads, the update capability's for the PUT.
+async function ok(ctx: ToolContext, mark: Mark, req: Parameters<ToolContext["call"]>[0]) {
+  try {
+    return await answer(ctx, mark, req);
+  } catch (error) {
+    if (!(error instanceof VendorFailed) || error.status !== 401) throw error;
+    if (error.message.includes(WORKSPACE_PROBLEM)) throw error;
+    const tool = req.method === "PUT" ? "jira_assets_update_object" : "jira_assets_search";
+    const hint = ctx.forbidden?.[tool];
+    throw hint ? new VendorFailed(401, `${error.message.replace(/\.$/, "")}. ${hint}`) : error;
+  }
+}
 
 const canEdit = (def: Obj) => def.editable === true && def.system !== true;
 
@@ -60,6 +74,10 @@ function allowedSchema(schemas: string[] | null, id: unknown): boolean {
 // One value as an agent reads it: a reference, status, user or group by its name (a referenced
 // object outside the agent's schemas is not named), any other value as stored (ISO dates).
 const HIDDEN_REFERENCE = "(an object in a schema this agent may not use)";
+// Text longer than this is shortened, as other connectors do, so 50 objects stay readable.
+const MAX_TEXT = 2000;
+const shortened = (v: unknown) =>
+  typeof v === "string" && v.length > MAX_TEXT ? `${v.slice(0, MAX_TEXT)}... (shortened)` : v;
 function shownValue(v: Obj, schemas: string[] | null, reference: boolean): unknown {
   // `referencedObject` is optional in the OpenAPI, so a reference without it is hidden too.
   if (reference || v?.referencedObject || v?.referencedType === true) {
@@ -75,7 +93,7 @@ function shownValue(v: Obj, schemas: string[] | null, reference: boolean): unkno
       account_id: v.user.key ?? v.value ?? null,
     };
   if (v?.group) return v.group.name ?? v.displayValue ?? null;
-  return v?.value ?? v?.displayValue ?? null;
+  return shortened(v?.value ?? v?.displayValue ?? null);
 }
 
 // An object with its attributes by name. `defs`: attribute id to definition, for answers (AQL)

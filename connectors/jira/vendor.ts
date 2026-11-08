@@ -122,7 +122,10 @@ export function jiraVendor(unguarded: Fetch = fetch): Vendor {
       };
       if (!request.path.startsWith(ASSETS_PATH))
         return send(request.method, request.path, request.body);
-      let workspace = workspaces.get(cloudId);
+      // Per site and credential: another organization's account on the same site may lack the
+      // seat, and must see the lookup's own refusal.
+      const cacheKey = `${cloudId}:${connection.secret.client_id}`;
+      let workspace = workspaces.get(cacheKey);
       if (!workspace) {
         const found = await send("GET", "/rest/servicedeskapi/assets/workspace");
         if (found.status === 401 || found.status === 403)
@@ -149,7 +152,7 @@ export function jiraVendor(unguarded: Fetch = fetch): Vendor {
             data: { errorMessages: [`This Jira site has no ${WORKSPACE_PROBLEM}`] },
             headers: {},
           };
-        workspaces.set(cloudId, id);
+        workspaces.set(cacheKey, id);
         workspace = id;
       }
       return send(request.method, request.path.replace("{workspaceId}", workspace), request.body);

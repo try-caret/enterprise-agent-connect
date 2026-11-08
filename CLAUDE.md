@@ -632,8 +632,12 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   Jira Assets (connectors/jira/assets.ts), capabilities `assets_read` (search, get object, list
   attributes) and `assets_update` (update object, destructive: it overwrites or clears values it
   does not keep), neither required. Same gateway, under `jsm/assets/workspace/{workspaceId}/v1/`;
-  the vendor finds the workspace id once per cloudId (`GET
-  /rest/servicedeskapi/assets/workspace`). Limit `asset_schemas` (empty: every schema; the
+  the vendor finds the workspace id once per cloudId and credential (`GET
+  /rest/servicedeskapi/assets/workspace`). Assets documents 401, not 403, for a missing seat,
+  scope or role, so a 401 gets the capability's `forbidden` hint in the tool (the framework adds
+  it only to a 403). Text values over 2000 characters are shortened. Roles: Object schema users
+  read, Object schema developers change objects; new schemas give developers to the groups with
+  JSM access, so the seat is often enough. Limit `asset_schemas` (empty: every schema; the
   projects limit does not narrow Assets): AQL becomes `objectSchemaId = N AND (<agent's AQL>)`,
   AQL that could look through references (`HAVING`, `...References(`, dot notation, also inside a
   quoted name before an operator and anywhere in ORDER BY) is refused; with a schema or a projects

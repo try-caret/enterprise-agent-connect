@@ -31,12 +31,12 @@
     },
     {
       "title": "Give it a Jira Service Management seat and access to the Assets object schemas",
-      "body": "Assets is part of Jira Service Management: the service account needs Jira Service Management access as User (an agent seat), or Assets finds nothing. Assets also keeps its own access per object schema. The schema's role picker may not list service accounts; with the agent seat, schemas that let agents in by default need no role. Otherwise give it Object viewer to let agents read, or Object schema users to let them change objects, or add it to a group that has that role. You can narrow each agent to specific object schemas here later.",
+      "body": "Assets is part of Jira Service Management: the service account needs Jira Service Management access as User (an agent seat), or Assets finds nothing. Assets also keeps its own access per object schema. The schema's role picker may not list service accounts; with the agent seat, schemas that let agents in by default need no role. New schemas give the Object schema developers role (view, create and change objects) to the groups with Jira Service Management access, so the seat is often enough. Otherwise give it Object schema users to let agents read, or Object schema developers to let them change objects, or add it to a group that has that role. You can narrow each agent to specific object schemas here later.",
       "capabilities": ["assets_read", "assets_update"],
       "click": [
         "Atlassian Administration > Directory > Service accounts > {brand.microsoft.appName} > app roles: Jira Service Management > User",
         "Jira > Assets > the object schema > Configure > Roles",
-        "Object viewer (read) or Object schema users (change objects) > add {brand.microsoft.appName} > Save"
+        "Object schema users (read) or Object schema developers (change objects) > add {brand.microsoft.appName} > Save"
       ],
       "confirm": "jira-assets-schema-roles"
     },
@@ -119,7 +119,7 @@
         "read:cmdb-attribute:jira"
       ],
       "permissions": [],
-      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has a role on the object schema (Assets > the schema > Configure > Roles) unless the schema lets agents in.",
+      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has a role on the object schema, Object schema users or above (Assets > the schema > Configure > Roles).",
       "tools": ["jira_assets_search", "jira_assets_get_object", "jira_assets_list_attributes"]
     },
     {
@@ -134,7 +134,7 @@
         "write:cmdb-object:jira"
       ],
       "permissions": [],
-      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has the Object schema users role on the object schema (Assets > the schema > Configure > Roles) unless the schema lets agents change objects.",
+      "forbidden": "Check, in order: the service account has Jira Service Management access as User (an agent seat), its credentials have the Assets scopes listed in the setup steps, and it has the Object schema developers role on the object schema (Assets > the schema > Configure > Roles).",
       "tools": ["jira_assets_update_object"]
     }
   ],

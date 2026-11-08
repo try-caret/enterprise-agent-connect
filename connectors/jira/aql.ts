@@ -1,10 +1,16 @@
-import { JqlRejected, ORDER_BY, splitOrderBy } from "./jql.js";
+import { JqlRejected, splitOrderBy } from "./jql.js";
 
 // Confines an agent's AQL to its granted object schemas, as scopeJql does for projects: the
 // agent's clause goes whole inside parentheses after the schema filter. AQL strings are
 // double-quoted. The tools also drop any answer outside the schemas.
 
 const SCHEMA_ID = /^[1-9][0-9]{0,17}$/;
+// After strings are blanked to "": attribute names (letters of any script) with a direction.
+const SORT_FIELD = String.raw`(?:""|[\p{L}_][\p{L}\p{N}\p{M}_.]*)(?:\s+(?:asc|desc))?`;
+const ORDER_BY = new RegExp(
+  String.raw`^order\s+by\s+${SORT_FIELD}(?:\s*,\s*${SORT_FIELD})*$`,
+  "iu",
+);
 // A double-quoted string, its backslash escaping any character (line breaks too), as
 // splitOrderBy reads it, so both see the same strings.
 const STRING = /"(?:\\[\s\S]|[^"\\])*"/g;
@@ -62,7 +68,10 @@ export function scopeAql(aql: string, schemas: string[] | null, projectsLimited 
       "References cannot be searched: give conditions on the objects' own attributes",
     );
   if (bare.includes("."))
-    throw new JqlRejected("Attributes of referenced objects (dot notation) cannot be searched");
+    throw new JqlRejected(
+      "Attributes of referenced objects (dot notation) cannot be searched; " +
+        'quote values that hold a dot, e.g. IP = "10.0.0.1"',
+    );
   for (const s of schemas) if (!isAssetsId(s)) throw new Error(`Invalid object schema id ${s}`);
   const filter =
     schemas.length === 1
