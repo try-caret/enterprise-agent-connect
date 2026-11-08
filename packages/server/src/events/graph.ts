@@ -66,7 +66,12 @@ const pathOf = (link: string) => {
 
 /** The event's data from one item: its kept fields, the `only` flags, and whether the watched
  *  account sent it itself. */
-export function graphItem(g: Graph, fields: Record<string, string>, value: string, item: unknown) {
+export function graphItem(
+  g: Graph,
+  fields: Record<string, string | string[]>,
+  value: string,
+  item: unknown,
+) {
   const data = pickFields(fields, { [g.wrap]: item, [g.per]: value });
   for (const [name, from] of Object.entries(g.only)) {
     const got = from.flatMap((f) => listOf(data[f]));

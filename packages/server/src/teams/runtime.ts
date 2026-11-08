@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { effectiveCapabilities, type Connector } from "../../../connector-kit/src/connector.js";
 import { credentialAad, type CredentialKey } from "../secrets.js";
 import type { Store } from "../store.js";
@@ -29,6 +30,15 @@ import {
   type ApprovalRow,
 } from "./approval.js";
 import { validServiceUrl, type BotClient, type BotCredential } from "./bot.js";
+import {
+  consentAnswer,
+  consentCard,
+  downloadFile,
+  fileInfoCard,
+  fileStorageUrl,
+  offerAad,
+  OFFER_HOURS,
+} from "./offer.js";
 import { drainer } from "../queue.js";
 import { openTriggerSecret, type TriggerRunner } from "./runner.js";
 import { Unauthorized, type BotAuth } from "./jwt.js";
@@ -117,10 +127,15 @@ export type TeamsRuntimeDeps = {
   connector: Connector | null;
   // This service's public address (see createTeamsAdmin); the trigger's agent must use it.
   publicUrl: string | null;
+  // Fetches the files an agent sends and puts them in the recipient's OneDrive.
+  fetch?: typeof fetch;
 };
 
 export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
   const { teams, key, bots } = deps;
+  const fetchImpl = deps.fetch ?? fetch;
+  // Uploads of accepted files, which outlive the invoke that started them.
+  const uploads = new Set<Promise<void>>();
 
   async function post(
     bot: BotRow,
@@ -177,6 +192,10 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
       // the trigger says.
       if (activity.type === "invoke" && activity.name === "adaptiveCard/action")
         return reply(200, await cardAction(bot, activity));
+      if (activity.type === "invoke" && activity.name === "fileConsent/invoke") {
+        await fileConsent(bot, activity);
+        return reply(200);
+      }
       if (!activity.id) return reply(200);
       const place = placeOf(activity);
       const sealed = key.seal(
@@ -222,20 +241,8 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     const clicker = guid(a.from?.aadObjectId);
     // The team (for a channel) or the chat the click came from.
     const conversationId = placeOf(a)?.conversationId ?? null;
-    const audit = async (decision: "allowed" | "denied", reason: string) => {
-      const state = await teams.agentState(bot.agentId);
-      await deps.store.audit({
-        organizationId: bot.organizationId,
-        agentId: bot.agentId,
-        agentName: state?.agentName ?? "",
-        connectorId: "teams",
-        tool: "teams:approval",
-        target: id,
-        decision,
-        reason: reason.slice(0, 500),
-        vendorStatus: null,
-      });
-    };
+    const audit = (decision: "allowed" | "denied", reason: string) =>
+      clickAudit(bot, "teams:approval", id, decision, reason);
     if (
       value.action?.type !== "Action.Execute" ||
       (verb !== "approve" && verb !== "reject") ||
@@ -288,6 +295,136 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
     await audit("allowed", `${decided.status} by ${clicker}${comment ? " with a comment" : ""}`);
     await updateCard(bot, decided);
     return invokeCard(approvalCard(decided));
+  }
+
+  async function clickAudit(
+    bot: BotRow,
+    tool: string,
+    target: string | null,
+    decision: "allowed" | "denied",
+    reason: string,
+  ) {
+    const state = await teams.agentState(bot.agentId);
+    await deps.store.audit({
+      organizationId: bot.organizationId,
+      agentId: bot.agentId,
+      agentName: state?.agentName ?? "",
+      connectorId: "teams",
+      tool,
+      target,
+      decision,
+      reason: reason.slice(0, 500),
+      vendorStatus: null,
+    });
+  }
+
+  // ---- files sent in a direct chat (offer.ts) ----
+
+  /** Accept or Decline on a file consent card, after the same request checks as a card click.
+   *  Counts once, from the person the file was offered to, in that chat, unexpired. On accept
+   *  the file goes to the upload address Teams gives (their OneDrive), after this answers. */
+  async function fileConsent(bot: BotRow, a: Activity) {
+    const answer = consentAnswer(a.value);
+    const clicker = guid(a.from?.aadObjectId);
+    const place = placeOf(a);
+    const offerId = guid(answer?.offer);
+    const audit = (decision: "allowed" | "denied", reason: string) =>
+      clickAudit(bot, "teams:file", offerId, decision, reason);
+    if (!answer || !offerId || !clicker || place?.kind !== "personal") {
+      await audit("denied", `unknown file answer from ${clicker ?? "unknown"}`);
+      return;
+    }
+    const target = fileStorageUrl(answer.upload?.uploadUrl);
+    const upload = answer.upload;
+    if (answer.action === "accept" && (!upload || !target)) {
+      await audit("denied", `accepted by ${clicker} with no OneDrive upload address`);
+      return;
+    }
+    const offer = await teams.takeFileOffer(bot.id, offerId, place.conversationId, clicker);
+    if (!offer) {
+      await audit("denied", `${answer.action} by ${clicker}: no such file waiting for them there`);
+      return;
+    }
+    const card = a.replyToId;
+    const dropCard = () =>
+      card
+        ? bots
+            .connector(botCredential(key, bot), offer.serviceUrl, {
+              method: "DELETE",
+              path: `/v3/conversations/${encodeURIComponent(place.conversationId)}/activities/${encodeURIComponent(card)}`,
+            })
+            .catch((e) => console.error(`[teams] removing file card ${offer.id}`, e))
+        : null;
+    if (answer.action === "decline") {
+      await audit("allowed", `${offer.name} declined`);
+      await dropCard();
+      return;
+    }
+    const say = (text: string) =>
+      notice(bot, offer.serviceUrl, place.conversationId, text).catch((e) =>
+        console.error(`[teams] notice for file ${offer.id}`, e),
+      );
+    const work = (async () => {
+      let bytes: Buffer;
+      try {
+        bytes = Buffer.from(
+          key.open({ ciphertext: offer.content, keyId: offer.contentKeyId }, offerAad(offer.id))
+            .content,
+          "base64",
+        );
+      } catch (e) {
+        console.error(`[teams] opening file ${offer.id}`, e);
+        await audit("denied", `${offer.name}: the waiting file could not be opened`);
+        await say(`I couldn't send ${offer.name}. Ask me to send it again.`);
+        await dropCard();
+        return;
+      }
+      let failed: string | null = null;
+      try {
+        const res = await fetchImpl(target!, {
+          method: "PUT",
+          redirect: "error",
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-range": `bytes 0-${bytes.length - 1}/${bytes.length}`,
+          },
+          body: bytes,
+        });
+        await res.body?.cancel();
+        // Teams' upload contract: only 200 and 201 mean the file is complete.
+        if (res.status !== 200 && res.status !== 201) failed = `OneDrive answered ${res.status}`;
+      } catch (e) {
+        failed = `the upload failed: ${e instanceof Error ? e.message : String(e)}`;
+      }
+      if (failed) {
+        // The consent card stays, so the person can accept again.
+        await teams.restoreFileOffer(offer);
+        await audit("denied", `${offer.name}: ${failed}`);
+        await say(
+          `I couldn't save ${offer.name} to your OneDrive. Select Accept on it to try again, or ask me to send it again.`,
+        );
+        return;
+      }
+      const sent = await post(
+        bot,
+        offer.serviceUrl,
+        place.conversationId,
+        fileInfoCard(upload!, offer.name),
+      ).catch((e: unknown) => {
+        console.error(`[teams] file card for ${offer.id}`, e);
+        return { status: 0 };
+      });
+      if (sent.status < 200 || sent.status >= 300) {
+        await audit("denied", `${offer.name} saved, but Teams refused its file card: ${sent.status}`);
+        await say(`I saved ${offer.name} to your OneDrive, but couldn't show it here.`);
+        await dropCard();
+        return;
+      }
+      await audit("allowed", `${offer.name} saved to their OneDrive`);
+      await dropCard();
+    })().catch((e) => console.error(`[teams] sending file ${offer.id}`, e));
+    uploads.add(work);
+    void work.finally(() => uploads.delete(work));
   }
 
   // The answer in the invoke changes only the clicker's view; editing the bot's message changes
@@ -736,7 +873,10 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
           watch().catch((error) => console.error("[teams] watch", error));
         }, 5000),
         setInterval(
-          () => teams.pruneEvents().catch((error) => console.error("[teams] prune", error)),
+          () =>
+            Promise.all([teams.pruneEvents(), teams.pruneFileOffers()]).catch((error) =>
+              console.error("[teams] prune", error),
+            ),
           3600_000,
         ),
       ];
@@ -807,12 +947,43 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
           if (!sealed) return [];
           return JSON.parse(key.open(sealed, runFilesAad(run.id)).files) as TeamsFile[];
         },
+        download: (url, max) => downloadFile(fetchImpl, url, max),
+        offerFile: async ({ conversation, recipientAadId, name, bytes }) => {
+          const id = randomUUID();
+          await teams.createFileOffer({
+            id,
+            botId: bot.id,
+            conversationId: conversation.conversationId,
+            serviceUrl: conversation.serviceUrl,
+            recipientAadId,
+            name,
+            size: bytes.length,
+            sealed: key.seal({ content: bytes.toString("base64") }, offerAad(id)),
+            hours: OFFER_HOURS,
+          });
+          try {
+            const res = await post(
+              bot,
+              conversation.serviceUrl,
+              conversation.conversationId,
+              consentCard(id, name, bytes.length),
+            );
+            if (res.status < 200 || res.status >= 300) await teams.discardFileOffer(id);
+            return res;
+          } catch (error) {
+            await teams.discardFileOffer(id);
+            throw error;
+          }
+        },
         claimReply: (runId) => teams.claimReply(bot.agentId, runId),
         releaseReply: (runId) => teams.releaseReply(runId),
       };
     },
-    /** Settles the queue (tests). */
-    idle: queue.idle,
+    /** Settles the queue and the uploads of accepted files (tests). */
+    async idle() {
+      await queue.idle();
+      await Promise.all(uploads);
+    },
   };
 }
 
@@ -882,5 +1053,14 @@ export type TeamsAccess = {
   // The files sent with the run's latest message.
   files(run: RunRow): Promise<TeamsFile[]>;
   claimReply(runId: string): Promise<boolean>;
+  // A file's bytes from its SharePoint or OneDrive download link (offer.ts).
+  download(url: string, max: number): Promise<Buffer>;
+  // Offers a file in a direct chat with a consent card, for that chat's person to accept.
+  offerFile(input: {
+    conversation: ConversationRow;
+    recipientAadId: string;
+    name: string;
+    bytes: Buffer;
+  }): Promise<VendorResponse>;
   releaseReply(runId: string): Promise<void>;
 };

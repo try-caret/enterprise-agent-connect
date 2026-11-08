@@ -24,6 +24,7 @@ type Steps = NonNullable<NonNullable<Connector["events"]>["webhook"]>["setup"];
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const by = z.string().trim().min(1).max(200);
+const appSecret = z.string().trim().min(16).max(256);
 
 export const subscriptionSchema = z.object({
   app: z.string().regex(/^[a-z0-9-]+$/),
@@ -33,8 +34,12 @@ export const subscriptionSchema = z.object({
   intervalSeconds: z.number().int().min(60).max(86400).default(300),
   // Webhooks: register it through the app's API with the connection, where the app allows.
   register: z.boolean().default(false),
+  // The app's own signing secret, for apps that make it (`secretFromApp`, e.g. Slack).
+  secret: appSecret.optional(),
   by,
 });
+
+export const rotateSecretSchema = z.object({ secret: appSecret.optional(), by });
 
 const condition = z.union([
   z.strictObject({ field: z.string(), in: z.array(z.string().max(500)).min(1).max(100) }),
@@ -115,6 +120,18 @@ export function createEventsAdmin(deps: {
 
   const newSecret = () => randomBytes(32).toString("hex");
 
+  // The app's own secret where it makes one (given by the admin), else a new one made here.
+  function secretFor(connector: Connector, given: string | undefined) {
+    const fromApp = connector.events?.webhook?.secretFromApp ?? false;
+    if (fromApp && !given)
+      throw new InvalidInput(
+        `${connector.name} makes the signing secret itself: copy it from its app settings and give it as secret`,
+      );
+    if (!fromApp && given)
+      throw new InvalidInput(`The secret for ${connector.name} is made here; leave secret out`);
+    return { secret: given ?? newSecret(), fromApp };
+  }
+
   // Live runs of a trigger are stopped before it changes runner or goes.
   async function stopRuns(org: string, triggerId: string, runner?: string) {
     for (const run of await events.runningRuns()) {
@@ -146,8 +163,11 @@ export function createEventsAdmin(deps: {
       if (input.source !== "poll" && !deps.publicUrl)
         throw new ConnectError("This deployment has no public address for the app to send to");
       const subId = randomUUID();
+      if (input.source !== "webhook" && input.secret)
+        throw new InvalidInput(`A ${input.source} subscription takes no secret; leave secret out`);
+      const made = input.source === "webhook" ? secretFor(connector, input.secret) : null;
       // Graph's is the clientState, which the service hands Microsoft itself: never shown.
-      const secret = input.source !== "poll" ? newSecret() : null;
+      const secret = made?.secret ?? (input.source === "graph" ? newSecret() : null);
       const sealed = secret ? key.seal({ secret }, subscriptionAad(org, subId)) : null;
       const sub = await events.createSubscription({
         id: subId,
@@ -193,7 +213,8 @@ export function createEventsAdmin(deps: {
       const fresh = (await events.subscription(sub.id))!;
       return {
         subscription: publicSubscription(fresh),
-        secret: input.source === "webhook" ? secret : null,
+        // The admin's own secret is not shown back.
+        secret: made && !made.fromApp ? secret : null,
         setup: (input.source === "webhook" ? hook!.setup : []).map((step) =>
           fill(step, { url: url ?? "", filter: input.filter || "(none)" }),
         ) as Steps,
@@ -201,14 +222,17 @@ export function createEventsAdmin(deps: {
       };
     },
 
-    async rotateSecret(org: string, subId: string, who: string) {
+    async rotateSecret(org: string, subId: string, input: z.output<typeof rotateSecretSchema>) {
       const sub = await events.subscription(subId);
       if (!sub || sub.organizationId !== org || sub.source !== "webhook") return null;
-      const secret = newSecret();
+      const connector = deps.connectors.get(sub.connectorId);
+      if (!connector) throw new InvalidInput(`${sub.connectorId} is no longer offered`);
+      const { secret, fromApp } = secretFor(connector, input.secret);
+      const who = input.by;
       const sealed = key.seal({ secret }, subscriptionAad(org, subId));
       if (!(await events.setSecret(org, subId, sealed.ciphertext, sealed.keyId))) return null;
       await log(org, who, sub.connectorId, "rotate_event_secret", subId);
-      return { subscription: publicSubscription(sub), secret };
+      return { subscription: publicSubscription(sub), secret: fromApp ? null : secret };
     },
 
     async unsubscribe(org: string, subId: string, who: string) {

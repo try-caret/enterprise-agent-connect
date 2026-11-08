@@ -131,7 +131,7 @@ export function botClient(
     async connector(
       bot: BotCredential,
       serviceUrl: string,
-      request: { method: "GET" | "POST" | "PUT"; path: string; body?: unknown },
+      request: { method: "GET" | "POST" | "PUT" | "DELETE"; path: string; body?: unknown },
     ): Promise<VendorResponse> {
       if (!validServiceUrl(serviceUrl))
         throw new Error(`Not a Teams service address: ${serviceUrl}`);

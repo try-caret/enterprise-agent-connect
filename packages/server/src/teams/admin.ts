@@ -33,6 +33,7 @@ import {
   type InstallKind,
   type LiveCheck,
 } from "./provision.js";
+import { offerAad } from "./offer.js";
 import { botAad, botCredential } from "./runtime.js";
 import { CLAUDE_RUNNER, openTriggerSecret, triggerAad, type TriggerRunner } from "./runner.js";
 import type { BotRow, RunRow, TeamsStore, TriggerRow } from "./store.js";
@@ -835,11 +836,17 @@ export type TeamsAdmin = ReturnType<typeof createTeamsAdmin>;
 export async function resealTeamsCredentials(
   teams: Pick<
     TeamsStore,
-    "staleSealed" | "updateBotCredential" | "resealClaudeKey" | "resealTriggerSecret"
+    | "staleSealed"
+    | "updateBotCredential"
+    | "resealClaudeKey"
+    | "resealTriggerSecret"
+    | "staleFileOffers"
+    | "sealedFileOffer"
+    | "resealFileOffer"
   >,
   key: CredentialKey,
-): Promise<{ bots: number; claudeKeys: number; triggerSecrets: number }> {
-  if (!key.previousIds.length) return { bots: 0, claudeKeys: 0, triggerSecrets: 0 };
+): Promise<{ bots: number; claudeKeys: number; triggerSecrets: number; fileOffers: number }> {
+  if (!key.previousIds.length) return { bots: 0, claudeKeys: 0, triggerSecrets: 0, fileOffers: 0 };
   const stale = await teams.staleSealed(key.previousIds);
   let bots = 0;
   for (const b of stale.bots) {
@@ -866,5 +873,14 @@ export async function resealTeamsCredentials(
     if (await teams.resealTriggerSecret(t.agentId, sealed.ciphertext, sealed.keyId, t.secret))
       triggerSecrets++;
   }
-  return { bots, claudeKeys, triggerSecrets };
+  let fileOffers = 0;
+  for (const id of await teams.staleFileOffers(key.previousIds)) {
+    const o = await teams.sealedFileOffer(id);
+    if (!o) continue; // answered or expired meanwhile
+    const aad = offerAad(id);
+    const sealed = key.seal(key.open({ ciphertext: o.content, keyId: o.contentKeyId }, aad), aad);
+    if (await teams.resealFileOffer(id, sealed.ciphertext, sealed.keyId, o.contentKeyId))
+      fileOffers++;
+  }
+  return { bots, claudeKeys, triggerSecrets, fileOffers };
 }

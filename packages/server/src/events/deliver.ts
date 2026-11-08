@@ -71,8 +71,24 @@ export function signed(
   if (!sent.startsWith(verify.prefix)) return false;
   const hex = sent.slice(verify.prefix.length);
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) return false;
-  const expected = createHmac("sha256", secret).update(body).digest();
+  const message = verify.signs ? signedMessage(verify.signs, body, headers) : body;
+  if (!message) return false;
+  const expected = createHmac("sha256", secret).update(message).digest();
   return timingSafeEqual(expected, Buffer.from(hex, "hex"));
+}
+
+/** `signs` filled: {body} the raw bytes, {header:Name} that header. Null when one is missing. */
+function signedMessage(template: string, body: Buffer, headers: Headers): Buffer | null {
+  const parts: Buffer[] = [];
+  for (const part of template.split(/(\{body\}|\{header:[A-Za-z0-9-]+\})/)) {
+    if (part === "{body}") parts.push(body);
+    else if (part.startsWith("{header:")) {
+      const value = headers.get(part.slice(8, -1));
+      if (value === null) return null;
+      parts.push(Buffer.from(value));
+    } else parts.push(Buffer.from(part));
+  }
+  return Buffer.concat(parts);
 }
 
 /** Within the replay window. A missing or unreadable time is not. */
@@ -96,9 +112,14 @@ export const threadId = (triggerId: string, value: string) =>
 export const bodyHash = (body: Buffer) => createHash("sha256").update(body).digest("hex");
 
 /** The fields the connector keeps: all an agent, a condition or a limit ever reads. */
-export function pickFields(fields: Record<string, string>, body: unknown): EventData {
+export function pickFields(fields: Record<string, string | string[]>, body: unknown): EventData {
+  const first = (paths: string[]) =>
+    paths.map((p) => valueAt(body, p)).find((v) => v !== null) ?? null;
   return Object.fromEntries(
-    Object.entries(fields).map(([name, path]) => [name, valueAt(body, path)]),
+    Object.entries(fields).map(([name, path]) => [
+      name,
+      Array.isArray(path) ? first(path) : valueAt(body, path),
+    ]),
   );
 }
 

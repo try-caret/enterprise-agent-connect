@@ -133,6 +133,13 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       );
       return reply(200);
     }
+    const handshake = hook.handshake;
+    if (handshake && locate(handshake.at, body, req.headers) === handshake.equals) {
+      const echo = valueAt(body, handshake.echo);
+      if (typeof echo !== "string") return reply(400);
+      await delivery(sub, handshake.equals, "allowed", "Answered the app's check of the address");
+      return new Response(echo, { status: 200, headers: { "content-type": "text/plain" } });
+    }
     await accept(
       sub,
       connector!,

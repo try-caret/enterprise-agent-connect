@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { connectorSchema, providerSchema, setupStep } from "../../connector-kit/src/connector.js";
 import { brandingSchema } from "../../connector-kit/src/branding.js";
-import { eventTriggerSchema, subscriptionSchema } from "./events/admin.js";
+import { eventTriggerSchema, rotateSecretSchema, subscriptionSchema } from "./events/admin.js";
 import { triggerSchema } from "./teams/admin.js";
 
 // The admin API's contract: every route once, with its body and the shapes it answers. The
@@ -425,8 +425,9 @@ export const schemas = (() => {
       "EventSubscribed",
       z.strictObject({
         subscription: EventSubscription,
-        // Shown once: what the app signs webhook deliveries with. Null for a poll, and for
-        // Graph, whose clientState the service hands Microsoft itself.
+        // Shown once: what the app signs webhook deliveries with. Null for a poll, for Graph,
+        // whose clientState the service hands Microsoft itself, and for an app that makes its
+        // own secret (given in the request).
         secret: z.string().nullable(),
         // Where to paste the address and secret in the app ({url} filled in).
         setup: z.array(setupStep),
@@ -965,10 +966,12 @@ export const routes = {
   rotateEventSecret: {
     method: "POST",
     path: `${ORG}/event-subscriptions/{subscription}/secret`,
-    summary: "A new secret for a webhook, shown once; the old one stops working at once",
-    body: by,
+    summary:
+      "A new secret for a webhook, shown once; the old one stops working at once. For an app " +
+      "that makes its own signing secret (Slack), give the new one as secret; null is answered",
+    body: rotateSecretSchema,
     responses: {
-      200: z.strictObject({ subscription: s.EventSubscription, secret: z.string() }),
+      200: z.strictObject({ subscription: s.EventSubscription, secret: z.string().nullable() }),
       ...notFound,
     },
     events: true,

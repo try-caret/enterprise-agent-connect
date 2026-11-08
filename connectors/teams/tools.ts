@@ -17,6 +17,12 @@ import {
   type GraphMessage,
   type TeamsAccess,
 } from "../../packages/server/src/teams/runtime.js";
+import {
+  FileRefused,
+  MAX_OFFER_BYTES,
+  MAX_OFFER_FILES,
+  offerName,
+} from "../../packages/server/src/teams/offer.js";
 import type { ConversationRow } from "../../packages/server/src/teams/store.js";
 import type { VendorResponse } from "../../packages/connector-kit/src/types.js";
 import {
@@ -506,8 +512,22 @@ export const teamsTools: Toolset = {
         "teams_reply",
         {
           description:
-            "Answer the Teams message that started this session, in the same thread. Use the reply_token given with the message.",
-          inputSchema: z.object({ reply_token: z.string(), text: z.string() }),
+            "Answer the Teams message that started this session, in the same thread. Use the reply_token given with the message. " +
+            `In a direct chat it can also send up to ${MAX_OFFER_FILES} files (${MAX_OFFER_BYTES / 1024 / 1024} MB together), each given by a download link to a file in SharePoint or OneDrive (graph_get_download_link, teams_get_attachment): ` +
+            "the person gets a card per file and, when they accept, the file is saved to their OneDrive and shown in the chat. Teams lets bots send files only in direct chats.",
+          inputSchema: z.object({
+            reply_token: z.string(),
+            text: z.string(),
+            files: z
+              .array(
+                z.object({
+                  name: z.string().min(1).max(255).describe("The file's name, e.g. report.xlsx"),
+                  download_url: z.string().max(8000),
+                }),
+              )
+              .max(MAX_OFFER_FILES)
+              .optional(),
+          }),
           annotations: sends,
         },
         (input) =>
@@ -515,6 +535,26 @@ export const teamsTools: Toolset = {
             const body = text(input.text);
             const { teams, run, place } = await replyRun(ctx, input.reply_token, mark);
             retarget(run.threadId);
+            const wanted = input.files ?? [];
+            if (wanted.length && (place.kind !== "personal" || !place.userAadId))
+              throw new Denied(
+                "Teams lets a bot send files only in a direct chat. Here, share a link the people in this conversation can open.",
+              );
+            // Every file is fetched before anything is posted, so a bad link leaves the reply
+            // unused.
+            const files: { name: string; bytes: Buffer }[] = [];
+            let total = 0;
+            for (const f of wanted) {
+              const name = offerName(f.name);
+              try {
+                const bytes = await teams.download(f.download_url, MAX_OFFER_BYTES - total);
+                total += bytes.length;
+                files.push({ name, bytes });
+              } catch (error) {
+                if (error instanceof FileRefused) throw new Denied(`${name}: ${error.message}`);
+                throw error;
+              }
+            }
             // A reply is used only by a post that went through.
             if (!(await teams.claimReply(run.id)))
               throw new Denied("That reply token is not valid or has expired");
@@ -527,7 +567,44 @@ export const teamsTools: Toolset = {
               await teams.releaseReply(run.id);
               throw error;
             }
-            return json({ replied: true });
+            // The reply is used now, so a file whose card fails is told, not thrown.
+            const notSent: { name: string; reason: string }[] = [];
+            for (const f of files) {
+              try {
+                ok(
+                  await teams.offerFile({
+                    conversation: place,
+                    recipientAadId: place.userAadId!,
+                    ...f,
+                  }),
+                  mark,
+                );
+              } catch (error) {
+                notSent.push({
+                  name: f.name,
+                  reason: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            // The person is told which files are missing; the agent, whether that note got there.
+            const told =
+              notSent.length > 0 &&
+              (await teams
+                .post(
+                  place.serviceUrl,
+                  run.threadId,
+                  `I couldn't send ${notSent.map((f) => f.name).join(", ")}.`,
+                  run.triggerActivityId,
+                )
+                .then(
+                  (r) => r.status >= 200 && r.status < 300,
+                  () => false,
+                ));
+            return json({
+              replied: true,
+              ...(files.length ? { files_offered: files.length - notSent.length } : {}),
+              ...(notSent.length ? { files_not_sent: notSent, person_told: told } : {}),
+            });
           }),
       );
 

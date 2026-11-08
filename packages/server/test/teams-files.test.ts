@@ -7,6 +7,7 @@ import {
   promptText,
   type Activity,
 } from "../src/teams/activity.ts";
+import { downloadFile, FileRefused, fileStorageUrl, offerName } from "../src/teams/offer.ts";
 import { RSC_PERMISSIONS } from "../src/teams/package.ts";
 import { installBot, type Call } from "../src/teams/provision.ts";
 
@@ -102,6 +103,33 @@ test("the agent is told each file by number, its name quoted, and which it canno
   assert.equal(text.split("</teams_files>").length, 2);
 });
 
+test("files are fetched from and saved to SharePoint and OneDrive only", () => {
+  assert.ok(fileStorageUrl("https://contoso.sharepoint.com/sites/T/d.aspx?tempauth=x"));
+  assert.ok(fileStorageUrl("https://contoso-my.sharepoint.com/personal/a/upload?s=1"));
+  for (const bad of [
+    "http://contoso.sharepoint.com/x",
+    "https://contoso.sharepoint.com.attacker.example/x",
+    "https://sharepoint.com/x",
+    "https://a.b.sharepoint.com/x",
+    "https://user:pw@contoso.sharepoint.com/x",
+    "https://contoso.sharepoint.com:8443/x",
+    "https://169.254.169.254/latest",
+    "not a url",
+    42,
+  ])
+    assert.equal(fileStorageUrl(bad), null, String(bad));
+  assert.equal(offerName("../a/b:c?.xlsx"), ".._a_b_c_.xlsx");
+  assert.equal(offerName("  "), "file");
+});
+
+test("a download with no body is refused as an empty file", async () => {
+  const empty = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+  await assert.rejects(
+    downloadFile(empty, "https://contoso.sharepoint.com/x", 1024),
+    (e: unknown) => e instanceof FileRefused && /empty/.test(e.message),
+  );
+});
+
 test("a team that has the bot already is updated to consent to what it lacks", async () => {
   const seen: { method: string; path: string; body?: any }[] = [];
   let granted = ["ChannelMessage.Read.Group", "ChatMessage.Read.Chat"];
@@ -110,8 +138,15 @@ test("a team that has the bot already is updated to consent to what it lacks", a
     if (req.method === "POST" && req.path === "/v1.0/teams/t1/installedApps")
       return { status: 409, data: { error: { code: "Conflict" } } };
     if (req.method === "GET") {
-      const resourceSpecificPermissions = granted.map((permissionValue) => ({ permissionValue }));
-      const value = [{ id: "inst=1", consentedPermissionSet: { resourceSpecificPermissions } }];
+      const resourceSpecificPermissions = granted.map((permissionValue) => ({
+        permissionValue,
+      }));
+      const value = [
+        {
+          id: "inst=1",
+          consentedPermissionSet: { resourceSpecificPermissions },
+        },
+      ];
       return { status: 200, data: { value } };
     }
     return { status: 204, data: null };

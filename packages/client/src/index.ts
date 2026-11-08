@@ -260,14 +260,16 @@ export function createClient(options: ClientOptions) {
     teamsRuns: (o: string, id: string, limit = 20) =>
       call<Answer<"teamsRuns">>("GET", `${agent(o, id)}/teams-runs?limit=${limit}`),
     // App events that start agents (docs/triggers.md). A webhook's secret is in the answer to
-    // subscribeEvents and rotateEventSecret only.
+    // subscribeEvents and rotateEventSecret only; for an app that makes its own (Slack) the
+    // admin gives it as `secret` to both instead.
     eventSubscriptions: (o: string) =>
       call<Answer<"eventSubscriptions">>("GET", `${org(o)}/event-subscriptions`),
     subscribeEvents: (o: string, body: EventSubscriptionInput) =>
       call<Answer<"subscribeEvents">>("POST", `${org(o)}/event-subscriptions`, body),
-    rotateEventSecret: (o: string, id: string, by: string) =>
+    rotateEventSecret: (o: string, id: string, by: string, secret?: string) =>
       call<Answer<"rotateEventSecret">>("POST", `${org(o)}/event-subscriptions/${seg(id)}/secret`, {
         by,
+        ...(secret === undefined ? {} : { secret }),
       }),
     eventWatches: (o: string, id: string) =>
       call<Answer<"eventWatches">>("GET", `${org(o)}/event-subscriptions/${seg(id)}/watches`),
