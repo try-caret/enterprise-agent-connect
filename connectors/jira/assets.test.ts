@@ -85,6 +85,15 @@ const ATTRS = [
     maximumCardinality: 1,
     minimumCardinality: 0,
   },
+  {
+    id: "8",
+    name: "Owner",
+    type: 1,
+    editable: true,
+    system: false,
+    maximumCardinality: 1,
+    minimumCardinality: 0,
+  },
 ].map((a) => ({ ...a, objectType: LAPTOP }));
 
 const value = (v: string, extra: object = {}) => ({ value: v, displayValue: v, ...extra });
@@ -441,4 +450,72 @@ test("the vendor finds the Assets workspace once per site and fills it into Asse
       `${base}/rest/api/3/myself`,
     ],
   );
+});
+
+test("scopeAql refuses, for a limited agent, AQL that looks through references or uses single quotes", () => {
+  for (const [aql, message] of [
+    ['object HAVING outboundReferences(objectSchemaId = 5 AND "Cost" > 5000)', /References cannot/],
+    ["objectType = Laptop AND inboundReferences(Name = x)", /References cannot/],
+    ['Owner.Department = "IT"', /dot notation/],
+    ['"Owner"."Name" = "Kim"', /dot notation/],
+    ["Name = '(' ) OR (objectSchemaId = 5 OR Name = ')'", /single quotes|Unbalanced/],
+  ] as [string, RegExp][])
+    assert.throws(() => scopeAql(aql, ["137"]), message, aql);
+  // Inside double quotes the same characters are plain text; numbers keep their decimal point.
+  assert.equal(
+    scopeAql('Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5', ["137"]),
+    'objectSchemaId = 137 AND (Notes = "O\'Brien, see HAVING x.y" AND Cost > 3.5)',
+  );
+});
+
+test("jira_assets_update_object checks Select options and references, and refuses an attribute named twice", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_update"], { asset_schemas: ["137"] });
+  const { sent } = assets(h);
+  const refused: [object, RegExp][] = [
+    [{ Location: "Paris" }, /no option Paris. Use one of: Boston, London/],
+    [{ Owner: "IT-99" }, /no object IT-99 in the object schemas/],
+    [{ Owner: "IT-55" }, /no object IT-55/],
+    [{ Owner: "99" }, /object schema this agent is not allowed/],
+    [{ Owner: "not a key" }, /takes an object key/],
+    [{ Status: "In use", status: "In use" }, /Status is named twice/],
+  ];
+  for (const [attributes, message] of refused) {
+    const r = await call(h, key, "jira_assets_update_object", { object_id: "11", attributes });
+    assert.equal(r.isError, true, JSON.stringify(attributes));
+    assert.match(r.text!, message);
+  }
+  assert.equal(sent.filter((s) => s.method === "PUT").length, 0);
+  const r = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Location: "boston", Owner: "it-12" },
+  });
+  assert.equal(r.isError, false, r.text ?? "");
+  const lookup = sent.filter((s) => s.method === "POST").at(-1);
+  assert.deepEqual((lookup!.body as any).qlQuery, 'objectSchemaId = 137 AND (Key = "it-12")');
+  assert.deepEqual((sent.find((s) => s.method === "PUT")!.body as any).attributes, [
+    { objectTypeAttributeId: "7", objectAttributeValues: [{ value: "Boston" }] },
+    { objectTypeAttributeId: "8", objectAttributeValues: [{ value: "IT-12" }] },
+  ]);
+});
+
+test("a referenced object outside the agent's schemas is not named", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_read"], { asset_schemas: ["137"] });
+  const { objects } = assets(h);
+  const ref = (id: string, type: typeof LAPTOP) => ({
+    displayValue: `Owner ${id}`,
+    referencedObject: { id, label: `Owner ${id}`, objectType: type },
+  });
+  objects["11"].attributes.push({
+    objectTypeAttributeId: "8",
+    objectAttributeValues: [ref("12", LAPTOP), ref("99", OTHER)],
+    objectTypeAttribute: ATTRS.find((d) => d.id === "8"),
+  } as any);
+  const r = await call(h, key, "jira_assets_get_object", { object_id: "11" });
+  assert.equal(r.isError, false, r.text ?? "");
+  assert.deepEqual(r.data.attributes.Owner, [
+    "Owner 12",
+    "(an object in a schema this agent may not use)",
+  ]);
 });

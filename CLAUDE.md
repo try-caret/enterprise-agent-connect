@@ -639,17 +639,22 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   for the process; a refused discovery is passed back as the tool's answer, no workspace is a 404.
   Search is `POST object/aql?startAt&maxResults&includeAttributes=true` {qlQuery}; its values
   carry only `objectTypeAttributeId`, named from the answer's `objectTypeAttributes`. Values are
-  shown as stored (ISO dates), a reference, status, user or group by its name. Limit
+  shown as stored (ISO dates), a reference, status, user or group by its name (a referenced
+  object outside the agent's schemas, or with no schema id, as a fixed placeholder). Limit
   `asset_schemas` (object schema ids, empty = every schema the account sees): AQL becomes
   `objectSchemaId = N AND (<agent's AQL>) [ORDER BY ...]` (`in (...)` for several; only double
-  quotes are strings, AQL has no single-quoted ones, so their parentheses count), and every
+  quotes are strings; for a limited agent a single quote, `HAVING`, `inboundReferences(` /
+  `outboundReferences(` and dot notation such as `Owner.Name` are refused outside strings,
+  because they could test objects in other schemas through references), and every
   object answered, read or changed is checked on `objectType.objectSchemaId`; an object type's
   attributes are refused when any names another schema. Update reads the object (schema check),
   its type's attributes (`GET objecttype/{id}/attributes`), maps names case-insensitively,
   refuses unknown, `system` or non-`editable` ones and several values for a single-value one,
   resolves a Status (type 7) by name or id within the attribute's `typeValueMulti` from `GET
   config/statustype` plus `?objectSchemaId=` (global and schema statuses come from separate
-  calls). That list needs `read:cmdb-config:jira`, which service-account credentials are not
+  calls), a Select (defaultType 10) only to one of its `options`, an Object reference (type 1)
+  only to an object id or key found in the agent's schemas (by id: the object check; by key:
+  scoped AQL `Key = "..."`), and refuses an attribute named twice. That list needs `read:cmdb-config:jira`, which service-account credentials are not
   offered, so on 401/403 the choices are the statuses the attribute already holds on objects of
   its type (one AQL page of 200) and the refusal says so. Then `PUT object/{id}` {objectTypeId,
   attributes: only the named ones} and reads the object back. No create or delete. Scopes per
@@ -661,8 +666,8 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   endpoint answers for a service account with no Service Management seat (IDC); with a JSM agent
   seat and no schema role a service account searched, read and changed objects on our test site
   (the schema role picker does not list service accounts); without the seat a JSM project's
-  issues are invisible to it even as a Jira admin. Still unconfirmed: that a PUT naming some
-  attributes leaves the others as they are (the OpenAPI does not say; the tool assumes it).
+  issues are invisible to it even as a Jira admin; a PUT naming some attributes left the others
+  as they were. Not yet run with ONLY the scopes listed above (the live credential had all 15).
   Sources: developer.atlassian.com/cloud/assets/swagger.v3.json
   (servers, object/aql, object/{id}, objecttype/{id}/attributes, config/statustype,
   ObjectIn, ObjectAttributeValueIn, ObjectTypeAttribute.type), the Jira Service Management

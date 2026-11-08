@@ -34,7 +34,10 @@ const ATTRIBUTE_TYPES: Record<number, string> = {
   4: "Group",
   7: "Status",
 };
+const REFERENCE = 1;
 const STATUS = 7;
+const SELECT = 10; // defaultType.id of a plain Select value
+const OBJECT_KEY = /^[A-Za-z][A-Za-z0-9_]{0,19}-[1-9][0-9]{0,17}$/;
 
 function assetsError(res: { status: number; data: unknown }): string {
   const d = res.data as {
@@ -65,8 +68,14 @@ function allowedSchema(schemas: string[] | null, id: unknown): boolean {
 
 // One value as an agent reads it: a referenced object, status, user or group by its name, any
 // other value as stored (dates in ISO 8601, not the account's display format).
-function shownValue(v: Obj): unknown {
-  if (v?.referencedObject) return v.displayValue ?? v.referencedObject.label ?? null;
+// A referenced object outside the agent's schemas is not named (`schemas`: the limit).
+const HIDDEN_REFERENCE = "(an object in a schema this agent may not use)";
+function shownValue(v: Obj, schemas: string[] | null = null): unknown {
+  if (v?.referencedObject) {
+    if (!allowedSchema(schemas, v.referencedObject.objectType?.objectSchemaId))
+      return HIDDEN_REFERENCE;
+    return v.displayValue ?? v.referencedObject.label ?? null;
+  }
   if (v?.status) return v.status.name ?? v.displayValue ?? null;
   if (v?.user) return v.user.displayName ?? v.displayValue ?? null;
   if (v?.group) return v.group.name ?? v.displayValue ?? null;
@@ -75,12 +84,12 @@ function shownValue(v: Obj): unknown {
 
 // An object with its attributes by name. `names`: attribute id to name, for answers (AQL)
 // whose attributes carry only their objectTypeAttributeId.
-function shownObject(o: Obj, names: Map<string, string> = new Map()) {
+function shownObject(o: Obj, schemas: string[] | null, names: Map<string, string> = new Map()) {
   const attributes: Record<string, unknown> = {};
   for (const a of (o.attributes ?? []) as Obj[]) {
     const id = String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "");
     const name = a.objectTypeAttribute?.name ?? names.get(id) ?? `attribute ${id}`;
-    const values = ((a.objectAttributeValues ?? []) as Obj[]).map(shownValue);
+    const values = ((a.objectAttributeValues ?? []) as Obj[]).map((v) => shownValue(v, schemas));
     attributes[name] = values.length === 0 ? null : values.length === 1 ? values[0] : values;
   }
   return {
@@ -170,6 +179,34 @@ async function statusChoices(
   return { list: [...found.values()], partial: true };
 }
 
+// An Object reference value: an object id or key that must name an existing object in the
+// agent's schemas. Answers the key Assets is sent.
+async function referenceKey(ctx: ToolContext, mark: Mark, v: string, attribute: string) {
+  const want = v.trim();
+  if (OBJECT_ID.test(want)) {
+    const o = await fetchObject(ctx, mark, want);
+    return String(o.objectKey ?? want);
+  }
+  if (!OBJECT_KEY.test(want))
+    throw new Denied(`${attribute} takes an object key such as ITSM-88, not ${v}`);
+  const schemas = listLimit(ctx.limits, "asset_schemas");
+  const data = await ok(ctx, mark, {
+    method: "POST",
+    path: path("object/aql?startAt=0&maxResults=5&includeAttributes=false"),
+    body: { qlQuery: scopeAql(`Key = "${want}"`, schemas) },
+  });
+  const found = ((data?.values ?? []) as Obj[]).find(
+    (o) =>
+      String(o.objectKey ?? "").toUpperCase() === want.toUpperCase() &&
+      allowedSchema(schemas, o.objectType?.objectSchemaId),
+  );
+  if (!found)
+    throw new Denied(
+      `${attribute}: no object ${want} in the object schemas this agent may use`,
+    );
+  return String(found.objectKey);
+}
+
 const attributeKind = (a: Obj) =>
   a.type === 0 || a.type === undefined
     ? (a.defaultType?.name ?? "Text")
@@ -228,7 +265,7 @@ export const assetsTools: Toolset = {
             const values = (data?.values ?? []) as Obj[];
             const objects = values
               .filter((o) => allowedSchema(schemas, o.objectType?.objectSchemaId))
-              .map((o) => shownObject(o, names));
+              .map((o) => shownObject(o, schemas, names));
             // isLast comes as a string in Atlassian's own example.
             const last = data?.isLast === true || data?.isLast === "true";
             return json({
@@ -252,7 +289,12 @@ export const assetsTools: Toolset = {
         },
         ({ object_id }) =>
           audited(ctx, "jira_assets_get_object", object_id, async (mark) =>
-            json(shownObject(await fetchObject(ctx, mark, object_id))),
+            json(
+              shownObject(
+                await fetchObject(ctx, mark, object_id),
+                listLimit(ctx.limits, "asset_schemas"),
+              ),
+            ),
           ),
       );
 
@@ -297,7 +339,8 @@ export const assetsTools: Toolset = {
           description:
             "Change named attributes of one existing Jira Assets object; every other attribute " +
             "is left as it is. Values are text: dates as YYYY-MM-DD, a Select its option, a " +
-            "Status its name, an Object reference the object's key (e.g. ITSM-88), a User the " +
+            "Status its name, an Object reference the key of an object this agent may use " +
+            "(e.g. ITSM-88), a User the " +
             "Atlassian account id. A list sets several values; null clears the attribute. " +
             "Answers with the object read back after the change.",
           inputSchema: z.object({
@@ -328,6 +371,7 @@ export const assetsTools: Toolset = {
               const editable = defs.filter((a) => a.editable === true && a.system !== true);
               let statuses: { list: Obj[]; partial: boolean } | null = null;
               const body = [];
+              const named = new Set<string>();
               for (const [name, value] of changes) {
                 const def = byName.get(name.trim().toLowerCase());
                 if (!def)
@@ -336,6 +380,8 @@ export const assetsTools: Toolset = {
                       .map((a) => a.name)
                       .join(", ")}`,
                   );
+                if (named.has(String(def.id))) throw new Denied(`${def.name} is named twice`);
+                named.add(String(def.id));
                 if (def.editable !== true || def.system === true)
                   throw new Denied(`${def.name} cannot be edited`);
                 let values = value === null ? [] : Array.isArray(value) ? value : [value];
@@ -370,6 +416,26 @@ export const assetsTools: Toolset = {
                     return String(found.id);
                   });
                 }
+                if (def.type === 0 && def.defaultType?.id === SELECT && values.length) {
+                  const options =
+                    typeof def.options === "string" && def.options
+                      ? def.options.split(",").map((o: string) => o.trim())
+                      : [];
+                  values = values.map((v) => {
+                    const want = v.trim().toLowerCase();
+                    const found = options.find((o: string) => o.toLowerCase() === want);
+                    if (!found)
+                      throw new Denied(
+                        `${def.name} has no option ${v}. Use one of: ${options.join(", ")}`,
+                      );
+                    return found;
+                  });
+                }
+                if (def.type === REFERENCE && values.length) {
+                  const resolved = [];
+                  for (const v of values) resolved.push(await referenceKey(ctx, mark, v, def.name));
+                  values = resolved;
+                }
                 body.push({
                   objectTypeAttributeId: String(def.id),
                   objectAttributeValues: values.map((v) => ({ value: v })),
@@ -383,7 +449,7 @@ export const assetsTools: Toolset = {
               const after = await fetchObject(ctx, mark, object_id);
               return json({
                 updated: changes.map(([name]) => byName.get(name.trim().toLowerCase())!.name),
-                object: shownObject(after),
+                object: shownObject(after, listLimit(ctx.limits, "asset_schemas")),
               });
             },
           ),

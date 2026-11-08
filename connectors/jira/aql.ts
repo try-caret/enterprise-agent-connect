@@ -22,6 +22,19 @@ export function scopeAql(aql: string, schemas: string[] | null): string {
     return aql.trim();
   }
   if (schemas.length === 0) throw new JqlRejected("No object schemas are allowed");
+  // The filter limits only the objects answered. AQL that looks through references (HAVING
+  // inboundReferences/outboundReferences, or dot notation such as Owner.Name) could test objects
+  // in other schemas, and a single quote might start a string this check does not know, so
+  // neither is accepted from a limited agent. Double-quoted strings are blanked first.
+  const bare = where.replace(/"(?:\\.|[^"\\])*"/g, '""');
+  if (/'/.test(bare))
+    throw new JqlRejected('Quote values with double quotes ("), not single quotes');
+  if (/\bhaving\b|references\s*\(/i.test(bare))
+    throw new JqlRejected(
+      "References cannot be searched: give conditions on the objects' own attributes",
+    );
+  if (/\.\s*["A-Za-z_]/.test(bare))
+    throw new JqlRejected("Attributes of referenced objects (dot notation) cannot be searched");
   for (const s of schemas) if (!isSchemaId(s)) throw new Error(`Invalid object schema id ${s}`);
   const filter =
     schemas.length === 1
