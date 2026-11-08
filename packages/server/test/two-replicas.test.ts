@@ -418,6 +418,64 @@ test(
   },
 );
 
+// The events store, telling when a try for `lease` found it held.
+function refusedOnce(events: EventsStore, lease: string) {
+  let refused!: () => void;
+  const tried = new Promise<void>((r) => (refused = r));
+  const store = {
+    ...events,
+    async takeLease(...args: Parameters<EventsStore["takeLease"]>) {
+      const token = await events.takeLease(...args);
+      if (args[0] === lease && !token) refused();
+      return token;
+    },
+  };
+  return { store, tried };
+}
+
+test(
+  "an unsubscribe waiting on another process's long work is answered busy, not left hanging",
+  { skip: !sql, timeout: 10_000 },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const t = await eventsSetup("graph");
+    const lease = `graph-sync:${t.sub.id}`;
+    assert.ok(await t.events.takeLease(lease, 60), "the other process's sync");
+    const { store, tried } = refusedOnce(t.events, lease);
+    const removing = t
+      .pod(store)
+      .releaseAll(t.sub, () => t.events.deleteSubscription(t.org, t.sub.id));
+    await tried;
+    ctx.mock.timers.tick(15_000);
+    await assert.rejects(removing, /Try again in a minute/);
+    assert.ok(await t.events.subscription(t.sub.id), "nothing removed");
+  },
+);
+
+test(
+  "a trigger change waiting on another process's long work is left to the next round",
+  { skip: !sql, timeout: 10_000 },
+  async (ctx) => {
+    ctx.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const t = await eventsSetup("graph");
+    // Not due until its interval.
+    await t.events.polled(t.sub.id, null, null);
+    const lease = `graph-sync:${t.sub.id}`;
+    const other = (await t.events.takeLease(lease, 60))!;
+    const { store, tried } = refusedOnce(t.events, lease);
+    const a = t.pod(store);
+    const changing = a.syncApp(t.org, "app");
+    await tried;
+    ctx.mock.timers.tick(15_000);
+    await changing;
+    assert.equal(t.calls.length, 0);
+    await t.events.dropLease(lease, other);
+    await a.pollDue();
+    const [w] = await t.events.watches(t.sub.id);
+    assert.ok(w?.remoteId, "subscribed at the scheduler's next round");
+  },
+);
+
 test("one process makes each due poll", { skip: !sql }, async () => {
   const t = await eventsSetup("poll");
   const first = t.pod().pollDue();

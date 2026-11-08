@@ -100,8 +100,10 @@ orgs/:org/claude-key/agents`. App events (docs/triggers.md, tag `events` in open
   app's API took it), `POST …/:subscription/secret` {by, secret} (a new webhook secret, once; given for
   `secretFromApp`), `GET …/:subscription/watches` (a Graph subscription's watched
   values, each agent's mailbox: subscribed, expiresAt, lastNotificationAt, caughtUpAt, lastError),
-  `DELETE …/:subscription` {by} (deletes Graph's subscriptions first); per agent `GET …/event-triggers`,
-  `PUT/DELETE …/event-triggers/:app` (a Graph subscription's watches follow at once) and `GET
+  `DELETE …/:subscription` {by} (deletes Graph's subscriptions first; 422 "try again" when another
+  change to them outlasts 15 s); per agent `GET …/event-triggers`,
+  `PUT/DELETE …/event-triggers/:app` (a Graph subscription's watches follow at once, or at the
+  scheduler's next round when another change to them outlasts 15 s) and `GET
   …/event-runs?limit` (each with `thread`).
 - `POST /agent-connect/events/:subscription`: public, for apps' webhooks. Origin refused, 1 MiB
   cap, the connector's proof (HMAC-SHA256 of the raw body, or of `verify.signs` filled with the
@@ -287,8 +289,9 @@ ConfigMap or Secret key as `NODE_EXTRA_CA_CERTS`). Any number of replicas: Teams
 run limits (concurrent runs, runs per hour, daily spend) are counted and the run started in one
 transaction under an advisory lock per agent or trigger (`admit`, `admitRun`); each due poll is
 claimed (`claimDuePoll`); a Graph subscription's watches change, and an unsubscribe removes them,
-under a lease renewed while the work lasts (store.ts `withLease`, `graph.ts` `leased`; work
-whose renewal finds the lease taken makes no further Graph call); and the watcher makes one
+under a lease renewed while the work lasts (store.ts `withLease`, `graph.ts` `inTurn`; work
+whose renewal finds the lease taken makes no further Graph call; waiting for the lease gives up
+after 15 s, `SubscriptionBusy`); and the watcher makes one
 pass at a time, across the processes and in each (`watchTurn`, under a lease held while the pass
 lasts), a run's finish recorded and told once however passes overlap (`updateRun` with
 `from`). A rollout overlaps two versions, so a migration must leave the previous image working. The admin API is never public: it refuses any

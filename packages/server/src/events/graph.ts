@@ -1,5 +1,9 @@
 import type { Connector } from "../../../connector-kit/src/connector.js";
-import type { VendorRequest, VendorResponse } from "../../../connector-kit/src/types.js";
+import {
+  ConnectError,
+  type VendorRequest,
+  type VendorResponse,
+} from "../../../connector-kit/src/types.js";
 import { tokensEqual } from "../secrets.js";
 import type { AuditEntry } from "../store.js";
 import { readCappedBytes } from "../teams/runtime.js";
@@ -24,6 +28,17 @@ const SUBSCRIPTIONS = "/v1.0/subscriptions";
 // Renewed while a sync runs, so a process that dies holding it is waited for this long at most.
 const LEASE_SECONDS = 60;
 const LEASE_WAIT_MS = 500;
+// How long work waits for another's turn on the subscription: an admin request is answered
+// within it.
+const TURN_WAIT_MS = 15_000;
+
+/** Another change to the subscription's watches, in this process or another, outlasted the
+ *  wait for its turn. */
+export class SubscriptionBusy extends ConnectError {
+  constructor() {
+    super("Another change to this app's events is still being made. Try again in a minute.");
+  }
+}
 
 export type GraphDeps = {
   events: EventsStore;
@@ -376,31 +391,18 @@ export function createGraphSource(deps: GraphDeps) {
   }
 
   // One change to a subscription's watches at a time, in this process and across them: the poll
-  // scheduler, a trigger change and a lifecycle notification can each start one, on any process,
-  // and two would each make a Graph subscription for the same watch, the one refused clearing
-  // the other's id.
-  const syncing = new Map<string, Promise<unknown>>();
-
-  function inTurn<T>(sub: SubscriptionRow, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    // The earlier one's failure went to its own caller.
-    const run = (syncing.get(sub.id) ?? Promise.resolve())
-      .catch(() => {})
-      .then(() => leased(sub, work));
-    syncing.set(sub.id, run);
-    const done = () => {
-      if (syncing.get(sub.id) === run) syncing.delete(sub.id);
-    };
-    run.then(done, done);
-    return run;
-  }
-
-  // Waits for the other processes' work on the subscription. A sync waits on Graph for as long
-  // as it needs, so a lease, not a lock held on one of the pool's few connections. One that
-  // loses it (stalled past its term, another process took it) makes no further Graph call.
-  async function leased<T>(sub: SubscriptionRow, work: (signal: AbortSignal) => Promise<T>) {
+  // scheduler, a trigger change, a lifecycle notification and an unsubscribe can each start one,
+  // on any process, and two would each make a Graph subscription for the same watch, the one
+  // refused clearing the other's id. A sync waits on Graph for as long as it needs, so a lease
+  // (each call its own), not a lock held on one of the pool's few connections. One that loses it
+  // (stalled past its term, another took it) makes no further Graph call. Waiting for the turn
+  // gives up after TURN_WAIT_MS with SubscriptionBusy.
+  async function inTurn<T>(sub: SubscriptionRow, work: (signal: AbortSignal) => Promise<T>) {
+    const until = Date.now() + TURN_WAIT_MS;
     for (;;) {
       const done = await events.withLease(`graph-sync:${sub.id}`, LEASE_SECONDS, work);
       if (done) return done.value;
+      if (Date.now() >= until) throw new SubscriptionBusy();
       await new Promise((r) => setTimeout(r, LEASE_WAIT_MS));
     }
   }
@@ -408,12 +410,12 @@ export function createGraphSource(deps: GraphDeps) {
   return {
     inbound,
     /** On the poll scheduler and after trigger changes. One started while another runs waits
-     *  for it, then runs on what changed meanwhile. */
+     *  for it, then runs on what changed meanwhile; SubscriptionBusy past the wait. */
     sync: (sub: SubscriptionRow, connector: Connector) =>
       inTurn(sub, (signal) => syncOnce(sub, connector, signal)),
     /** Removes every watch's Graph subscription, then `remove`s the organization's, in its
      *  turn: a sync on any process waits for it, so none makes a Graph subscription meanwhile
-     *  that nothing would delete. */
+     *  that nothing would delete. SubscriptionBusy (the admin's "try again") past the wait. */
     releaseAll: <T>(sub: SubscriptionRow, remove: () => Promise<T>) =>
       inTurn(sub, async (signal) => {
         for (const w of await events.watches(sub.id)) await release(sub, w, signal);

@@ -247,6 +247,11 @@ export function createEventsStore(sql: Sql, schema: string) {
       return row ?? null;
     },
 
+    // Due at the scheduler's next round, whatever its interval.
+    async pollSoon(id: string): Promise<void> {
+      await sql`update ${t.event_subscriptions} set polled_at = null where id = ${id}`;
+    },
+
     async polled(id: string, cursor: string | null, error: string | null): Promise<void> {
       await sql`
         update ${t.event_subscriptions}

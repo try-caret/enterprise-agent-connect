@@ -31,7 +31,7 @@ import {
   valueAt,
   type EventData,
 } from "./deliver.js";
-import { createGraphSource } from "./graph.js";
+import { createGraphSource, SubscriptionBusy } from "./graph.js";
 import { noReport, type Report } from "../report.js";
 import type {
   AgentAppState,
@@ -668,19 +668,24 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     }
   }
 
-  /** A Graph subscription's watches brought in line with the triggers, renewed and caught up. */
-  async function sync(sub: SubscriptionRow) {
+  /** A Graph subscription's watches brought in line with the triggers, renewed and caught up.
+   *  False, and nothing recorded, when another change to them outlasted the wait. */
+  async function sync(sub: SubscriptionRow): Promise<boolean> {
     const connector = connectors.get(sub.connectorId);
-    if (!connector?.events?.graph)
-      return polled(sub, null, `${sub.connectorId} sends no Graph notifications`);
+    if (!connector?.events?.graph) {
+      await polled(sub, null, `${sub.connectorId} sends no Graph notifications`);
+      return true;
+    }
     try {
       const { error, status } = await graph.sync(sub, connector);
       await polled(sub, null, error, null, status);
     } catch (error) {
+      if (error instanceof SubscriptionBusy) return false;
       console.error(`[events] graph sync ${sub.id}`, error);
       const why = error instanceof ConnectError ? error.message : "Internal error";
       await polled(sub, null, why, error);
     }
+    return true;
   }
 
   let polling = false;
@@ -763,10 +768,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     poll,
     pollDue,
     /** After a trigger on the app changes: the organization's Graph subscription for it, if
-     *  any, follows at once rather than at its next interval. */
+     *  any, follows at once rather than at its next interval; while another change to it
+     *  outlasts the wait, at the scheduler's next round. */
     async syncApp(org: string, app: string) {
       const sub = await events.subscriptionFor(org, app);
-      if (sub?.source === "graph") await sync(sub);
+      if (sub?.source === "graph" && !(await sync(sub))) await events.pollSoon(sub.id);
     },
     releaseAll: graph.releaseAll,
     settle: graph.settle,
