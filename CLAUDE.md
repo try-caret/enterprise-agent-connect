@@ -633,30 +633,32 @@ connectors/<id>/*.test.ts # one connector's own tool behavior, on the server's t
   attributes) and `assets_update` (update object, destructive: it overwrites or clears values it
   does not keep), neither required. Same gateway, under `jsm/assets/workspace/{workspaceId}/v1/`;
   the vendor finds the workspace id once per cloudId (`GET
-  /rest/servicedeskapi/assets/workspace`). Limit `asset_schemas`: AQL becomes `objectSchemaId = N
-  AND (<agent's AQL>)`, AQL that could look through references (`HAVING`, `...References(`, dot
-  notation, also inside a quoted name before an operator and anywhere in ORDER BY) is refused;
-  with a schema or a projects limit, `connectedTickets(` (JQL the projects limit does not hold),
-  single quotes and any backslash but `\"` (AQL's only documented escape) are refused too. Under a
-  schema limit a missing object or type id gets the same refusal as another schema's (ids are
-  sequential, so walking them would count), and every object answered or changed is checked on its
-  schema; a referenced object outside them (or a reference value with no `referencedObject`) is
-  shown as a placeholder (reads only: AQL like `Owner LIKE "Al"` still matches a reference's
-  label, so an agent can probe the labels its allowed objects point to). A reference is known by
-  `type` 1, `referenceObjectTypeId` or `referenceType` (`type` is optional in the OpenAPI); a User
-  value reads as {name, account_id}. Update sends only the named attributes after checking each
-  (editable, a Select option; Object references refused; at most 20) and reads the object as the
-  PUT answered it (read again only when that answer is not the object); a failed read-back answers
-  the change with a warning, never an error. Only null clears (an empty list is refused). A Status
-  id in the attribute's `typeValueMulti` is taken as given; anything else is looked up by name on
-  one object of the type holding it (AQL), since service accounts are not offered
-  `read:cmdb-config:jira` for the status list; a status no object holds yet is refused without
-  listing ids to guess. Select options are one comma-separated text in Assets: matched against
-  pieces joined again, listed as the text. No create or delete. Errors read through `answers.ts`,
-  shared with the issue tools. Checked live November 8, 2026 (with all 15 cmdb scopes, not only
-  the listed ones): a service account needs a JSM agent seat, no schema role; a partial PUT leaves
-  other attributes as they were. Source: developer.atlassian.com/cloud/assets/swagger.v3.json,
-  read November 7, 2026.
+  /rest/servicedeskapi/assets/workspace`). Limit `asset_schemas` (empty: every schema; the
+  projects limit does not narrow Assets): AQL becomes `objectSchemaId = N AND (<agent's AQL>)`,
+  AQL that could look through references (`HAVING`, `...References(`, dot notation, also inside a
+  quoted name before an operator and anywhere in ORDER BY) is refused; with a schema or a projects
+  limit, `connectedTickets(` (JQL the projects limit does not hold), single quotes and any
+  backslash but `\"` (AQL's only documented escape) are refused too. Under a schema limit a
+  missing object or type id gets the same refusal as another schema's (ids are sequential, so
+  walking them would count; a missing workspace keeps its own message, and an empty attribute list
+  is refused), and every object answered or changed is checked on its schema; a referenced object
+  outside them (or a reference value with no `referencedObject`) is shown as a placeholder (reads
+  only: AQL like `Owner LIKE "Al"` still matches a reference's label, so an agent can probe the
+  labels its allowed objects point to). A reference is `type` 1, or with no `type` (optional in
+  the OpenAPI) a set `referenceObjectTypeId` or `referenceType`; a plain value is `type` 0 or
+  none; a User value reads as {name, account_id}. Update sends only the named attributes after
+  checking each (editable, a Select option; Object references refused; at most 20) and reads the
+  object as the PUT answered it (read again only when that answer is not the object); a failed
+  read-back answers the change with a warning, never an error. Only null clears (an empty list is
+  refused), never a required attribute (minimumCardinality). A Status id in the attribute's
+  `typeValueMulti` is taken as given; anything else is looked up by name on one object of the type
+  holding it (AQL), since service accounts are not offered `read:cmdb-config:jira` for the status
+  list; a status no object holds yet is refused without listing ids to guess. Select options are
+  one comma-separated text in Assets: matched against pieces joined again, listed as the text. No
+  create or delete. Errors read through `answers.ts`, shared with the issue tools. Checked live
+  November 8, 2026 (with all 15 cmdb scopes, not only the listed ones): a service account needs a
+  JSM agent seat, no schema role; a partial PUT leaves other attributes as they were. Source:
+  developer.atlassian.com/cloud/assets/swagger.v3.json, read November 7, 2026.
 - Microsoft connection (provider `microsoft`, table `providers`, one per org):
   the apps with `"provider": "microsoft"` sign in through it, so its credentials are entered
   once; each app row keeps its own ceiling and settings (`provider_id`, no credential of its

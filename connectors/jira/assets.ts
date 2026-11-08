@@ -2,7 +2,7 @@ import { z } from "zod";
 import { isAssetsId, scopeAql } from "./aql.js";
 import { JqlRejected } from "./jql.js";
 import { answerOf } from "./answers.js";
-import { ASSETS_PATH } from "./vendor.js";
+import { ASSETS_PATH, WORKSPACE_PROBLEM } from "./vendor.js";
 import {
   audited,
   Denied,
@@ -38,11 +38,16 @@ const ATTRIBUTE_TYPES: Record<number, string> = {
 };
 
 // `type` is optional in the OpenAPI (its own example leaves it out and gives a reference
-// attribute only referenceObjectTypeId), so a reference is known by any of the three.
+// attribute only referenceObjectTypeId), so without it a reference is known by those fields; a
+// `type` that is there is trusted, so empty reference fields on other attributes change nothing.
 const isReference = (def: Obj | undefined) =>
-  def?.type === REFERENCE || def?.referenceObjectTypeId != null || def?.referenceType != null;
+  def?.type === REFERENCE ||
+  (def?.type === undefined && Boolean(def?.referenceObjectTypeId || def?.referenceType));
+// A plain value (Text, Date, Select...): `type` 0, or no `type` and not a reference.
+const isPlain = (def: Obj) => (def.type ?? 0) === 0 && !isReference(def);
 
-const attributeId = (a: Obj) => String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "");
+const attributeId = (a: Obj) =>
+  String(a.objectTypeAttributeId ?? a.objectTypeAttribute?.id ?? "");
 
 const ok = answerOf("Jira Assets");
 
@@ -106,9 +111,11 @@ async function limitedGet(ctx: ToolContext, mark: Mark, rest: string, refusal: s
   try {
     return await ok(ctx, mark, { method: "GET", path: path(rest) });
   } catch (error) {
+    // A missing workspace is the site's, not the object's: it keeps its own message.
     if (
       error instanceof VendorFailed &&
       error.status === 404 &&
+      !error.message.includes(WORKSPACE_PROBLEM) &&
       listLimit(ctx.limits, "asset_schemas") !== null
     )
       throw new Denied(refusal);
@@ -136,12 +143,14 @@ async function typeAttributes(
 ): Promise<Obj[]> {
   if (!isAssetsId(typeId)) throw new Denied("Give an object type id, a number such as 23");
   const refusal = `Object type ${typeId} is not in an object schema this agent may use`;
-  const attrs = (await limitedGet(ctx, mark, `objecttype/${typeId}/attributes`, refusal)) as Obj[];
+  const rest = `objecttype/${typeId}/attributes`;
+  const attrs = ((await limitedGet(ctx, mark, rest, refusal)) ?? []) as Obj[];
   const schemas = listLimit(ctx.limits, "asset_schemas");
+  // An empty list names no schema to check, so under a limit it is refused like another's.
   if (
     !checked &&
     schemas !== null &&
-    attrs.some((a) => !allowedSchema(schemas, a.objectType?.objectSchemaId))
+    (attrs.length === 0 || attrs.some((a) => !allowedSchema(schemas, a.objectType?.objectSchemaId)))
   )
     throw new Denied(refusal);
   return attrs;
@@ -229,7 +238,7 @@ function selectOption(def: Obj, value: string): string | null {
 const attributeKind = (a: Obj) =>
   isReference(a)
     ? ATTRIBUTE_TYPES[REFERENCE]
-    : a.type === 0 || a.type === undefined
+    : isPlain(a)
       ? (a.defaultType?.name ?? "Text")
       : (ATTRIBUTE_TYPES[a.type] ?? `type ${a.type}`);
 
@@ -254,9 +263,10 @@ export const assetsTools: Toolset = {
             '`objectType = Laptop AND Status = "In stock" ORDER BY "Date Received" ASC`. ' +
             "Attribute names with spaces go in double quotes; ORDER BY goes at the end. " +
             "Each object comes with its attributes by name. Results are limited to the object " +
-            "schemas this agent may use. An agent held to schemas or projects may not use " +
-            "HAVING, inboundReferences, outboundReferences, connectedTickets, dot notation " +
-            '(Owner.Name), single quotes, or a backslash except before ". ' +
+            "schemas this agent may use. An agent held to schemas may not use HAVING, " +
+            "inboundReferences, outboundReferences or dot notation (Owner.Name); one held to " +
+            "schemas or projects may not use connectedTickets, single quotes, or a backslash " +
+            'except before ". ' +
             "Find attribute names with jira_assets_list_attributes.",
           inputSchema: z.object({
             aql: z.string().min(1).max(4000).describe("AQL query. ORDER BY is allowed at the end."),
@@ -365,7 +375,8 @@ export const assetsTools: Toolset = {
             "text: a Date as YYYY-MM-DD, a DateTime as ISO 8601 with a time, a Select its " +
             "option, a User the Atlassian account id, a Status its id or its name (a name only " +
             "when some object of the type already has that status). A list sets several " +
-            "values; only null clears. Object reference and read-only attributes are refused. " +
+            "values; only null clears, and never a required attribute. Object reference and " +
+            "read-only attributes are refused. " +
             "Answers with the object as saved.",
           inputSchema: z.object({
             object_id: objectId,
@@ -416,6 +427,8 @@ export const assetsTools: Toolset = {
                     `${def.name} links to other objects, which this tool does not change`,
                   );
                 let values = value === null ? [] : Array.isArray(value) ? value : [value];
+                if (!values.length && (def.minimumCardinality ?? 0) > 0)
+                  throw new Denied(`${def.name} is required and cannot be cleared`);
                 if (values.length > 1 && def.maximumCardinality === 1)
                   throw new Denied(`${def.name} takes one value`);
                 if (def.type === STATUS && values.length) {
@@ -425,7 +438,7 @@ export const assetsTools: Toolset = {
                     resolved.push(await statusId(ctx, mark, schemaId, typeId, def, v));
                   values = resolved;
                 }
-                if (def.type === 0 && def.defaultType?.id === SELECT && values.length) {
+                if (isPlain(def) && def.defaultType?.id === SELECT && values.length) {
                   values = values.map((v) => {
                     const found = selectOption(def, v);
                     if (!found)

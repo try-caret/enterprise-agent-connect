@@ -814,3 +814,68 @@ test("a User value reads as its name and account id", async () => {
   const r = await call(h, key, "jira_assets_get_object", { object_id: "11" });
   assert.deepEqual(r.data.attributes.Recipient, { name: "Kim Lee", account_id: "acc-9" });
 });
+
+test("under a schema limit a site with no Assets workspace says so, not that the object is elsewhere", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_read"], { asset_schemas: ["137"] });
+  assets(h);
+  h.vendor.call = async () => ({
+    status: 404,
+    data: { errorMessages: ["This Jira site has no Assets workspace"] },
+  });
+  const r = await call(h, key, "jira_assets_get_object", { object_id: "11" });
+  assert.match(r.text!, /no Assets workspace/);
+  const t = await call(h, key, "jira_assets_list_attributes", { object_type_id: "505" });
+  assert.match(t.text!, /no Assets workspace/);
+});
+
+test("a `type` that is there is trusted: empty reference fields do not make an attribute a reference", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_read", "assets_update"], { asset_schemas: ["137"] });
+  const { sent } = assets(h);
+  // Notes (type 0) arriving with empty reference fields; Location (Select) with no `type`.
+  const notes = ATTRS.find((a) => a.id === "6") as any;
+  const location = ATTRS.find((a) => a.id === "7") as any;
+  const saved = { notesRef: notes.referenceObjectTypeId, locType: location.type };
+  notes.referenceObjectTypeId = "";
+  notes.referenceType = null;
+  delete location.type;
+  try {
+    const ok = await call(h, key, "jira_assets_update_object", {
+      object_id: "11",
+      attributes: { Notes: "kept as text" },
+    });
+    assert.equal(ok.isError, false, ok.text ?? "");
+    // The Select is still checked without its `type`.
+    const bad = await call(h, key, "jira_assets_update_object", {
+      object_id: "11",
+      attributes: { Location: "Paris" },
+    });
+    assert.match(bad.text!, /no option Paris/);
+    const list = await call(h, key, "jira_assets_list_attributes", { object_type_id: "505" });
+    assert.equal(list.data.find((a: any) => a.name === "Notes").kind, "Text");
+    assert.equal(list.data.find((a: any) => a.name === "Location").kind, "Select");
+    assert.equal(sent.filter((s) => s.method === "PUT").length, 1);
+  } finally {
+    notes.referenceObjectTypeId = saved.notesRef;
+    delete notes.referenceType;
+    location.type = saved.locType;
+  }
+});
+
+test("a required attribute is not cleared; an empty attribute list under a limit is refused", async () => {
+  const h = harness();
+  const key = h.addAgent(["read", "assets_read", "assets_update"], { asset_schemas: ["137"] });
+  const { sent } = assets(h);
+  const r = await call(h, key, "jira_assets_update_object", {
+    object_id: "11",
+    attributes: { Name: null },
+  });
+  assert.match(r.text!, /Name is required and cannot be cleared/);
+  assert.equal(sent.filter((s) => s.method === "PUT").length, 0);
+  const prev = h.vendor.call;
+  h.vendor.call = async (conn, req) =>
+    req.path.endsWith("objecttype/606/attributes") ? { status: 200, data: [] } : prev(conn, req);
+  const empty = await call(h, key, "jira_assets_list_attributes", { object_type_id: "606" });
+  assert.equal(empty.text, "Object type 606 is not in an object schema this agent may use");
+});

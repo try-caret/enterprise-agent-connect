@@ -27,6 +27,8 @@ export const ASSETS_PATH = "/jsm/assets/workspace/{workspaceId}/v1/";
 // Atlassian's own example ids are not hex ("1060ba0e-178b-4e0e-g0h1-jedb02cccb5f"), so only the
 // characters, never the UUID shape, are checked: enough to keep it one path segment.
 const WORKSPACE_ID = /^[A-Za-z0-9-]{1,64}$/;
+// Every answer about the workspace itself says this, so a tool can tell it from an object's 404.
+export const WORKSPACE_PROBLEM = "Assets workspace";
 
 export function normalizeSite(input: string): string {
   const host = input
@@ -128,19 +130,23 @@ export function jiraVendor(unguarded: Fetch = fetch): Vendor {
             ...found,
             data: {
               errorMessages: [
-                "Jira Service Management refused the Assets workspace lookup: the service " +
+                `Jira Service Management refused the ${WORKSPACE_PROBLEM} lookup: the service ` +
                   "account needs Jira Service Management access as User (an agent seat) and " +
                   "the read:servicedesk-request scope",
               ],
             },
           };
-        if (found.status < 200 || found.status >= 300) return found;
+        if (found.status < 200 || found.status >= 300)
+          return {
+            ...found,
+            data: { errorMessages: [`The ${WORKSPACE_PROBLEM} lookup failed`] },
+          };
         const id = (found.data as { values?: { workspaceId?: unknown }[] } | null)?.values?.[0]
           ?.workspaceId;
         if (typeof id !== "string" || !WORKSPACE_ID.test(id))
           return {
             status: 404,
-            data: { errorMessages: ["This Jira site has no Assets workspace"] },
+            data: { errorMessages: [`This Jira site has no ${WORKSPACE_PROBLEM}`] },
             headers: {},
           };
         workspaces.set(cloudId, id);

@@ -30,7 +30,7 @@
       "permissions": true
     },
     {
-      "title": "Give it a role on the Assets object schemas",
+      "title": "Give it a Jira Service Management seat and access to the Assets object schemas",
       "body": "Assets is part of Jira Service Management: the service account needs Jira Service Management access as User (an agent seat), or Assets finds nothing. Assets also keeps its own access per object schema. The schema's role picker may not list service accounts; with the agent seat, schemas that let agents in by default need no role. Otherwise give it Object viewer to let agents read, or Object schema users to let them change objects, or add it to a group that has that role. You can narrow each agent to specific object schemas here later.",
       "capabilities": ["assets_read", "assets_update"],
       "click": [
@@ -150,7 +150,7 @@
     {
       "id": "asset_schemas",
       "label": "Assets object schemas",
-      "help": "Object schema ids (the number in the schema's address in Assets). Leave empty to allow every object schema the service account can see.",
+      "help": "Object schema ids (the number in the schema's address in Assets). Leave empty to allow every object schema the service account can see: the projects limit does not narrow Assets.",
       "kind": "list",
       "required": false,
       "pattern": "^[1-9][0-9]{0,17}$"
