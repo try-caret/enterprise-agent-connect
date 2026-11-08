@@ -290,7 +290,8 @@
           "project": { "type": "string", "description": "The project's full path or numeric id", "in": "path", "limit": "projects" },
           "file_path": { "type": "string", "description": "The file's path in the project, such as src/index.ts", "in": "path" },
           "ref": { "type": "string", "description": "A branch or tag name, or a commit SHA", "in": "query" }
-        }
+        },
+        "text": true
       },
       {
         "name": "gitlab_download_archive",
