@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
 import { z } from "zod";
@@ -25,11 +25,19 @@ import { ADMIN_TOKEN } from "./helpers.ts";
 // against a fake Graph, on the scratch database (TEST_DATABASE_URL). Skipped without one.
 const url = process.env.TEST_DATABASE_URL;
 const sql = url ? connectDatabase(url) : null;
-const SCHEMA = "agent_connect";
+// In a schema of its own: the other files' runtimes claim whatever is due in theirs.
+const SCHEMA = `graph_events_${randomBytes(4).toString("hex")}`;
+const name = (table: string) => sql!(`${SCHEMA}.${table}`);
 before(async () => {
   if (sql) await migrate(sql, SCHEMA, () => {});
 });
-after(() => sql?.end());
+after(async () => {
+  await sql?.begin(async (tx) => {
+    await tx`set local client_min_messages = warning`;
+    await tx.unsafe(`drop schema ${SCHEMA} cascade`);
+  });
+  await sql?.end();
+});
 
 const key = new CredentialKey(Buffer.alloc(32, 7).toString("base64"));
 const PUBLIC = "https://svc.example/agent-connect";
@@ -170,16 +178,16 @@ async function setup(runner: TriggerRunner) {
   const events = createEventsStore(sql!, SCHEMA);
   const org = randomUUID();
   await store.ensureOrganization(org);
-  const agent = async (name: string, mailbox: string) => {
+  const agent = async (agentName: string, mailbox: string) => {
     const [{ id }] = await sql!`
-      insert into agent_connect.agents (organization_id, name, key_hash, status)
-      values (${org}, ${name}, ${randomUUID().replaceAll("-", "").repeat(2)}, 'active')
+      insert into ${name("agents")} (organization_id, name, key_hash, status)
+      values (${org}, ${agentName}, ${randomUUID().replaceAll("-", "").repeat(2)}, 'active')
       returning id::text`;
-    await sql!`insert into agent_connect.grants (agent_id, connector_id, capabilities, limits)
+    await sql!`insert into ${name("grants")} (agent_id, connector_id, capabilities, limits)
                values (${id}, 'mailer', ${sql!.array(["read"])}, ${sql!.json({ mailbox })})`;
     return id as string;
   };
-  await sql!`insert into agent_connect.connections
+  await sql!`insert into ${name("connections")}
                (organization_id, connector_id, credential, credential_key_id, status, capabilities)
              values (${org}, 'mailer', ${Buffer.from("x")}, 'k', 'connected', ${sql!.array(["read"])})`;
   const agentId = await agent("Helper", MAILBOX);
@@ -694,9 +702,9 @@ test(
     t.graph.refuseDuplicates();
     // The watch needs a subscription again (as after a failed one) when both syncs start.
     t.graph.subscriptions.clear();
-    await sql!`update agent_connect.event_watches set remote_id = null, expires_at = null
+    await sql!`update ${name("event_watches")} set remote_id = null, expires_at = null
                 where subscription_id = ${subscription.id}`;
-    await sql!`update agent_connect.event_subscriptions set polled_at = null
+    await sql!`update ${name("event_subscriptions")} set polled_at = null
                 where id = ${subscription.id}`;
     await Promise.all([t.runtime.pollDue(), t.runtime.syncApp(t.org, "mailer")]);
 
