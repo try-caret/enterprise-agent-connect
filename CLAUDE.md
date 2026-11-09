@@ -1734,8 +1734,9 @@ id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resource
   `teams_request_approval` ({team, channel} or {chat}, the same place and limit checks as
   `teams_post_message`; `approver` a sign-in name or Entra object id, resolved to its object id
   and name through the Microsoft connection with `GET /v1.0/users/{x}?$select=id,displayName`
-  (User.ReadBasic.All, already expected by every Teams ceiling; the only call an `agentBot` app
-  may make through the Microsoft connection, service.ts `DIRECTORY_LOOKUP`; so an agent with
+  (User.ReadBasic.All, already expected by every Teams ceiling; with a channel file's folder and
+  item, the only calls an `agentBot` app may make through the Microsoft connection, service.ts
+  `botMayCall`; so an agent with
   `approve` can test whether a sign-in name exists in the tenant); `title`, `text`,
   `facts` ≤ 20) posts an Adaptive Card 1.5 as the bot, card only (no text beside it, so Teams
   answers the card's own activity id), a new post in a channel, with Approve and Reject

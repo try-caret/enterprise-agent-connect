@@ -10,6 +10,7 @@ import {
 import { downloadFile, FileRefused, fileStorageUrl, offerName } from "../src/teams/offer.ts";
 import { RSC_PERMISSIONS } from "../src/teams/package.ts";
 import { installBot, type Call } from "../src/teams/provision.ts";
+import { botMayCall } from "../src/service.ts";
 
 // Files sent with a Teams message: what is kept of them and how the agent is told.
 
@@ -70,6 +71,8 @@ test("a file is found under a folder however SharePoint encoded either address",
     null,
   );
   assert.equal(pathUnder(folder, folder), null);
+  assert.equal(pathUnder(`${folder}/a%2F..%2F..%2FOther/b.xlsx`, folder), null);
+  assert.equal(pathUnder(`${folder}/a%5C..%5Cb.xlsx`, folder), null);
   assert.equal(pathUnder("not a url", folder), null);
 });
 
@@ -196,4 +199,26 @@ test("a team that has the bot already is updated to consent to what it lacks", a
   granted = [...RSC_PERMISSIONS, "File.Read.Group"];
   assert.equal(await installBot(call, "cat-1", "team", "t1"), "updated");
   assert.equal(seen[2].path, "/v1.0/teams/t1/installedApps/inst%3D1/upgrade");
+});
+
+test("a bot reaches the Microsoft connection only for the approver and a channel file", () => {
+  const team = "11111111-2222-3333-4444-555555555555";
+  for (const path of [
+    "/v1.0/users/ann%40contoso.com?$select=id,displayName",
+    `/v1.0/teams/${team}/channels/19%3Aa%40thread.tacv2/filesFolder`,
+    "/v1.0/drives/b%21x/items/01ABC:/Q3/a%20b.xlsx",
+  ])
+    assert.ok(botMayCall({ method: "GET", path }), path);
+  for (const [method, path] of [
+    ["POST", `/v1.0/teams/${team}/channels/c/filesFolder`],
+    ["GET", "/v1.0/users/ann@contoso.com"],
+    ["GET", "/v1.0/teams/not-a-guid/channels/c/filesFolder"],
+    ["GET", `/v1.0/teams/${team}/channels/c/messages`],
+    ["GET", "/v1.0/drives/d/items/i"],
+    ["GET", "/v1.0/drives/d/items/i/content"],
+    ["GET", "/v1.0/drives/d/root/children"],
+    ["GET", "/v1.0/sites/s/drives"],
+    ["GET", "/v1.0/drives/d/items/i:/a.xlsx?$expand=permissions"],
+  ])
+    assert.equal(botMayCall({ method, path }), false, `${method} ${path}`);
 });

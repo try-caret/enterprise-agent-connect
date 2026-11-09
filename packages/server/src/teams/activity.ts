@@ -158,7 +158,8 @@ export function pathUnder(url: string, folderUrl: string): string[] | null {
   if (!file || !folder || file.length <= folder.length) return null;
   if (folder.some((p, i) => p.toLowerCase() !== file[i].toLowerCase())) return null;
   const rest = file.slice(folder.length);
-  return rest.some((p) => p === "." || p === "..") ? null : rest;
+  // An encoded slash (%2F, %5C) would decode into a part that hides a ".." step.
+  return rest.some((p) => p === "." || p === ".." || /[/\\]/.test(p)) ? null : rest;
 }
 
 // ---- reply tokens ----
