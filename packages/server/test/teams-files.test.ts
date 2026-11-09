@@ -101,6 +101,31 @@ test("the agent is told each file by number, its name quoted, and which it canno
   assert.match(text, /2\. "b\.docx" \(in a group chat: apps cannot open it/);
   assert.doesNotMatch(text, /https:\/\/x/);
   assert.equal(text.split("</teams_files>").length, 2);
+  assert.doesNotMatch(text, /1\. .*\(in a channel/);
+});
+
+test("with channel files off, the agent is told it cannot open a channel's file", () => {
+  const text = promptText({
+    botName: "Bot",
+    sender: { name: "Ann", aadObjectId: null },
+    place: {
+      conversationId: "c",
+      kind: "team",
+      threadId: "c",
+      teamId: "t",
+      teamGroupId: "g",
+      channelId: "c",
+      name: null,
+    },
+    channelName: null,
+    thread: null,
+    message: "check this",
+    replyToken: "arb_reply_x",
+    continuing: false,
+    files: [{ name: "a.xlsx", source: "channel", url: "https://x/a" }],
+    channelFiles: false,
+  });
+  assert.match(text, /1\. "a\.xlsx" \(in a channel: this organization does not let agents open those; ask for it in a direct chat/);
 });
 
 test("files are fetched from and saved to SharePoint and OneDrive only", () => {
@@ -165,4 +190,10 @@ test("a team that has the bot already is updated to consent to what it lacks", a
   granted = [...RSC_PERMISSIONS];
   assert.equal(await installBot(call, "cat-1", "team", "t1"), "already");
   assert.equal(seen.length, 2);
+
+  // An installation from the earlier package, still holding File.Read.Group, is updated too.
+  seen.length = 0;
+  granted = [...RSC_PERMISSIONS, "File.Read.Group"];
+  assert.equal(await installBot(call, "cat-1", "team", "t1"), "updated");
+  assert.equal(seen[2].path, "/v1.0/teams/t1/installedApps/inst%3D1/upgrade");
 });

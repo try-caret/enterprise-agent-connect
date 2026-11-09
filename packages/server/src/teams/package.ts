@@ -14,6 +14,8 @@ export const RSC_PERMISSIONS = [
   "ChannelMessage.Read.Group",
   "ChatMessage.Read.Chat",
 ];
+// Asked by an earlier package: an installation still holding one is updated to this package.
+export const RETIRED_RSC = ["File.Read.Group"];
 
 // The middle number is the package's own revision, raised whenever the package changes (its
 // permissions, what the bot supports), so every bot shows "publish it again". 1: files.
