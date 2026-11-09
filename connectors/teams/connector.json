@@ -223,6 +223,24 @@
           "scopes": ["TeamsAppInstallation.ReadWriteAndConsentForUser.All"]
         }
       ]
+    },
+    {
+      "id": "channel_files",
+      "label": "Files sent in channels",
+      "secret": false,
+      "options": [
+        {
+          "value": "on",
+          "label": "Agents can open them",
+          "description": "An agent can open a file someone sends it in a team channel. Teams gives bots no permission of their own for that, so {brand.microsoft.appName} needs Files.Read.All: it could then read any file in SharePoint and OneDrive. {brand.productName} opens only a file sent with the message the agent is answering, from that channel's own files.",
+          "scopes": ["Files.Read.All"]
+        },
+        {
+          "value": "off",
+          "label": "Direct chats only",
+          "description": "An agent opens only files sent to it in a direct chat, which needs no permission. It asks for a file sent in a channel to be sent in a direct chat instead."
+        }
+      ]
     }
   ],
   "capabilities": [

@@ -282,34 +282,41 @@ const files = [
   },
 ] as const;
 
-function attachmentTools(folderStatus = 200) {
+function attachmentTools(folderStatus = 200, config: Record<string, string> = {}) {
   const asked: string[] = [];
-  const { call } = tools({
-    runForReply: async () => run,
-    files: async () => [...files],
-    graph: async (path: string) => {
-      asked.push(path);
-      if (path.endsWith("/filesFolder"))
-        return folderStatus === 200
-          ? {
-              status: 200,
-              data: {
-                id: "folder-id",
-                webUrl: FOLDER,
-                parentReference: { driveId: "drive-1" },
-              },
-            }
-          : { status: folderStatus, data: { error: { message: "Forbidden" } } };
-      return {
-        status: 200,
-        data: {
-          name: "a b.xlsx",
-          size: 12,
-          "@microsoft.graph.downloadUrl": "https://dl.example/x",
-        },
-      };
+  const graph = async (path: string) => {
+    asked.push(path);
+    if (path.endsWith("/filesFolder"))
+      return folderStatus === 200
+        ? {
+            status: 200,
+            data: {
+              id: "folder-id",
+              webUrl: FOLDER,
+              parentReference: { driveId: "drive-1" },
+            },
+          }
+        : { status: folderStatus, data: { error: { message: "Forbidden" } } };
+    return {
+      status: 200,
+      data: {
+        name: "a b.xlsx",
+        size: 12,
+        "@microsoft.graph.downloadUrl": "https://dl.example/x",
+      },
+    };
+  };
+  // Channel files go through the Microsoft connection, never the bot's own app.
+  const { call } = tools(
+    {
+      runForReply: async () => run,
+      files: async () => [...files],
+      graph: async () => {
+        throw new Error("the bot's own app is not used for files");
+      },
     },
-  });
+    { config, call: async (req) => graph(req.path) },
+  );
   return { call, asked };
 }
 
@@ -354,7 +361,12 @@ test("teams_get_attachment hands a direct chat's link as it came, and says when 
     file: 1,
   });
   assert.equal(blocked.isError, true);
-  assert.match(blocked.text, /cannot open files sent in this team's channels/);
+  assert.match(blocked.text, /cannot open files sent in this team's channels yet/);
+  const off = attachmentTools(200, { channel_files: "off" });
+  const refused = await off.call("teams_get_attachment", { reply_token: TOKEN, file: 1 });
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /turned off/);
+  assert.equal(off.asked.length, 0);
   const { call } = tools({ runForReply: async () => null });
   assert.match(
     (await call("teams_get_attachment", { reply_token: TOKEN, file: 1 })).text,

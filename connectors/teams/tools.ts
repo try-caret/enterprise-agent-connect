@@ -631,14 +631,21 @@ export const teamsTools: Toolset = {
               throw new Denied(
                 "Apps cannot open files sent in a group chat. Ask for it in a direct chat with the bot.",
               );
-            // Only a file in the channel's own files folder, where the team granted File.Read.Group.
+            // Channel files are read with the Microsoft connection (Files.Read.All, consented once
+            // for every bot), not the bot's own app: Teams offers bots no RSC permission that can
+            // download them. Only a file in the channel's own files folder, sent with this message.
+            if (ctx.config.channel_files === "off")
+              throw new Denied(
+                "Opening files sent in channels is turned off for this organization. Ask for the file in a direct chat with the bot.",
+              );
             const channelId = encodeURIComponent(run.threadId.split(";")[0]);
-            const folderRes = await teams.graph(
+            const graph = (path: string) => ctx.call({ method: "GET", path });
+            const folderRes = await graph(
               `/v1.0/teams/${place.teamGroupId}/channels/${channelId}/filesFolder`,
             );
             if (folderRes.status === 403)
               throw new Denied(
-                "The bot cannot open files sent in this team's channels. Ask for the file in a direct chat with the bot.",
+                "The bot cannot open files sent in this team's channels yet: an administrator has to grant Files.Read.All on the Microsoft Teams page. Meanwhile, ask for the file in a direct chat with the bot.",
               );
             const folder = ok(folderRes, mark) as {
               id: string;
@@ -649,7 +656,7 @@ export const teamsTools: Toolset = {
             if (!path) throw new Denied("That file is not in this channel's files");
             const drive = encodeURIComponent(folder.parentReference.driveId);
             const at = `${encodeURIComponent(folder.id)}:/${path.map(encodeURIComponent).join("/")}`;
-            const item = ok(await teams.graph(`/v1.0/drives/${drive}/items/${at}`), mark) as {
+            const item = ok(await graph(`/v1.0/drives/${drive}/items/${at}`), mark) as {
               name?: string;
               size?: number;
               "@microsoft.graph.downloadUrl"?: string;
