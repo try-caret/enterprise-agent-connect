@@ -629,7 +629,7 @@ export const teamsTools: Toolset = {
             if (file.source === "chat") return json({ name: file.name, download_url: file.url });
             if (file.source === "groupChat" || place.kind !== "team")
               throw new Denied(
-                "Apps cannot open files sent in a group chat. Ask for it in a channel or a direct chat.",
+                "Apps cannot open files sent in a group chat. Ask for it in a direct chat with the bot.",
               );
             // Only a file in the channel's own files folder, where the team granted File.Read.Group.
             const channelId = encodeURIComponent(run.threadId.split(";")[0]);

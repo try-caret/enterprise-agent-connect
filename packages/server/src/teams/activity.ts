@@ -324,7 +324,7 @@ export function promptText(input: {
       "<teams_files>",
       ...input.files.map(
         (f, i) =>
-          `${i + 1}. ${name(f.name)}${f.source === "groupChat" ? " (in a group chat: apps cannot open it; ask for it in a channel or a direct chat)" : ""}`,
+          `${i + 1}. ${name(f.name)}${f.source === "groupChat" ? " (in a group chat: apps cannot open it; ask for it in a direct chat with the bot)" : ""}`,
       ),
       "</teams_files>",
     );
