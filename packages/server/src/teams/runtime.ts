@@ -687,6 +687,10 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         run.id,
         files.length ? key.seal({ files: JSON.stringify(files) }, runFilesAad(run.id)) : null,
       );
+      // The Teams page's channel_files (default on): off, channel files are listed as closed.
+      const channelFiles =
+        (await deps.store.getConnection(bot.organizationId, "teams").catch(() => null))?.config
+          .channel_files !== "off";
       const text = promptText({
         botName: bot.displayName,
         sender: { name: a.from?.name ?? "Someone", aadObjectId: decision.sender },
@@ -697,6 +701,7 @@ export function createTeamsRuntime(deps: TeamsRuntimeDeps) {
         replyToken: token,
         continuing: Boolean(reusable),
         files,
+        channelFiles,
       });
       input = {
         org: bot.organizationId,

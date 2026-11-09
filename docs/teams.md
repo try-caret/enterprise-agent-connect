@@ -166,15 +166,15 @@ Built by the service per bot, deterministic from the bot row and its grant:
   "webApplicationInfo": { "id": "<botAppId>", "resource": "api://<host>/agent-connect/teams/<botAppId>" },
   "authorization": { "permissions": { "resourceSpecific": [
     { "name": "ChannelMessage.Read.Group", "type": "Application" },
-    { "name": "ChatMessage.Read.Chat", "type": "Application" },
-    { "name": "File.Read.Group", "type": "Application" }
+    { "name": "ChatMessage.Read.Chat", "type": "Application" }
   ] } },
   "validDomains": ["<host>"]
 }
 ```
 
 - **Package version** `1.<revision>.<manifest_version>`: the revision is `PACKAGE_REVISION` in
-  `package.ts`, raised when the package changes (1: `supportsFiles` and `File.Read.Group`), so
+  `package.ts`, raised when the package changes (1: `supportsFiles` and `File.Read.Group`;
+  2: `File.Read.Group` dropped, see 6.6), so
   every bot reads "Its package changed: publish it again" until it is published again (a bot
   connected from the setup script keeps the script's version as `scriptVersion`; one set up
   before that is unknown and asked too); a team then updates the app to consent to the new
@@ -317,9 +317,20 @@ Where a file sent to the bot is, and how it is opened (Microsoft's bot file guid
   OneDrive). Needs `supportsFiles: true` in the package.
 - **Channel**: the activity carries nothing; Graph's copy of the message (`ChannelMessage.Read.Group`)
   has a `reference` attachment with the file's SharePoint address in the channel's files folder.
-  It is opened with the RSC permission `File.Read.Group`: `GET /teams/{team}/channels/{channel}/filesFolder`,
-  then the item at its path under that folder, whose `@microsoft.graph.downloadUrl` is the link.
-  A file outside the channel's own folder is refused.
+  It is opened with the **Microsoft connection** (the organization's shared app), not the bot's
+  own app: `GET /teams/{team}/channels/{channel}/filesFolder`, then the item at its path under
+  that folder, whose `@microsoft.graph.downloadUrl` is the link. A file outside the channel's own
+  folder is refused. That needs the application permission `Files.Read.All`, asked by the Teams
+  page's field `channel_files` (default `on`; `off` refuses channel files with "ask for it in a
+  direct chat"), consented once for every bot. Teams offers bots no RSC permission for this: the
+  item and download calls list only Files.Read.All, Files.ReadWrite.All, Sites.Read.All and
+  Sites.ReadWrite.All, and `File.Read.Group` (only "information about" files, and only for
+  `filesFolder`) is not asked by the package (revision 2): a tenant that does not list it in
+  Microsoft Graph's `resourceSpecificApplicationPermissions` refuses the whole install (Graph 400
+  in `IsUserAuthorizedToGrantGroupResourceSpecificPermissions`, the Teams client says "something
+  went wrong"), and it was missing in a tenant tested in November 2026. Files.Read.All lets the
+  shared app read any file in the tenant; the tool keeps it to the file sent with the message
+  being answered, in that channel's folder, and hands the agent only the short-lived link.
 - **Group chat**: Graph's copy names a file in the sender's OneDrive, which no RSC permission
   reaches: it is listed as one the agent cannot open.
 

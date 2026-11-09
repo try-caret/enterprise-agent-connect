@@ -7,7 +7,7 @@ import {
   type VendorRequest,
   type VendorResponse,
 } from "../../../connector-kit/src/types.js";
-import { RSC_PERMISSIONS } from "./package.js";
+import { RETIRED_RSC, RSC_PERMISSIONS } from "./package.js";
 
 // "Add to Teams": what the Microsoft connection's own app (branding.microsoft.appName) does in the
 // customer's tenant to make an agent's bot, app-only: the bot's app registration and service
@@ -600,7 +600,8 @@ const CONSENT = {
 
 /** Adds the published app there, consenting to the package's resource-specific permissions
  *  (Microsoft requires exactly the package's list). Already there: updated to the published
- *  package when it lacks one of them (a package that asks for more), else counted as added. */
+ *  package when it lacks one of them (a package that asks for more) or holds a retired one,
+ *  else counted as added. */
 export async function installBot(
   call: Call,
   catalogAppId: string,
@@ -657,7 +658,9 @@ async function upgradeBot(
   const granted = new Set(
     installed.consentedPermissionSet?.resourceSpecificPermissions?.map((p) => p.permissionValue),
   );
-  if (RSC_PERMISSIONS.every((p) => granted.has(p))) return "already";
+  // Also updated when it still holds a permission the package no longer asks for.
+  if (RSC_PERMISSIONS.every((p) => granted.has(p)) && !RETIRED_RSC.some((p) => granted.has(p)))
+    return "already";
   const res = await call({
     method: "POST",
     path: `${spec.path(id)}/${encodeURIComponent(installed.id)}/upgrade`,

@@ -10,6 +10,7 @@ import {
 import { downloadFile, FileRefused, fileStorageUrl, offerName } from "../src/teams/offer.ts";
 import { RSC_PERMISSIONS } from "../src/teams/package.ts";
 import { installBot, type Call } from "../src/teams/provision.ts";
+import { botMayCall } from "../src/service.ts";
 
 // Files sent with a Teams message: what is kept of them and how the agent is told.
 
@@ -70,6 +71,8 @@ test("a file is found under a folder however SharePoint encoded either address",
     null,
   );
   assert.equal(pathUnder(folder, folder), null);
+  assert.equal(pathUnder(`${folder}/a%2F..%2F..%2FOther/b.xlsx`, folder), null);
+  assert.equal(pathUnder(`${folder}/a%5C..%5Cb.xlsx`, folder), null);
   assert.equal(pathUnder("not a url", folder), null);
 });
 
@@ -101,6 +104,31 @@ test("the agent is told each file by number, its name quoted, and which it canno
   assert.match(text, /2\. "b\.docx" \(in a group chat: apps cannot open it/);
   assert.doesNotMatch(text, /https:\/\/x/);
   assert.equal(text.split("</teams_files>").length, 2);
+  assert.doesNotMatch(text, /1\. .*\(in a channel/);
+});
+
+test("with channel files off, the agent is told it cannot open a channel's file", () => {
+  const text = promptText({
+    botName: "Bot",
+    sender: { name: "Ann", aadObjectId: null },
+    place: {
+      conversationId: "c",
+      kind: "team",
+      threadId: "c",
+      teamId: "t",
+      teamGroupId: "g",
+      channelId: "c",
+      name: null,
+    },
+    channelName: null,
+    thread: null,
+    message: "check this",
+    replyToken: "arb_reply_x",
+    continuing: false,
+    files: [{ name: "a.xlsx", source: "channel", url: "https://x/a" }],
+    channelFiles: false,
+  });
+  assert.match(text, /1\. "a\.xlsx" \(in a channel: this organization does not let agents open those; ask for it in a direct chat/);
 });
 
 test("files are fetched from and saved to SharePoint and OneDrive only", () => {
@@ -132,7 +160,7 @@ test("a download with no body is refused as an empty file", async () => {
 
 test("a team that has the bot already is updated to consent to what it lacks", async () => {
   const seen: { method: string; path: string; body?: any }[] = [];
-  let granted = ["ChannelMessage.Read.Group", "ChatMessage.Read.Chat"];
+  let granted = ["ChannelMessage.Read.Group"];
   const call: Call = async (req) => {
     seen.push({ method: req.method, path: req.path, body: req.body });
     if (req.method === "POST" && req.path === "/v1.0/teams/t1/installedApps")
@@ -165,4 +193,32 @@ test("a team that has the bot already is updated to consent to what it lacks", a
   granted = [...RSC_PERMISSIONS];
   assert.equal(await installBot(call, "cat-1", "team", "t1"), "already");
   assert.equal(seen.length, 2);
+
+  // An installation from the earlier package, still holding File.Read.Group, is updated too.
+  seen.length = 0;
+  granted = [...RSC_PERMISSIONS, "File.Read.Group"];
+  assert.equal(await installBot(call, "cat-1", "team", "t1"), "updated");
+  assert.equal(seen[2].path, "/v1.0/teams/t1/installedApps/inst%3D1/upgrade");
+});
+
+test("a bot reaches the Microsoft connection only for the approver and a channel file", () => {
+  const team = "11111111-2222-3333-4444-555555555555";
+  for (const path of [
+    "/v1.0/users/ann%40contoso.com?$select=id,displayName",
+    `/v1.0/teams/${team}/channels/19%3Aa%40thread.tacv2/filesFolder`,
+    "/v1.0/drives/b%21x/items/01ABC:/Q3/a%20b.xlsx",
+  ])
+    assert.ok(botMayCall({ method: "GET", path }), path);
+  for (const [method, path] of [
+    ["POST", `/v1.0/teams/${team}/channels/c/filesFolder`],
+    ["GET", "/v1.0/users/ann@contoso.com"],
+    ["GET", "/v1.0/teams/not-a-guid/channels/c/filesFolder"],
+    ["GET", `/v1.0/teams/${team}/channels/c/messages`],
+    ["GET", "/v1.0/drives/d/items/i"],
+    ["GET", "/v1.0/drives/d/items/i/content"],
+    ["GET", "/v1.0/drives/d/root/children"],
+    ["GET", "/v1.0/sites/s/drives"],
+    ["GET", "/v1.0/drives/d/items/i:/a.xlsx?$expand=permissions"],
+  ])
+    assert.equal(botMayCall({ method, path }), false, `${method} ${path}`);
 });

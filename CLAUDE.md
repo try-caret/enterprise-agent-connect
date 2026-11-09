@@ -1667,9 +1667,11 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   read (list teams, channels, read messages and threads; optional, since whoever messages the
   agent could ask it to read any place it is in), post, respond ("React in real time":
   `teams_reply`, `teams_get_attachment`); the connector has no required capability, so an empty choice is refused. Limits `teams` (group ids) and `channels`; either one leaves chats out.
-  The manifest (1.24) always asks for RSC ChannelMessage.Read.Group, ChatMessage.Read.Chat and
-  File.Read.Group, with `supportsFiles`: every message where the bot is added reaches it, Graph
-  reads only there, and files sent to it can be opened (docs/teams.md 6.6). The package version
+  The manifest (1.24) always asks for RSC ChannelMessage.Read.Group and ChatMessage.Read.Chat,
+  with `supportsFiles`: every message where the bot is added reaches it, Graph reads only there,
+  and files sent to it in a direct chat can be opened (docs/teams.md 6.6). Not File.Read.Group:
+  a tenant that does not offer it (absent from Microsoft Graph's
+  `resourceSpecificApplicationPermissions`) refuses to install any app that asks for it. The package version
   is `1.<PACKAGE_REVISION>.<manifest_version>` (package.ts); raising the revision when the
   package changes makes every bot ask to be published again. Direct chats are
   not readable app-only. Inbound messages go through `decide()` (agent, respond capability,
@@ -1703,7 +1705,8 @@ microsoft.graph.user`, instead of one checkMemberObjects per user). Sources:
   their names by number. `teams_get_attachment {reply_token, file}` takes the token as
   `teams_reply` does, uses no reply, and answers a short-lived download link: a direct chat's as
   it came, a channel's only for a file inside that channel's own files folder (`filesFolder`,
-  then the item at its path, File.Read.Group); a group chat's is refused (no RSC reaches it). A busy thread holds later messages until its session is idle.
+  then the item at its path, read with the Microsoft connection's Files.Read.All, not the bot's
+  app; field `channel_files`, default `on`, `off` refuses it); a group chat's is refused (no RSC reaches it). A busy thread holds later messages until its session is idle.
   The watcher records a session that goes idle without replying as `no_reply`, one stopped at its
   budget as failed (both with a notice in the thread), interrupts turns running over 30 min, and
   fails runs whose session is gone. A run is `starting` until its message is sent (a continued
@@ -1731,8 +1734,9 @@ id>`, service principal, ARM Azure Bot `<prefix>-<8>` (prefix `branding.resource
   `teams_request_approval` ({team, channel} or {chat}, the same place and limit checks as
   `teams_post_message`; `approver` a sign-in name or Entra object id, resolved to its object id
   and name through the Microsoft connection with `GET /v1.0/users/{x}?$select=id,displayName`
-  (User.ReadBasic.All, already expected by every Teams ceiling; the only call an `agentBot` app
-  may make through the Microsoft connection, service.ts `DIRECTORY_LOOKUP`; so an agent with
+  (User.ReadBasic.All, already expected by every Teams ceiling; with a channel file's folder and
+  item, the only calls an `agentBot` app may make through the Microsoft connection, service.ts
+  `botMayCall`; so an agent with
   `approve` can test whether a sign-in name exists in the tenant); `title`, `text`,
   `facts` ≤ 20) posts an Adaptive Card 1.5 as the bot, card only (no text beside it, so Teams
   answers the card's own activity id), a new post in a channel, with Approve and Reject

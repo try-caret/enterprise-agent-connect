@@ -158,7 +158,8 @@ export function pathUnder(url: string, folderUrl: string): string[] | null {
   if (!file || !folder || file.length <= folder.length) return null;
   if (folder.some((p, i) => p.toLowerCase() !== file[i].toLowerCase())) return null;
   const rest = file.slice(folder.length);
-  return rest.some((p) => p === "." || p === "..") ? null : rest;
+  // An encoded slash (%2F, %5C) would decode into a part that hides a ".." step.
+  return rest.some((p) => p === "." || p === ".." || /[/\\]/.test(p)) ? null : rest;
 }
 
 // ---- reply tokens ----
@@ -302,6 +303,8 @@ export function promptText(input: {
   replyToken: string;
   continuing: boolean;
   files?: TeamsFile[];
+  /** The Teams page's channel_files is on (the default): channel files can be opened. */
+  channelFiles?: boolean;
 }): string {
   const lines = [
     input.continuing
@@ -324,7 +327,13 @@ export function promptText(input: {
       "<teams_files>",
       ...input.files.map(
         (f, i) =>
-          `${i + 1}. ${name(f.name)}${f.source === "groupChat" ? " (in a group chat: apps cannot open it; ask for it in a channel or a direct chat)" : ""}`,
+          `${i + 1}. ${name(f.name)}${
+            f.source === "groupChat"
+              ? " (in a group chat: apps cannot open it; ask for it in a direct chat with the bot)"
+              : f.source === "channel" && input.channelFiles === false
+                ? " (in a channel: this organization does not let agents open those; ask for it in a direct chat with the bot)"
+                : ""
+          }`,
       ),
       "</teams_files>",
     );

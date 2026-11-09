@@ -254,6 +254,17 @@ export function validateChoices(
 
 // One user by id or sign-in name, its id and name only.
 const DIRECTORY_LOOKUP = /^\/v1\.0\/users\/[^/?#]+\?\$select=id,displayName$/;
+// A channel's files folder, and an item by path under a folder: Teams' teams_get_attachment
+// (channel files, Files.Read.All), which keeps to the triggering message's file in that folder.
+const CHANNEL_FILES_FOLDER =
+  /^\/v1\.0\/teams\/[0-9a-fA-F-]{36}\/channels\/[^/?#]+\/filesFolder$/;
+const DRIVE_ITEM_BY_PATH = /^\/v1\.0\/drives\/[^/?#]+\/items\/[^/?#:]+:\/[^?#]+$/;
+
+/** What an app signing in as the agent's bot may ask of the Microsoft connection: a person's
+ *  directory entry (Teams' approver) and a channel file's folder and item, all GET. */
+export const botMayCall = (request: { method: string; path: string }) =>
+  request.method === "GET" &&
+  [DIRECTORY_LOOKUP, CHANNEL_FILES_FOLDER, DRIVE_ITEM_BY_PATH].some((r) => r.test(request.path));
 
 export function createService(deps: {
   apps: App[];
@@ -1402,8 +1413,9 @@ export function createService(deps: {
         config: provider ? { ...provider.config, ...row.config } : row.config,
         call: (request) => {
           // An app signing in as the agent's bot reaches the Microsoft connection only to look
-          // a person up in the directory (Teams' approver), never to read or write anything else.
-          if (asBot && !(request.method === "GET" && DIRECTORY_LOOKUP.test(request.path)))
+          // a person up in the directory (Teams' approver) and to open a channel file sent with
+          // its message, never to read or write anything else.
+          if (asBot && !botMayCall(request))
             throw new Error(`${grant.connectorId} calls go through the agent's bot`);
           return target.vendor.call((conn ??= resolve(row, providerRows)), request);
         },
