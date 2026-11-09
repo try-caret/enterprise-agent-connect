@@ -132,7 +132,7 @@ test("a download with no body is refused as an empty file", async () => {
 
 test("a team that has the bot already is updated to consent to what it lacks", async () => {
   const seen: { method: string; path: string; body?: any }[] = [];
-  let granted = ["ChannelMessage.Read.Group", "ChatMessage.Read.Chat"];
+  let granted = ["ChannelMessage.Read.Group"];
   const call: Call = async (req) => {
     seen.push({ method: req.method, path: req.path, body: req.body });
     if (req.method === "POST" && req.path === "/v1.0/teams/t1/installedApps")

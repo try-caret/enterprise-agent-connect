@@ -631,14 +631,14 @@ export const teamsTools: Toolset = {
               throw new Denied(
                 "Apps cannot open files sent in a group chat. Ask for it in a channel or a direct chat.",
               );
-            // Only a file in the channel's own files folder, through the bot's File.Read.Group.
+            // Only a file in the channel's own files folder, where the team granted File.Read.Group.
             const channelId = encodeURIComponent(run.threadId.split(";")[0]);
             const folderRes = await teams.graph(
               `/v1.0/teams/${place.teamGroupId}/channels/${channelId}/filesFolder`,
             );
             if (folderRes.status === 403)
               throw new Denied(
-                "The bot cannot read this team's files yet: publish its Teams app again and update it in the team, so the team allows it to read files.",
+                "The bot cannot open files sent in this team's channels. Ask for the file in a direct chat with the bot.",
               );
             const folder = ok(folderRes, mark) as {
               id: string;

@@ -7,17 +7,18 @@ import { brand, teamsDeveloper } from "../../../connector-kit/src/branding.js";
 
 export const MANIFEST_VERSION = "1.24";
 // Teams delivers every message where the bot is installed, not just @mentions, and the bot can
-// read those conversations through Graph, and the files of a team's channels (one sent in a
-// channel). Only where it was added; consented at install.
+// read those conversations through Graph. Only where it was added; consented at install.
+// Not File.Read.Group: tenants that do not offer it (it is missing from Microsoft Graph's
+// resourceSpecificApplicationPermissions) refuse to install any app that asks for it.
 export const RSC_PERMISSIONS = [
   "ChannelMessage.Read.Group",
   "ChatMessage.Read.Chat",
-  "File.Read.Group",
 ];
 
 // The middle number is the package's own revision, raised whenever the package changes (its
 // permissions, what the bot supports), so every bot shows "publish it again". 1: files.
-const PACKAGE_REVISION = 1;
+// 2: File.Read.Group dropped.
+const PACKAGE_REVISION = 2;
 export const packageVersion = (manifestVersion: number) =>
   `1.${PACKAGE_REVISION}.${manifestVersion}`;
 // The setup script publishes the package itself, always as this manifest version.

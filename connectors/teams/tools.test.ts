@@ -354,7 +354,7 @@ test("teams_get_attachment hands a direct chat's link as it came, and says when 
     file: 1,
   });
   assert.equal(blocked.isError, true);
-  assert.match(blocked.text, /publish its Teams app again/);
+  assert.match(blocked.text, /cannot open files sent in this team's channels/);
   const { call } = tools({ runForReply: async () => null });
   assert.match(
     (await call("teams_get_attachment", { reply_token: TOKEN, file: 1 })).text,
