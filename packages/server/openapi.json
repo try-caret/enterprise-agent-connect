@@ -6505,46 +6505,472 @@
                     "items": {
                       "anyOf": [
                         {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "field": {
+                                  "type": "string"
+                                },
+                                "in": {
+                                  "minItems": 1,
+                                  "maxItems": 100,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  }
+                                }
+                              },
+                              "required": [
+                                "field",
+                                "in"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "field": {
+                                  "type": "string"
+                                },
+                                "notIn": {
+                                  "minItems": 1,
+                                  "maxItems": 100,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  }
+                                }
+                              },
+                              "required": [
+                                "field",
+                                "notIn"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "field": {
+                                  "type": "string"
+                                },
+                                "contains": {
+                                  "minItems": 1,
+                                  "maxItems": 200,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
+                                },
+                                "except": {
+                                  "minItems": 1,
+                                  "maxItems": 100,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
+                                }
+                              },
+                              "required": [
+                                "field",
+                                "contains"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        {
                           "type": "object",
                           "properties": {
-                            "field": {
-                              "type": "string"
-                            },
-                            "in": {
-                              "minItems": 1,
-                              "maxItems": 100,
-                              "type": "array",
-                              "items": {
-                                "type": "string",
-                                "maxLength": 500
-                              }
+                            "seen": {
+                              "type": "object",
+                              "properties": {
+                                "days": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 90
+                                }
+                              },
+                              "required": [
+                                "days"
+                              ],
+                              "additionalProperties": false
                             }
                           },
                           "required": [
-                            "field",
-                            "in"
+                            "seen"
                           ],
                           "additionalProperties": false
                         },
                         {
                           "type": "object",
                           "properties": {
-                            "field": {
-                              "type": "string"
-                            },
-                            "notIn": {
+                            "anyOf": {
                               "minItems": 1,
-                              "maxItems": 100,
+                              "maxItems": 20,
                               "type": "array",
                               "items": {
-                                "type": "string",
-                                "maxLength": 500
+                                "anyOf": [
+                                  {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "field": {
+                                            "type": "string"
+                                          },
+                                          "in": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "maxLength": 500
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "field",
+                                          "in"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "field": {
+                                            "type": "string"
+                                          },
+                                          "notIn": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "maxLength": 500
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "field",
+                                          "notIn"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "field": {
+                                            "type": "string"
+                                          },
+                                          "contains": {
+                                            "minItems": 1,
+                                            "maxItems": 200,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 100
+                                            }
+                                          },
+                                          "except": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 100
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "field",
+                                          "contains"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "seen": {
+                                        "type": "object",
+                                        "properties": {
+                                          "days": {
+                                            "type": "integer",
+                                            "minimum": 1,
+                                            "maximum": 90
+                                          }
+                                        },
+                                        "required": [
+                                          "days"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "seen"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
                               }
                             }
                           },
                           "required": [
-                            "field",
-                            "notIn"
+                            "anyOf"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "logOnly": {
+                              "minItems": 1,
+                              "maxItems": 20,
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "field": {
+                                            "type": "string"
+                                          },
+                                          "in": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "maxLength": 500
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "field",
+                                          "in"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "field": {
+                                            "type": "string"
+                                          },
+                                          "notIn": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "maxLength": 500
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "field",
+                                          "notIn"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "field": {
+                                            "type": "string"
+                                          },
+                                          "contains": {
+                                            "minItems": 1,
+                                            "maxItems": 200,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 100
+                                            }
+                                          },
+                                          "except": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 100
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "field",
+                                          "contains"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "seen": {
+                                        "type": "object",
+                                        "properties": {
+                                          "days": {
+                                            "type": "integer",
+                                            "minimum": 1,
+                                            "maximum": 90
+                                          }
+                                        },
+                                        "required": [
+                                          "days"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "seen"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "anyOf": {
+                                        "minItems": 1,
+                                        "maxItems": 20,
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "field": {
+                                                      "type": "string"
+                                                    },
+                                                    "in": {
+                                                      "minItems": 1,
+                                                      "maxItems": 100,
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string",
+                                                        "maxLength": 500
+                                                      }
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "field",
+                                                    "in"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "field": {
+                                                      "type": "string"
+                                                    },
+                                                    "notIn": {
+                                                      "minItems": 1,
+                                                      "maxItems": 100,
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string",
+                                                        "maxLength": 500
+                                                      }
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "field",
+                                                    "notIn"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "field": {
+                                                      "type": "string"
+                                                    },
+                                                    "contains": {
+                                                      "minItems": 1,
+                                                      "maxItems": 200,
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 100
+                                                      }
+                                                    },
+                                                    "except": {
+                                                      "minItems": 1,
+                                                      "maxItems": 100,
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 100
+                                                      }
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "field",
+                                                    "contains"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "seen": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "days": {
+                                                      "type": "integer",
+                                                      "minimum": 1,
+                                                      "maximum": 90
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "days"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "required": [
+                                                "seen"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "anyOf"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "logOnly"
                           ],
                           "additionalProperties": false
                         }
@@ -10348,6 +10774,25 @@
                         "type": "string",
                         "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
                       }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_$@-]+(\\[\\])?(\\.[A-Za-z0-9_$@-]+(\\[\\])?)*$"
+                        },
+                        "match": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "match"
+                      ],
+                      "additionalProperties": false
                     }
                   ]
                 }
@@ -11140,6 +11585,9 @@
               "null"
             ]
           },
+          "wouldFilter": {
+            "type": "boolean"
+          },
           "runner": {
             "type": "string"
           },
@@ -11194,6 +11642,7 @@
           "eventType",
           "deliveryId",
           "thread",
+          "wouldFilter",
           "runner",
           "sessionId",
           "state",
@@ -11498,40 +11947,402 @@
             "items": {
               "anyOf": [
                 {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string"
+                        },
+                        "in": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "in"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string"
+                        },
+                        "notIn": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "notIn"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string"
+                        },
+                        "contains": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "except": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "contains"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                {
                   "type": "object",
                   "properties": {
-                    "field": {
-                      "type": "string"
-                    },
-                    "in": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
+                    "seen": {
+                      "type": "object",
+                      "properties": {
+                        "days": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "days"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
-                    "field",
-                    "in"
+                    "seen"
                   ],
                   "additionalProperties": false
                 },
                 {
                   "type": "object",
                   "properties": {
-                    "field": {
-                      "type": "string"
-                    },
-                    "notIn": {
+                    "anyOf": {
                       "type": "array",
                       "items": {
-                        "type": "string"
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "in": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field",
+                                  "in"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "notIn": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field",
+                                  "notIn"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "contains": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "except": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field",
+                                  "contains"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "seen": {
+                                "type": "object",
+                                "properties": {
+                                  "days": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "days"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "seen"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
                       }
                     }
                   },
                   "required": [
-                    "field",
-                    "notIn"
+                    "anyOf"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "logOnly": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "in": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field",
+                                  "in"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "notIn": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field",
+                                  "notIn"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "field": {
+                                    "type": "string"
+                                  },
+                                  "contains": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "except": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field",
+                                  "contains"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "seen": {
+                                "type": "object",
+                                "properties": {
+                                  "days": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "days"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "seen"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "anyOf": {
+                                "type": "array",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "field": {
+                                              "type": "string"
+                                            },
+                                            "in": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "field",
+                                            "in"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "field": {
+                                              "type": "string"
+                                            },
+                                            "notIn": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "field",
+                                            "notIn"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "field": {
+                                              "type": "string"
+                                            },
+                                            "contains": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "except": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "field",
+                                            "contains"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "seen": {
+                                          "type": "object",
+                                          "properties": {
+                                            "days": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "days"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "seen"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "anyOf"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "logOnly"
                   ],
                   "additionalProperties": false
                 }

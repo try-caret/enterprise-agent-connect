@@ -11,7 +11,7 @@ import type { CredentialKey } from "../secrets.js";
 import { InvalidInput } from "../service.js";
 import type { Store } from "../store.js";
 import { CLAUDE_RUNNER, type TriggerRunner } from "../teams/runner.js";
-import { fill, rawAt } from "./deliver.js";
+import { conditionFields, fill, namesSelf, rawAt, seenDays } from "./deliver.js";
 import { eventTriggerAad, subscriptionAad, type EventsRuntime } from "./runtime.js";
 import type { EventTriggerRow, EventsStore, SubscriptionRow } from "./store.js";
 
@@ -41,9 +41,26 @@ export const subscriptionSchema = z.object({
 
 export const rotateSecretSchema = z.object({ secret: appSecret.optional(), by });
 
+const values = z.array(z.string().max(500)).min(1).max(100);
+const word = z.string().trim().min(1).max(100);
+const fieldCondition = z.union([
+  z.strictObject({ field: z.string(), in: values }),
+  z.strictObject({ field: z.string(), notIn: values }),
+  // Not when one of `except` is in the same value too ("laptop", except "laptop shipment for").
+  z.strictObject({
+    field: z.string(),
+    contains: z.array(word).min(1).max(200),
+    except: z.array(word).min(1).max(100).optional(),
+  }),
+]);
+const seen = z.strictObject({ seen: z.strictObject({ days: z.number().int().min(1).max(90) }) });
+// One level of groups: anyOf holds field conditions and seen; logOnly anything but logOnly.
+const anyOf = z.strictObject({ anyOf: z.array(z.union([fieldCondition, seen])).min(1).max(20) });
 const condition = z.union([
-  z.strictObject({ field: z.string(), in: z.array(z.string().max(500)).min(1).max(100) }),
-  z.strictObject({ field: z.string(), notIn: z.array(z.string().max(500)).min(1).max(100) }),
+  fieldCondition,
+  seen,
+  anyOf,
+  z.strictObject({ logOnly: z.array(z.union([fieldCondition, seen, anyOf])).min(1).max(20) }),
 ]);
 
 export const eventTriggerSchema = z
@@ -262,11 +279,18 @@ export function createEventsAdmin(deps: {
       const unknownType = rest.eventTypes.find((t) => !declared.types.some((x) => x.id === t));
       if (unknownType) throw new InvalidInput(`${connector.name} has no event ${unknownType}`);
       const fields = [...Object.keys(declared.fields), ...Object.keys(declared.graph?.only ?? {})];
-      const unknownField = rest.conditions.find((c) => !fields.includes(c.field));
+      const unknownField = rest.conditions
+        .flatMap(conditionFields)
+        .find((f) => !fields.includes(f));
       if (unknownField)
         throw new InvalidInput(
-          `${connector.name} events have no field ${unknownField.field}; they have ${fields.join(", ")}`,
+          `${connector.name} events have no field ${unknownField}; they have ${fields.join(", ")}`,
         );
+      if ((namesSelf(rest.conditions) || namesSelf(rest.conditions, true)) && !declared.self)
+        throw new InvalidInput(`${connector.name} does not say who its connection is, for {self}`);
+      const seenChecks = [...seenDays(rest.conditions), ...seenDays(rest.conditions, true)];
+      if (seenChecks.length && !declared.thread)
+        throw new InvalidInput(`${connector.name} events have no thread for a seen condition`);
       const runner = deps.runners.get(rest.runner);
       if (!runner?.startEvent)
         throw new InvalidInput(`This deployment offers no runner ${rest.runner} for app events`);

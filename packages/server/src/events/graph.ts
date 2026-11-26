@@ -7,7 +7,7 @@ import {
 import { tokensEqual } from "../secrets.js";
 import type { AuditEntry } from "../store.js";
 import { readCappedBytes } from "../teams/runtime.js";
-import { fill, pickFields, rawAt, valueAt, type EventData } from "./deliver.js";
+import { fill, pickFields, rawAt, valueAt, type EventData, type FieldSpec } from "./deliver.js";
 import type { EventsStore, SubscriptionRow, WatchRow } from "./store.js";
 
 // Microsoft Graph change notifications as an event source (a connector's `events.graph`,
@@ -86,7 +86,7 @@ const pathOf = (link: string) => {
  *  account sent it itself. */
 export function graphItem(
   g: Graph,
-  fields: Record<string, string | string[]>,
+  fields: Record<string, FieldSpec>,
   value: string,
   item: unknown,
 ) {

@@ -171,7 +171,48 @@ PUT /agent-connect/admin/v1/orgs/{org}/agents/{agent}/event-triggers/jira
 event's data never goes into the instructions; it follows them as quoted data. The fields a
 condition can name are the app's `events.fields` (Jira: key, project, issue_type, status,
 priority, labels, summary, assignee, reporter, changed_by, changed, comment, comment_by,
-updated). With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
+mentions, request_type, updated).
+
+All conditions must hold. Each is one of:
+
+- `{"field": f, "in": [...]}` / `{"field": f, "notIn": [...]}`: exact values (any item of a list).
+  `"{self}"` in the list is the app connection's own account (its `events.self`); when the app
+  does not say who that is, the trigger starts nothing and the audit says why (inside `logOnly`,
+  `{self}` then matches nobody and the run starts).
+- `{"field": f, "contains": [...]}`: a word or phrase in the text, ignoring case. An end that is a
+  Latin letter or digit must end a word (`pc` is not in `npc`); other scripts match anywhere. With
+  `"except": [...]`, a value that also has one of those does not match
+  (`"contains": ["laptop"], "except": ["laptop shipment for"]`).
+- `{"seen": {"days": n}}`: this trigger started a run on the event's thread (Jira: the issue)
+  within n days. Inside `logOnly`, runs the trial would have filtered do not count.
+- `{"anyOf": [...]}`: one of the field conditions or `seen` inside holds.
+- `{"logOnly": [...]}`: never stops a run; when the conditions inside fail, the run's start is
+  audited with `would filter (log only): ...`, and the run is marked `wouldFilter` (`GET
+  …/event-runs`), which is what to count a trial by. Use it to try a filter on real traffic,
+  then drop the wrapper to enforce it.
+
+Filtered events are audited `Filtered: ...` and never count against the caps. Jira `mentions`
+are the account ids a comment mentions (`[~accountid:...]` in text, or mention nodes in a
+document body), read from the whole comment;
+`request_type` is Jira Service Management's request type (`customfield_10010`, the usual id;
+a site whose request type field has another id does not get it). Jira comment
+events carry fewer issue fields than issue events (no labels or request type), so put `seen`
+next to field conditions in an `anyOf` to keep a thread's comments.
+
+```json
+"conditions": [{"anyOf": [
+  {"field": "summary", "contains": ["laptop", "computer"], "except": ["laptop shipment for"]},
+  {"field": "request_type", "in": ["Hardware Issue"]},
+  {"field": "mentions", "in": ["{self}"]},
+  {"seen": {"days": 30}}
+]}]
+```
+
+Save conditions of the new kinds only once every replica runs this version: an older one does
+not know them, lets the trigger's events through (`anyOf`, `seen`, `logOnly`) or fails on them
+(`contains`, logged but not audited), and takes `{self}` as text.
+
+With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
 each run is a signed POST of `{type: "event", run, delivery, agent, app, event, deliveryId, thread,
 data, text, mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams; `delivery` is this
 service's id for the hand-over, `deliveryId` the app's id for the event). `GET …/event-triggers` lists an

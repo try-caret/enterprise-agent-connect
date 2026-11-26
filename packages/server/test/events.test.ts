@@ -354,6 +354,179 @@ test(
   },
 );
 
+// Tracker with a summary, a comment and the accounts it mentions, and items as threads.
+const notes = parseConnector(
+  {
+    ...jiraJson,
+    id: "notes",
+    name: "Notes",
+    events: {
+      ...tracker.events,
+      fields: {
+        ...tracker.events!.fields,
+        summary: "item.summary",
+        comment: "comment",
+        mentions: { path: "comment", match: "\\[~accountid:([A-Za-z0-9:_-]{1,128})\\]" },
+      },
+      thread: "key",
+    },
+  },
+  "notes",
+);
+
+test(
+  "anyOf, contains, seen and {self} start only matching events; the rest are filtered, audited",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({
+      eventTypes: ["created", "updated"],
+      conditions: [
+        {
+          anyOf: [
+            { field: "summary", contains: ["laptop", "pc"] },
+            { field: "mentions", in: ["{self}"] },
+            { seen: { days: 30 } },
+          ],
+        },
+      ],
+      maxConcurrent: 10,
+    });
+    const send = (key: string, summary: string, comment?: string) =>
+      t.deliver(
+        subscription.id,
+        secret!,
+        item({ event: "updated", item: { key, project: "KAN", summary }, comment }),
+      );
+    await send("KAN-1", "Printer jammed");
+    await send("KAN-1", "Printer jammed", "NPC?");
+    assert.equal(f.started.length, 0);
+    await send("KAN-2", "My laptop is dead");
+    assert.equal(f.started.length, 1);
+    // A later event on the same item passes on seen, whatever its summary.
+    await send("KAN-2", "Renamed", "any update?");
+    assert.equal(f.started.length, 2);
+    // A mention of the connection's own account (svc) passes; another account's does not.
+    await send("KAN-3", "Printer", "[~accountid:other] look");
+    assert.equal(f.started.length, 2);
+    await send("KAN-3", "Printer", "x".repeat(2500) + " [~accountid:svc] can you help?");
+    assert.equal(f.started.length, 3);
+
+    const log = await t.audit();
+    assert.equal(
+      log.filter((l) => l.includes("Filtered: none of summary, mentions, seen matched")).length,
+      3,
+    );
+  },
+);
+
+test(
+  "logOnly conditions start every event, audit what they would filter, and seen skips those runs",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({
+      eventTypes: ["created", "updated"],
+      conditions: [
+        {
+          logOnly: [
+            { anyOf: [{ field: "summary", contains: ["laptop"] }, { seen: { days: 30 } }] },
+          ],
+        },
+      ],
+      maxConcurrent: 10,
+    });
+    const send = (key: string, summary: string) =>
+      t.deliver(subscription.id, secret!, item({ item: { key, project: "KAN", summary } }));
+    await send("KAN-1", "Printer jammed");
+    await send("KAN-1", "Printer jammed again");
+    await send("KAN-2", "Laptop dead");
+    await send("KAN-2", "Renamed");
+    assert.equal(f.started.length, 4);
+    // KAN-1 twice: its first run was a would-filter one, so the trial does not count it as seen.
+    const would = (await t.audit()).filter((l) =>
+      l.includes("; would filter (log only): none of summary, seen matched"),
+    );
+    assert.equal(would.length, 2);
+    const runs = await sql!`select would_filter as w from ${name("event_runs")}
+                             where agent_id = ${t.agentId} order by started_at`;
+    assert.deepEqual(runs.map((r) => r.w), [true, true, false, false]);
+  },
+);
+
+test(
+  "a log-only trial next to enforced conditions does not change what the enforced seen lets in",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({
+      eventTypes: ["created", "updated"],
+      conditions: [
+        { anyOf: [{ field: "summary", contains: ["laptop"] }, { seen: { days: 30 } }] },
+        { logOnly: [{ field: "summary", contains: ["dead"] }] },
+      ],
+      maxConcurrent: 10,
+    });
+    const kan2 = (summary: string) => item({ item: { key: "KAN-2", project: "KAN", summary } });
+    const send = (summary: string) => t.deliver(subscription.id, secret!, kan2(summary));
+    await send("Laptop broken");
+    await send("Renamed");
+    assert.equal(f.started.length, 2);
+  },
+);
+
+test(
+  "a {self} condition starts nothing, and says why, when the app will not say who it is",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    t.answers.set("/me", { status: 401, data: null });
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({ conditions: [{ field: "mentions", notIn: ["{self}"] }] });
+    const comment = "[~accountid:svc] look";
+    await t.deliver(subscription.id, secret!, item({ actor: undefined, comment }));
+    assert.equal(f.started.length, 0);
+    assert.ok((await t.audit()).some((l) => /failed Not started: Notes did not say/.test(l)));
+
+    // Inside logOnly, {self} then matches nobody, and the run starts.
+    await t.trigger({ conditions: [{ logOnly: [{ field: "mentions", in: ["{self}"] }] }] });
+    await t.deliver(subscription.id, secret!, item({ actor: undefined, comment }));
+    assert.equal(f.started.length, 1);
+  },
+);
+
+test("conditions name only declared fields, one level of groups", { skip: !sql }, async () => {
+  const f = fakeRunner();
+  const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+  await t.subscribe();
+  const put = (conditions: unknown) =>
+    t.call("PUT", `/agents/${t.agentId}/event-triggers/notes`, {
+      enabled: true,
+      eventTypes: ["created"],
+      conditions,
+      prompt: "Do it",
+      runner: "fake",
+      settings: {},
+      budgetCents: 100,
+      by: "ann",
+    });
+  assert.equal((await put([{ anyOf: [{ field: "summary", contains: ["a"] }] }])).status, 200);
+  assert.match(
+    (await put([{ anyOf: [{ field: "nope", contains: ["a"] }] }])).body.error,
+    /no field nope/,
+  );
+  assert.equal((await put([{ anyOf: [{ anyOf: [{ seen: { days: 1 } }] }] }])).status, 400);
+  assert.equal((await put([{ logOnly: [{ logOnly: [{ seen: { days: 1 } }] }] }])).status, 400);
+  assert.equal((await put([{ field: "summary", contains: [" "] }])).status, 400, "blank word");
+});
+
 test(
   "when the app will not say who the connection is, a change naming its maker starts nothing",
   { skip: !sql },

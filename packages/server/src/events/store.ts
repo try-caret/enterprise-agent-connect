@@ -26,7 +26,21 @@ export type SubscriptionRow = {
   createdAt: string;
 };
 
-export type Condition = { field: string; in: string[] } | { field: string; notIn: string[] };
+// A trigger's conditions (docs/triggers.md), all of which must hold: a field's value `in` or
+// `notIn` a list, or holding one of a list's words (`contains`, not when one of `except` is there
+// too); `anyOf`, a group of which one must hold; `seen`, the trigger started a run on the event's
+// thread within so many days; and `logOnly`, a group whose failure is audited but stops nothing.
+export type FieldCondition =
+  | { field: string; in: string[] }
+  | { field: string; notIn: string[] }
+  | { field: string; contains: string[]; except?: string[] };
+type SeenCondition = { seen: { days: number } };
+type AnyOfCondition = { anyOf: (FieldCondition | SeenCondition)[] };
+export type Condition =
+  | FieldCondition
+  | SeenCondition
+  | AnyOfCondition
+  | { logOnly: (FieldCondition | SeenCondition | AnyOfCondition)[] };
 
 export type EventTriggerRow = {
   id: string;
@@ -60,6 +74,8 @@ export type EventRunRow = {
   eventType: string;
   deliveryId: string;
   thread: string | null;
+  // Started only because the conditions it failed were log-only.
+  wouldFilter: boolean;
   runner: string;
   sessionId: string | null;
   state: "starting" | "running" | "ended" | "failed";
@@ -85,6 +101,8 @@ type NewEventRun = {
   deliveryId: string;
   thread: string | null;
   runner: string;
+  // Started only because the conditions it failed were log-only.
+  wouldFilter?: boolean;
 };
 
 export type QueuedEvent = {
@@ -136,7 +154,8 @@ const TRIGGER = `t.id::text, t.agent_id::text as "agentId", t.connector_id as "c
 
 const RUN = `r.id::text, r.agent_id::text as "agentId", r.trigger_id::text as "triggerId",
   t.connector_id as "connectorId", r.event_type as "eventType", r.delivery_id as "deliveryId",
-  r.thread, r.runner, r.session_id as "sessionId", r.state, r.error, r.cost_cents as "costCents",
+  r.thread, r.would_filter as "wouldFilter", r.runner, r.session_id as "sessionId", r.state,
+  r.error, r.cost_cents as "costCents",
   ${iso("r.started_at")} as "startedAt", ${iso("r.finished_at")} as "finishedAt"`;
 
 const WATCH = `id::text, subscription_id::text as "subscriptionId", value,
@@ -560,12 +579,31 @@ export function createEventsStore(sql: Sql, schema: string) {
       });
     },
 
+    // Whether the trigger started a run on the thread within the last days (the `seen`
+    // condition). For a log-only trial, runs the trial would have filtered out do not count.
+    async threadSeen(
+      triggerId: string,
+      thread: string,
+      days: number,
+      trial: boolean,
+    ): Promise<boolean> {
+      const [row] = await sql<{ seen: boolean }[]>`
+        select exists (
+          select 1 from ${t.event_runs}
+           where trigger_id = ${triggerId} and thread = ${thread}
+             and (not ${trial} or not would_filter)
+             and started_at > now() - make_interval(days => ${days})) as seen`;
+      return row.seen;
+    },
+
     async startRun(input: NewEventRun, db: Sql = sql): Promise<string> {
       const [row] = await db<{ id: string }[]>`
         insert into ${t.event_runs}
-          (agent_id, trigger_id, event_id, event_type, delivery_id, thread, runner, state)
+          (agent_id, trigger_id, event_id, event_type, delivery_id, thread, runner, state,
+           would_filter)
         values (${input.agentId}, ${input.triggerId}, ${input.eventId}, ${input.eventType},
-                ${input.deliveryId}, ${input.thread}, ${input.runner}, 'starting')
+                ${input.deliveryId}, ${input.thread}, ${input.runner}, 'starting',
+                ${input.wouldFilter ?? false})
         returning id::text`;
       return row.id;
     },

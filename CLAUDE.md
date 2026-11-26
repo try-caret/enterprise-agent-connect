@@ -265,8 +265,9 @@ connector definitions; rollback drops it), 0009 the `graph` source (its check co
 catch-up delta link) and `event_runs.thread` (rollback drops `event_watches` first; the rest
 goes with the 0007 tables), and 0012 the retry columns on `teams_runs` and `event_runs`
 (`attempts`, `next_attempt_at`, sealed `delivery`; rollback drops them from `teams_runs`, the rest
-goes with 0007), and 0013 `leases` (work every process would otherwise do at once; rollback
-drops it). The adopting run then makes simple views
+goes with 0007), 0013 `leases` (work every process would otherwise do at once; rollback
+drops it), and 0014 `event_runs.would_filter` (a run a log-only trial would have filtered;
+rollback goes with 0007). The adopting run then makes simple views
 `public.agent_connect_<old name>` over the moved tables and revokes every grant on them but the
 owner's, so the earlier image brought back by an atomic rollback keeps reading and writing (only
 for orgs already in `organizations`: the FK now points there). They are for one release: the
@@ -286,7 +287,9 @@ own role, with no newer process running), and says in its header what it cannot 
 Graph subscriptions, restores 0007's check constraints, and keeps every row 0.3.0 reads; it
 refuses unless exactly 0009-0013 are applied. Checked on Postgres 17 against the npm 0.3.0
 package: the schema after it equals a fresh 0.3.0 install, 0.3.0 starts and reads its rows back,
-and migrating forward again equals a fresh install of this version.
+and migrating forward again equals a fresh install of this version. `rollback/to-0.4.0.sql`
+undoes 0014 (drops `event_runs.would_filter`); it refuses unless exactly 0014 is applied, or while
+a trigger holds a condition 0.4.0 cannot read (contains, anyOf, seen, logOnly) or `{self}`.
 
 ## Deploy
 
@@ -423,7 +426,8 @@ packages/server/src/migrate.ts # the schema runner (see Database)
 packages/server/migrations/ # 0001_tables.sql ... (plain SQL, unqualified names, never edited once
                       # applied: the runner refuses a changed checksum); rollback/to-legacy.sql
                       # (by hand only: back to the earlier layout in public); rollback/to-0.3.0.sql
-                      # (by hand only: undoes 0009-0013 so a 0.3.0 image starts again)
+                      # (by hand only: undoes 0009-0013 so a 0.3.0 image starts again);
+                      # rollback/to-0.4.0.sql (by hand only: undoes 0014)
 packages/server/src/secrets.ts # AES-256-GCM credential sealing (AAD = org + app, or org + provider:<id>; key
                       # id per row), agent keys
 scripts/test-databases.sh # makes an empty ac_test on a scratch Postgres, for the DB-backed tests
@@ -509,7 +513,8 @@ docs/inside-your-network.md # internal certificate authorities (NODE_EXTRA_CA_CE
 docs/triggers.md      # app events that start agents: how it works, Jira webhook and poll, how a
                       # connector declares `events`, security
 packages/server/src/events/ # app events: deliver.ts (pure: proof, replay window, paths, kept
-                      # fields, limits, conditions, request templates, the prompt, thread ids),
+                      # fields and pattern fields, limits, conditions (in, notIn, contains,
+                      # anyOf, seen, logOnly, {self}), request templates, the prompt, thread ids),
                       # graph.ts (Microsoft Graph notifications: watches, renewal, lifecycle,
                       # delta catch-up), runtime.ts
                       # (public inbound, queue, decisions per trigger, polls, run watcher),

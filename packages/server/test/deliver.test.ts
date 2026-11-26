@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   eventPrompt,
   failedCondition,
+  hasWord,
   fill,
   fresh,
   outsideLimits,
   pickFields,
   signed,
   valueAt,
+  wouldFail,
 } from "../src/events/deliver.ts";
 import { capReached } from "../src/teams/runner.ts";
 
@@ -99,6 +102,103 @@ test("conditions: in matches any value, notIn none", () => {
   assert.ok(failedCondition([{ field: "labels", notIn: ["ui"] }], data));
   assert.equal(failedCondition([{ field: "labels", notIn: ["x"] }], data), null);
   assert.ok(failedCondition([{ field: "missing", in: ["x"] }], data));
+});
+
+test("contains: whole Latin words, ignoring case; other scripts anywhere; except", () => {
+  assert.ok(hasWord("My Laptop is broken", "laptop"));
+  assert.ok(hasWord("PC issue", "pc"));
+  assert.ok(!hasWord("NPC issue", "pc"), "not inside a word");
+  assert.ok(!hasWord("pcs", "pc"));
+  assert.ok(hasWord("Laptop-fan noise", "laptop"));
+  assert.ok(hasWord("BOF HR INFO - US - Terminate", "bof hr info"), "a phrase");
+  assert.ok(hasWord("OSがフリーズした", "フリーズ"), "Japanese has no spaces");
+  assert.ok(hasWord("המחשב לא עובד", "מחשב"), "Hebrew takes prefixes");
+  assert.ok(hasWord("Le café est fermé", "café"));
+  assert.ok(!hasWord("cafétéria", "café"), "an accented Latin end is a word end too");
+  const data = { summary: "Printer jammed", labels: ["x", "Laptop-Agent"] };
+  assert.equal(failedCondition([{ field: "labels", contains: ["laptop-agent"] }], data), null);
+  assert.equal(
+    failedCondition([{ field: "summary", contains: ["laptop"] }], data),
+    "summary does not match",
+  );
+  const task = { field: "summary", contains: ["laptop", "pc"], except: ["laptop shipment for"] };
+  assert.ok(failedCondition([task], { summary: "Laptop shipment for Ann (01Dec2026) - Dell PC" }));
+  assert.equal(failedCondition([task], { summary: "My laptop is dead" }), null);
+  assert.equal(
+    failedCondition([task], { summary: ["Laptop shipment for Ann", "laptop dead"] }),
+    null,
+    "each value on its own",
+  );
+});
+
+test("conditions: anyOf needs one, seen and {self} read the context, logOnly never stops", () => {
+  const group = {
+    anyOf: [
+      { field: "summary", contains: ["laptop"] },
+      { field: "mentions", in: ["{self}"] },
+      { seen: { days: 30 } },
+    ],
+  };
+  const printer = { summary: "Printer jammed", mentions: ["u1"] };
+  assert.equal(
+    failedCondition([group], printer, { self: "svc", seen: () => false }),
+    "none of summary, mentions, seen matched",
+  );
+  assert.equal(failedCondition([group], printer, { self: "u1", seen: () => false }), null);
+  assert.equal(failedCondition([group], printer, { self: null, seen: () => true }), null);
+  assert.ok(failedCondition([group], printer, { self: null, seen: () => null }), "no thread");
+  assert.equal(failedCondition([group], { summary: "Laptop dead" }), null);
+  // {self} unknown: matches nothing, in either direction.
+  assert.ok(failedCondition([{ field: "mentions", in: ["{self}"] }], { mentions: ["{self}"] }));
+  // All top-level conditions must hold.
+  assert.ok(failedCondition([group, { field: "type", in: ["Bug"] }], { summary: "laptop" }));
+
+  const trial = [{ logOnly: [group] }];
+  assert.equal(failedCondition(trial, printer, { seen: () => false }), null);
+  assert.equal(
+    wouldFail(trial, printer, { seen: () => false }),
+    "none of summary, mentions, seen matched",
+  );
+  assert.equal(wouldFail(trial, { summary: "laptop" }), null);
+  assert.equal(wouldFail([group], printer), null, "only logOnly groups");
+});
+
+test("a pattern field keeps each match of the whole text, before any cut", () => {
+  const long = "x".repeat(3000) + " [~accountid:557058:abc-1] and [~accountid:u2] [~accountid:u2]";
+  const data = pickFields(
+    {
+      comment: "comment.body",
+      mentions: { path: "comment.body", match: "\\[~accountid:([A-Za-z0-9:_-]{1,128})\\]" },
+      none: { path: "comment.missing", match: "x" },
+    },
+    { comment: { body: long } },
+  );
+  assert.deepEqual(data.mentions, ["557058:abc-1", "u2"]);
+  assert.equal((data.comment as string).length, 2000);
+  assert.equal(data.none, null);
+});
+
+test("Jira mentions are read from a text comment and from a document comment", () => {
+  const jira = JSON.parse(
+    readFileSync(new URL("../../../connectors/jira/connector.json", import.meta.url), "utf8"),
+  );
+  const mentions = { mentions: jira.events.fields.mentions };
+  const text = pickFields(mentions, { comment: { body: "[~accountid:712020:a-1] look" } });
+  assert.deepEqual(text.mentions, ["712020:a-1"]);
+  const doc = {
+    type: "doc",
+    version: 1,
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "mention", attrs: { id: "712020:a-1", text: "@Agents" } },
+          { type: "text", text: " look" },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(pickFields(mentions, { comment: { body: doc } }).mentions, ["712020:a-1"]);
 });
 
 test("fill puts a list where a whole placeholder stood, text elsewhere", () => {

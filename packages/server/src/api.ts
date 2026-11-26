@@ -240,6 +240,25 @@ export const schemas = (() => {
       createdAt: iso,
     }),
   );
+  const FieldCondition = z.union([
+    z.strictObject({ field: z.string(), in: z.array(z.string()) }),
+    z.strictObject({ field: z.string(), notIn: z.array(z.string()) }),
+    z.strictObject({
+      field: z.string(),
+      contains: z.array(z.string()),
+      except: z.array(z.string()).optional(),
+    }),
+  ]);
+  const SeenCondition = z.strictObject({ seen: z.strictObject({ days: z.number() }) });
+  const AnyOfCondition = z.strictObject({
+    anyOf: z.array(z.union([FieldCondition, SeenCondition])),
+  });
+  const TriggerCondition = z.union([
+    FieldCondition,
+    SeenCondition,
+    AnyOfCondition,
+    z.strictObject({ logOnly: z.array(z.union([FieldCondition, SeenCondition, AnyOfCondition])) }),
+  ]);
   const EventTrigger = named(
     "EventTrigger",
     z.strictObject({
@@ -248,12 +267,7 @@ export const schemas = (() => {
       connectorId: z.string(),
       enabled: z.boolean(),
       eventTypes: z.array(z.string()),
-      conditions: z.array(
-        z.union([
-          z.strictObject({ field: z.string(), in: z.array(z.string()) }),
-          z.strictObject({ field: z.string(), notIn: z.array(z.string()) }),
-        ]),
-      ),
+      conditions: z.array(TriggerCondition),
       prompt: z.string(),
       runner: z.string(),
       settings: z.record(z.string(), z.unknown()),
@@ -280,6 +294,8 @@ export const schemas = (() => {
       deliveryId: z.string(),
       // The same for every run of one thread of the app (a mail conversation) on this trigger.
       thread: z.string().nullable(),
+      // Started only because the conditions it failed were log-only (a trial of a filter).
+      wouldFilter: z.boolean(),
       runner: z.string(),
       sessionId: z.string().nullable(),
       state: z.enum(["starting", "running", "ended", "failed"]),

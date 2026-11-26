@@ -15,6 +15,9 @@ export type EventData = Record<string, Scalar | Scalar[] | null>;
 
 const MAX_TEXT = 2000;
 const MAX_LIST = 50;
+const MAX_MATCH = 500;
+// How much of a text a pattern reads: a long comment's mentions, and no more.
+const MAX_PATTERN_TEXT = 100_000;
 const isScalar = (v: unknown): v is Scalar =>
   typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 
@@ -111,16 +114,43 @@ export const threadId = (triggerId: string, value: string) =>
 
 export const bodyHash = (body: Buffer) => createHash("sha256").update(body).digest("hex");
 
+/** A field the connector keeps: a path, a list of paths whose first with a value is taken, or
+ *  the matches of a pattern in a text (the first group that matched, each once), read before the
+ *  text is cut (Jira mentions anywhere in a long comment). An object (a Jira document body) is
+ *  read as its JSON text. */
+export type FieldSpec = string | string[] | { path: string; match: string };
+
 /** The fields the connector keeps: all an agent, a condition or a limit ever reads. */
-export function pickFields(fields: Record<string, string | string[]>, body: unknown): EventData {
+export function pickFields(fields: Record<string, FieldSpec>, body: unknown): EventData {
   const first = (paths: string[]) =>
     paths.map((p) => valueAt(body, p)).find((v) => v !== null) ?? null;
   return Object.fromEntries(
-    Object.entries(fields).map(([name, path]) => [
+    Object.entries(fields).map(([name, spec]) => [
       name,
-      Array.isArray(path) ? first(path) : valueAt(body, path),
+      typeof spec === "string"
+        ? valueAt(body, spec)
+        : Array.isArray(spec)
+          ? first(spec)
+          : matches(rawAt(body, spec.path), spec.match),
     ]),
   );
+}
+
+function matches(value: unknown, pattern: string): string[] | null {
+  const text =
+    typeof value === "string"
+      ? value
+      : value && typeof value === "object"
+        ? JSON.stringify(value)
+        : null;
+  if (text === null) return null;
+  const found = new Set<string>();
+  for (const m of text.slice(0, MAX_PATTERN_TEXT).matchAll(new RegExp(pattern, "g"))) {
+    const v = m.slice(1).find((g) => g !== undefined) ?? m[0];
+    if (v) found.add(v.slice(0, MAX_MATCH));
+    if (found.size >= MAX_LIST) break;
+  }
+  return [...found];
 }
 
 const values = (v: EventData[string] | undefined): string[] =>
@@ -149,15 +179,132 @@ export function outsideLimits(
   return null;
 }
 
-/** The first condition the event fails, or null. `in`: one of the field's values (any item of
- *  a list) is listed; `notIn`: none is. */
-export function failedCondition(conditions: Condition[], data: EventData): Condition | null {
-  return (
-    conditions.find((c) => {
-      const got = values(data[c.field]);
-      return "in" in c ? !got.some((v) => c.in.includes(v)) : got.some((v) => c.notIn.includes(v));
-    }) ?? null
+/** What a trigger's conditions read besides the event's fields: `{self}` in a list is the app
+ *  connection's own account (Jira mentions of the agent), and whether the event's thread was
+ *  seen within a `seen` condition's days (null when the event has no thread). `trialSeen` is the
+ *  same for `seen` inside `logOnly`: it leaves out runs a log-only trial would have filtered. */
+export type ConditionContext = {
+  self?: string | null;
+  seen?: (days: number) => boolean | null;
+  trialSeen?: (days: number) => boolean | null;
+};
+
+const WORD_EDGE = /[\p{Script=Latin}0-9]/u;
+const LETTER = /[\p{L}\p{N}]/u;
+
+/** Whether a word or phrase is in the text, ignoring case. An end of it that is a Latin letter
+ *  or digit must be an end of a word in the text ("pc" is not in "npc"); other scripts match
+ *  anywhere (Japanese has no spaces, Hebrew takes prefixes). */
+export function hasWord(text: string, word: string): boolean {
+  const t = text.toLowerCase();
+  const w = word.toLowerCase();
+  if (!w) return false;
+  const left = WORD_EDGE.test(w[0]);
+  const right = WORD_EDGE.test(w[w.length - 1]);
+  for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + 1)) {
+    if (left && i > 0 && LETTER.test(t[i - 1])) continue;
+    const end = i + w.length;
+    if (right && end < t.length && LETTER.test(t[end])) continue;
+    return true;
+  }
+  return false;
+}
+
+const listed = (list: string[], ctx: ConditionContext) =>
+  list.flatMap((v) => (v === "{self}" ? (ctx.self ? [ctx.self] : []) : [v]));
+
+const label = (c: Condition): string =>
+  "field" in c ? c.field : "seen" in c ? "seen" : "anyOf" in c ? "anyOf" : "logOnly";
+
+/** Why the event fails the condition, or null when it holds. */
+function fails(c: Condition, data: EventData, ctx: ConditionContext): string | null {
+  if ("anyOf" in c)
+    return c.anyOf.some((x) => fails(x, data, ctx) === null)
+      ? null
+      : `none of ${c.anyOf.map(label).join(", ")} matched`;
+  if ("logOnly" in c) return null;
+  if ("seen" in c)
+    return ctx.seen?.(c.seen.days) ? null : `no run on this thread in ${c.seen.days} days`;
+  const got = values(data[c.field]);
+  const ok =
+    "in" in c
+      ? got.some((v) => listed(c.in, ctx).includes(v))
+      : "notIn" in c
+        ? !got.some((v) => listed(c.notIn, ctx).includes(v))
+        : got.some(
+            (v) =>
+              c.contains.some((w) => hasWord(v, w)) &&
+              !(c.except ?? []).some((w) => hasWord(v, w)),
+          );
+  return ok ? null : `${c.field} does not match`;
+}
+
+/** The fields a condition reads (with those inside its groups). */
+export function conditionFields(c: Condition): string[] {
+  if ("field" in c) return [c.field];
+  if ("anyOf" in c) return c.anyOf.flatMap(conditionFields);
+  if ("logOnly" in c) return c.logOnly.flatMap(conditionFields);
+  return [];
+}
+
+/** The days of the conditions' `seen` checks, so the runtime looks the thread up only then:
+ *  those that hold the run back, or (trial) those inside `logOnly`. */
+export function seenDays(conditions: Condition[], trial = false): number[] {
+  return conditions.flatMap((c) =>
+    "seen" in c
+      ? trial
+        ? []
+        : [c.seen.days]
+      : "anyOf" in c
+        ? seenDays(c.anyOf, trial)
+        : "logOnly" in c
+          ? trial
+            ? seenDays(c.logOnly)
+            : []
+          : [],
   );
+}
+
+/** Whether a condition's list names the app connection's own account: one that holds the run
+ *  back, or (trial) one inside `logOnly`. */
+export function namesSelf(conditions: Condition[], trial = false): boolean {
+  return conditions.some((c) =>
+    "anyOf" in c
+      ? namesSelf(c.anyOf, trial)
+      : "logOnly" in c
+        ? trial && namesSelf(c.logOnly)
+        : !trial && ("in" in c ? c.in : "notIn" in c ? c.notIn : []).includes("{self}"),
+  );
+}
+
+/** Why the event fails the conditions (the first that fails; all must hold), or null. A
+ *  `logOnly` group never fails them: see wouldFail. */
+export function failedCondition(
+  conditions: Condition[],
+  data: EventData,
+  ctx: ConditionContext = {},
+): string | null {
+  for (const c of conditions) {
+    const why = fails(c, data, ctx);
+    if (why) return why;
+  }
+  return null;
+}
+
+/** Why the event fails the conditions' `logOnly` groups (what enforcing them would filter), or
+ *  null. */
+export function wouldFail(
+  conditions: Condition[],
+  data: EventData,
+  ctx: ConditionContext = {},
+): string | null {
+  const trial = { ...ctx, seen: ctx.trialSeen };
+  for (const c of conditions)
+    if ("logOnly" in c) {
+      const why = failedCondition(c.logOnly, data, trial);
+      if (why) return why;
+    }
+  return null;
 }
 
 /** Fills {name} placeholders in a request: a string that is only a placeholder takes the

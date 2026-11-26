@@ -1032,8 +1032,26 @@ const eventsSchema = z
   .object({
     types: z.array(z.object({ id: eventId, label: text }).strict()).min(1),
     // What an agent is given of each event, and what conditions and limits read: name → path,
-    // or a list of paths whose first with a value is taken (Slack: thread_ts, else ts).
-    fields: z.record(slug, z.union([eventPath, z.array(eventPath).min(2).max(5)])),
+    // a list of paths whose first with a value is taken (Slack: thread_ts, else ts), or the
+    // matches of a pattern in a text, read in full (Jira: the account ids a comment mentions).
+    fields: z.record(
+      slug,
+      z.union([
+        eventPath,
+        z.array(eventPath).min(2).max(5),
+        z
+          .object({
+            path: eventPath.refine((p) => !p.includes("[]"), "A pattern reads one text"),
+            match: z
+              .string()
+              .min(1)
+              .max(200)
+              .refine(validRegex, "A match is a valid pattern")
+              .refine((m) => !/\)[*+?{]/.test(m), "A match repeats no group (it could run long)"),
+          })
+          .strict(),
+      ]),
+    ),
     // A limit's id → the field holding the event's value for it. An agent with that limit set
     // is started only by events whose value is within it.
     limits: z.record(slug, slug).default({}),
