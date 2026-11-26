@@ -11,7 +11,7 @@ import type { CredentialKey } from "../secrets.js";
 import { InvalidInput } from "../service.js";
 import type { Store } from "../store.js";
 import { CLAUDE_RUNNER, type TriggerRunner } from "../teams/runner.js";
-import { conditionFields, fill, rawAt, seenDays } from "./deliver.js";
+import { conditionFields, fill, namesSelf, rawAt, seenDays } from "./deliver.js";
 import { eventTriggerAad, subscriptionAad, type EventsRuntime } from "./runtime.js";
 import type { EventTriggerRow, EventsStore, SubscriptionRow } from "./store.js";
 
@@ -42,15 +42,15 @@ export const subscriptionSchema = z.object({
 export const rotateSecretSchema = z.object({ secret: appSecret.optional(), by });
 
 const values = z.array(z.string().max(500)).min(1).max(100);
-const words = z.array(z.string().min(1).max(100));
+const word = z.string().trim().min(1).max(100);
 const fieldCondition = z.union([
   z.strictObject({ field: z.string(), in: values }),
   z.strictObject({ field: z.string(), notIn: values }),
   // Not when one of `except` is in the same value too ("laptop", except "laptop shipment for").
   z.strictObject({
     field: z.string(),
-    contains: words.min(1).max(200),
-    except: words.min(1).max(100).optional(),
+    contains: z.array(word).min(1).max(200),
+    except: z.array(word).min(1).max(100).optional(),
   }),
 ]);
 const seen = z.strictObject({ seen: z.strictObject({ days: z.number().int().min(1).max(90) }) });
@@ -286,7 +286,10 @@ export function createEventsAdmin(deps: {
         throw new InvalidInput(
           `${connector.name} events have no field ${unknownField}; they have ${fields.join(", ")}`,
         );
-      if (seenDays(rest.conditions).length && !declared.thread)
+      if (namesSelf(rest.conditions) && !declared.self)
+        throw new InvalidInput(`${connector.name} does not say who its connection is, for {self}`);
+      const seen = [...seenDays(rest.conditions), ...seenDays(rest.conditions, true)];
+      if (seen.length && !declared.thread)
         throw new InvalidInput(`${connector.name} events have no thread for a seen condition`);
       const runner = deps.runners.get(rest.runner);
       if (!runner?.startEvent)

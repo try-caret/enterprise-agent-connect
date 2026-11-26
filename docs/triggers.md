@@ -176,16 +176,17 @@ mentions, request_type, updated).
 All conditions must hold. Each is one of:
 
 - `{"field": f, "in": [...]}` / `{"field": f, "notIn": [...]}`: exact values (any item of a list).
-  `"{self}"` in the list is the app connection's own account (Jira: the agent's account id).
+  `"{self}"` in the list is the app connection's own account (its `events.self`); when the app
+  does not say who that is, the trigger starts nothing and the audit says why.
 - `{"field": f, "contains": [...]}`: a word or phrase in the text, ignoring case. An end that is a
   Latin letter or digit must end a word (`pc` is not in `npc`); other scripts match anywhere. With
   `"except": [...]`, a value that also has one of those does not match
   (`"contains": ["laptop"], "except": ["laptop shipment for"]`).
 - `{"seen": {"days": n}}`: this trigger started a run on the event's thread (Jira: the issue)
-  within n days. Runs that log-only conditions would have filtered do not count.
+  within n days. Inside `logOnly`, runs the trial would have filtered do not count.
 - `{"anyOf": [...]}`: one of the field conditions or `seen` inside holds.
-- `{"logOnly": [...]}`: never stops a run; when the conditions inside fail, the run is audited
-  `Would filter (log only): ...` first. Use it to try a filter on real traffic, then drop the
+- `{"logOnly": [...]}`: never stops a run; when the conditions inside fail, the run's start is
+  audited with `would filter (log only): ...`. Use it to try a filter on real traffic, then drop the
   wrapper to enforce it.
 
 Filtered events are audited `Filtered: ...` and never count against the caps. Jira `mentions`
@@ -201,7 +202,12 @@ next to field conditions in an `anyOf` to keep a thread's comments.
   {"field": "mentions", "in": ["{self}"]},
   {"seen": {"days": 30}}
 ]}]
-``` With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
+```
+
+Save conditions of the new kinds only once every replica runs this version: an older one cannot
+read them and starts nothing for that trigger.
+
+With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
 each run is a signed POST of `{type: "event", run, delivery, agent, app, event, deliveryId, thread,
 data, text, mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams; `delivery` is this
 service's id for the hand-over, `deliveryId` the app's id for the event). `GET …/event-triggers` lists an

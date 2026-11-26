@@ -21,6 +21,7 @@ import {
   eventPrompt,
   threadId,
   failedCondition,
+  namesSelf,
   seenDays,
   wouldFail,
   type ConditionContext,
@@ -79,9 +80,17 @@ type RunContext = {
   connectorId: string;
   eventType: string;
   deliveryId: string;
+  // What a log-only trial would have filtered, noted with the run's start.
+  wouldFilter?: string;
 };
 
 const reply = (status: number) => new Response(null, { status });
+
+/** A lookup made at most once, when first asked for. */
+function once<T>(get: () => Promise<T>): () => Promise<T> {
+  let made: Promise<T> | null = null;
+  return () => (made ??= get());
+}
 
 export type EventsRuntimeDeps = {
   store: Store;
@@ -326,23 +335,28 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   }
 
   /** What the trigger's conditions read besides the event: the connection's own account, only
-   *  when a condition names {self}, and whether the thread was seen, only for `seen`. */
+   *  when a condition names {self} (an Error when the app does not say, as for fromSelf), and
+   *  whether the thread was seen, only for `seen`. */
   async function conditionContext(
     org: string,
     connector: Connector,
     trigger: EventTriggerRow,
     thread: string | null,
-  ): Promise<ConditionContext> {
+  ): Promise<ConditionContext | Error> {
     let self: string | null = null;
-    if (connector.events!.self && JSON.stringify(trigger.conditions).includes('"{self}"')) {
+    if (connector.events!.self && namesSelf(trigger.conditions)) {
       const id = await selfId(org, connector);
-      self = typeof id === "string" ? id : null;
+      if (id instanceof Error) return id;
+      self = id;
     }
-    const seen = new Map<number, boolean>();
-    if (thread)
-      for (const days of new Set(seenDays(trigger.conditions)))
-        seen.set(days, await events.threadSeen(trigger.id, thread, days));
-    return { self, seen: (days) => (thread ? (seen.get(days) ?? false) : null) };
+    const look = async (trial: boolean) => {
+      const seen = new Map<number, boolean>();
+      if (thread)
+        for (const days of new Set(seenDays(trigger.conditions, trial)))
+          seen.set(days, await events.threadSeen(trigger.id, thread, days, trial));
+      return (days: number) => (thread ? (seen.get(days) ?? false) : null);
+    };
+    return { self, seen: await look(false), trialSeen: await look(true) };
   }
 
   /** Why the event may not start a run of the trigger, as the agent's access and the trigger
@@ -354,7 +368,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     data: EventData,
     trigger: EventTriggerRow,
     state: AgentAppState | null,
-    ctx: ConditionContext,
+    context: () => Promise<ConditionContext | Error>,
   ): Promise<[AuditEntry["decision"], string] | null> {
     if (!trigger.enabled) return ["denied", "Not started: the trigger is off"];
     if (!trigger.eventTypes.includes(eventType))
@@ -367,6 +381,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       return ["denied", `Not started: the agent has no access to ${connector.name}`];
     const outside = outsideLimits(connector.events!.limits, data, state!.grant!.limits);
     if (outside) return ["denied", `Out of limits: ${outside}`];
+    const ctx = trigger.conditions.length ? await context() : {};
+    if (ctx instanceof Error) return ["failed", `Not started: ${ctx.message}`];
     const failed = failedCondition(trigger.conditions, data, ctx);
     if (failed) return ["denied", `Filtered: ${failed}`];
     const runner = deps.runners.get(trigger.runner);
@@ -406,13 +422,13 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       return decide("denied", `Filtered: made by ${connector.name}'s own connection (an agent)`);
     const org = event.organizationId;
     const thread = threadOf(connector, trigger, data);
-    const ctx = await conditionContext(org, connector, trigger, thread);
-    const refused = await refusal(org, connector, event.eventType, data, trigger, state, ctx);
+    const context = once(() => conditionContext(org, connector, trigger, thread));
+    const refused = await refusal(org, connector, event.eventType, data, trigger, state, context);
     if (refused) return decide(...refused);
     const runner = deps.runners.get(trigger.runner)!;
-    // Log-only conditions: what enforcing them would filter is audited, and the run starts.
-    const would = wouldFail(trigger.conditions, data, ctx);
-    if (would) await decide("allowed", `Would filter (log only): ${would}`);
+    // Log-only conditions: the run starts, and what enforcing them would filter is noted with it.
+    const ctx = trigger.conditions.length ? await context() : {};
+    const would = ctx instanceof Error ? null : wouldFail(trigger.conditions, data, ctx);
     const runTags = {
       app: connector.id,
       org: event.organizationId,
@@ -455,6 +471,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       connectorId: connector.id,
       eventType: event.eventType,
       deliveryId: event.deliveryId,
+      ...(would ? { wouldFilter: would } : {}),
     };
     const sent: Delivery = {
       deliveryId: randomUUID(),
@@ -515,7 +532,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         event: sent.event,
       });
       await events.updateRun(run.runId, { state: "running", sessionId });
-      await runAudit(run, trigger.agentId)("allowed", `Started run ${run.runId}${after}`);
+      const trial = run.wouldFilter ? `; would filter (log only): ${run.wouldFilter}` : "";
+      await runAudit(run, trigger.agentId)("allowed", `Started run ${run.runId}${after}${trial}`);
       return true;
     } catch (error) {
       const at =
@@ -600,8 +618,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     // Access may have changed while it waited. The caps were checked when it first came, and it
     // has held its place among them since, so they are not counted again.
     const data = sent.event.data as EventData;
-    const ctx = await conditionContext(run.org, connector, trigger, row.thread);
-    const refused = await refusal(run.org, connector, row.eventType, data, trigger, state, ctx);
+    const context = once(() => conditionContext(run.org, connector, trigger, row.thread));
+    const refused = await refusal(run.org, connector, row.eventType, data, trigger, state, context);
     if (refused) return fail(`No longer allowed: ${refused[1]}`);
     const runner = deps.runners.get(row.runner)!;
     await handOver(run, runner, trigger, sent, row.attempts + 1, since);

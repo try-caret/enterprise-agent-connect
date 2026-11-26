@@ -447,19 +447,53 @@ test(
     await send("KAN-2", "Laptop dead");
     await send("KAN-2", "Renamed");
     assert.equal(f.started.length, 4);
-    const log = await t.audit();
-    // KAN-1 twice: its first run was a would-filter one, so it does not count as seen.
-    assert.equal(
-      log.filter((l) => l.includes("Would filter (log only): none of summary, seen matched"))
-        .length,
-      2,
+    // KAN-1 twice: its first run was a would-filter one, so the trial does not count it as seen.
+    const would = (await t.audit()).filter((l) =>
+      l.includes("; would filter (log only): none of summary, seen matched"),
     );
+    assert.equal(would.length, 2);
     const runs = await sql!`select would_filter as w from ${name("event_runs")}
                              where agent_id = ${t.agentId} order by started_at`;
-    assert.deepEqual(
-      runs.map((r) => r.w),
-      [true, true, false, false],
-    );
+    assert.deepEqual(runs.map((r) => r.w), [true, true, false, false]);
+  },
+);
+
+test(
+  "a log-only trial next to enforced conditions does not change what the enforced seen lets in",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({
+      eventTypes: ["created", "updated"],
+      conditions: [
+        { anyOf: [{ field: "summary", contains: ["laptop"] }, { seen: { days: 30 } }] },
+        { logOnly: [{ field: "summary", contains: ["dead"] }] },
+      ],
+      maxConcurrent: 10,
+    });
+    const kan2 = (summary: string) => item({ item: { key: "KAN-2", project: "KAN", summary } });
+    const send = (summary: string) => t.deliver(subscription.id, secret!, kan2(summary));
+    await send("Laptop broken");
+    await send("Renamed");
+    assert.equal(f.started.length, 2);
+  },
+);
+
+test(
+  "a {self} condition starts nothing, and says why, when the app will not say who it is",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    t.answers.set("/me", { status: 401, data: null });
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({ conditions: [{ field: "mentions", notIn: ["{self}"] }] });
+    const comment = "[~accountid:svc] look";
+    await t.deliver(subscription.id, secret!, item({ actor: undefined, comment }));
+    assert.equal(f.started.length, 0);
+    assert.ok((await t.audit()).some((l) => /failed Not started: Notes did not say/.test(l)));
   },
 );
 
@@ -485,6 +519,7 @@ test("conditions name only declared fields, one level of groups", { skip: !sql }
   );
   assert.equal((await put([{ anyOf: [{ anyOf: [{ seen: { days: 1 } }] }] }])).status, 400);
   assert.equal((await put([{ logOnly: [{ logOnly: [{ seen: { days: 1 } }] }] }])).status, 400);
+  assert.equal((await put([{ field: "summary", contains: [" "] }])).status, 400, "blank word");
 });
 
 test(

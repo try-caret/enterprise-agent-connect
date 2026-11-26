@@ -15,6 +15,7 @@ export type EventData = Record<string, Scalar | Scalar[] | null>;
 
 const MAX_TEXT = 2000;
 const MAX_LIST = 50;
+const MAX_MATCH = 500;
 const isScalar = (v: unknown): v is Scalar =>
   typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 
@@ -137,7 +138,7 @@ function matches(text: unknown, pattern: string): string[] | null {
   const found = new Set<string>();
   for (const m of text.matchAll(new RegExp(pattern, "g"))) {
     const v = m[1] ?? m[0];
-    if (v) found.add(v.slice(0, 500));
+    if (v) found.add(v.slice(0, MAX_MATCH));
     if (found.size >= MAX_LIST) break;
   }
   return [...found];
@@ -171,10 +172,12 @@ export function outsideLimits(
 
 /** What a trigger's conditions read besides the event's fields: `{self}` in a list is the app
  *  connection's own account (Jira mentions of the agent), and whether the event's thread was
- *  seen within a `seen` condition's days (null when the event has no thread). */
+ *  seen within a `seen` condition's days (null when the event has no thread). `trialSeen` is the
+ *  same for `seen` inside `logOnly`: it leaves out runs a log-only trial would have filtered. */
 export type ConditionContext = {
   self?: string | null;
   seen?: (days: number) => boolean | null;
+  trialSeen?: (days: number) => boolean | null;
 };
 
 const WORD_EDGE = /[A-Za-z0-9]/;
@@ -201,6 +204,9 @@ export function hasWord(text: string, word: string): boolean {
 const listed = (list: string[], ctx: ConditionContext) =>
   list.flatMap((v) => (v === "{self}" ? (ctx.self ? [ctx.self] : []) : [v]));
 
+const label = (c: Condition): string =>
+  "field" in c ? c.field : "seen" in c ? "seen" : "anyOf" in c ? "anyOf" : "logOnly";
+
 /** Why the event fails the condition, or null when it holds. */
 function fails(c: Condition, data: EventData, ctx: ConditionContext): string | null {
   if ("anyOf" in c)
@@ -224,9 +230,6 @@ function fails(c: Condition, data: EventData, ctx: ConditionContext): string | n
   return ok ? null : `${c.field} does not match`;
 }
 
-const label = (c: Condition): string =>
-  "field" in c ? c.field : "seen" in c ? "seen" : "anyOf" in c ? "anyOf" : "logOnly";
-
 /** The fields a condition reads (with those inside its groups). */
 export function conditionFields(c: Condition): string[] {
   if ("field" in c) return [c.field];
@@ -235,16 +238,34 @@ export function conditionFields(c: Condition): string[] {
   return [];
 }
 
-/** The days of the conditions' `seen` checks, so the runtime looks the thread up only then. */
-export function seenDays(conditions: Condition[]): number[] {
+/** The days of the conditions' `seen` checks, so the runtime looks the thread up only then:
+ *  those that hold the run back, or (trial) those inside `logOnly`. */
+export function seenDays(conditions: Condition[], trial = false): number[] {
   return conditions.flatMap((c) =>
     "seen" in c
-      ? [c.seen.days]
+      ? trial
+        ? []
+        : [c.seen.days]
       : "anyOf" in c
-        ? seenDays(c.anyOf)
+        ? seenDays(c.anyOf, trial)
         : "logOnly" in c
-          ? seenDays(c.logOnly)
+          ? trial
+            ? seenDays(c.logOnly)
+            : []
           : [],
+  );
+}
+
+/** Whether a condition's list names the app connection's own account. */
+export function namesSelf(conditions: Condition[]): boolean {
+  return conditions.some((c) =>
+    "anyOf" in c
+      ? namesSelf(c.anyOf)
+      : "logOnly" in c
+        ? namesSelf(c.logOnly)
+        : "in" in c
+          ? c.in.includes("{self}")
+          : "notIn" in c && c.notIn.includes("{self}"),
   );
 }
 
@@ -269,9 +290,10 @@ export function wouldFail(
   data: EventData,
   ctx: ConditionContext = {},
 ): string | null {
+  const trial = { ...ctx, seen: ctx.trialSeen };
   for (const c of conditions)
     if ("logOnly" in c) {
-      const why = failedCondition(c.logOnly, data, ctx);
+      const why = failedCondition(c.logOnly, data, trial);
       if (why) return why;
     }
   return null;

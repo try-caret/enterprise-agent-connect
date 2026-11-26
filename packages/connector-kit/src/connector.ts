@@ -1021,15 +1021,6 @@ const locator = z.union([
   z.object({ field: eventPath }).strict(),
   z.object({ header: headerName }).strict(),
 ]);
-/** Whether a connector's pattern compiles (fields that keep a pattern's matches). */
-function validPattern(p: string): boolean {
-  try {
-    new RegExp(p, "g");
-    return true;
-  } catch {
-    return false;
-  }
-}
 const eventRequest = z
   .object({
     method: z.enum(["GET", "POST", "PUT"]),
@@ -1049,7 +1040,10 @@ const eventsSchema = z
         eventPath,
         z.array(eventPath).min(2).max(5),
         z
-          .object({ path: eventPath, match: z.string().min(1).max(200).refine(validPattern) })
+          .object({
+            path: eventPath.refine((p) => !p.includes("[]"), "A pattern reads one text"),
+            match: z.string().min(1).max(200).refine(validRegex, "A match is a valid pattern"),
+          })
           .strict(),
       ]),
     ),

@@ -576,13 +576,19 @@ export function createEventsStore(sql: Sql, schema: string) {
       });
     },
 
-    // Whether the trigger started a run on the thread within the last days, not counting runs
-    // its conditions would have filtered out (the `seen` condition).
-    async threadSeen(triggerId: string, thread: string, days: number): Promise<boolean> {
+    // Whether the trigger started a run on the thread within the last days (the `seen`
+    // condition). For a log-only trial, runs the trial would have filtered out do not count.
+    async threadSeen(
+      triggerId: string,
+      thread: string,
+      days: number,
+      trial: boolean,
+    ): Promise<boolean> {
       const [row] = await sql<{ seen: boolean }[]>`
         select exists (
           select 1 from ${t.event_runs}
-           where trigger_id = ${triggerId} and thread = ${thread} and not would_filter
+           where trigger_id = ${triggerId} and thread = ${thread}
+             and (not ${trial} or not would_filter)
              and started_at > now() - make_interval(days => ${days})) as seen`;
       return row.seen;
     },
