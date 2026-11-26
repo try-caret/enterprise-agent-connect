@@ -335,8 +335,9 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   }
 
   /** What the trigger's conditions read besides the event: the connection's own account, only
-   *  when a condition names {self} (an Error when the app does not say, as for fromSelf), and
-   *  whether the thread was seen, only for `seen`. */
+   *  when a condition names {self} (an Error when the app does not say and one that holds the run
+   *  back names it, as for fromSelf; a trial's then matches nobody), and whether the thread was
+   *  seen, only for `seen`. */
   async function conditionContext(
     org: string,
     connector: Connector,
@@ -344,12 +345,13 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     thread: string | null,
   ): Promise<ConditionContext | Error> {
     let self: string | null = null;
-    if (namesSelf(trigger.conditions)) {
-      if (!connector.events!.self)
-        return new Error(`${connector.name} does not say who its connection is, for {self}`);
-      const id = await selfId(org, connector);
-      if (id instanceof Error) return id;
-      self = id;
+    const enforced = namesSelf(trigger.conditions);
+    if (enforced || namesSelf(trigger.conditions, true)) {
+      const id = connector.events!.self
+        ? await selfId(org, connector)
+        : new Error(`${connector.name} does not say who its connection is, for {self}`);
+      if (id instanceof Error && enforced) return id;
+      self = id instanceof Error ? null : id;
     }
     const look = async (trial: boolean) => {
       const seen = new Map<number, boolean>();

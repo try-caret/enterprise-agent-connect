@@ -1042,7 +1042,12 @@ const eventsSchema = z
         z
           .object({
             path: eventPath.refine((p) => !p.includes("[]"), "A pattern reads one text"),
-            match: z.string().min(1).max(200).refine(validRegex, "A match is a valid pattern"),
+            match: z
+              .string()
+              .min(1)
+              .max(200)
+              .refine(validRegex, "A match is a valid pattern")
+              .refine((m) => !/\)[*+?{]/.test(m), "A match repeats no group (it could run long)"),
           })
           .strict(),
       ]),

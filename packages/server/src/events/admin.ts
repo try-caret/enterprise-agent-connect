@@ -286,7 +286,7 @@ export function createEventsAdmin(deps: {
         throw new InvalidInput(
           `${connector.name} events have no field ${unknownField}; they have ${fields.join(", ")}`,
         );
-      if (namesSelf(rest.conditions) && !declared.self)
+      if ((namesSelf(rest.conditions) || namesSelf(rest.conditions, true)) && !declared.self)
         throw new InvalidInput(`${connector.name} does not say who its connection is, for {self}`);
       const seenChecks = [...seenDays(rest.conditions), ...seenDays(rest.conditions, true)];
       if (seenChecks.length && !declared.thread)

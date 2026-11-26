@@ -16,6 +16,8 @@ export type EventData = Record<string, Scalar | Scalar[] | null>;
 const MAX_TEXT = 2000;
 const MAX_LIST = 50;
 const MAX_MATCH = 500;
+// How much of a text a pattern reads: a long comment's mentions, and no more.
+const MAX_PATTERN_TEXT = 100_000;
 const isScalar = (v: unknown): v is Scalar =>
   typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 
@@ -113,8 +115,9 @@ export const threadId = (triggerId: string, value: string) =>
 export const bodyHash = (body: Buffer) => createHash("sha256").update(body).digest("hex");
 
 /** A field the connector keeps: a path, a list of paths whose first with a value is taken, or
- *  the matches of a pattern in a text (its first group, each once), read before the text is cut
- *  (Jira mentions anywhere in a long comment). */
+ *  the matches of a pattern in a text (the first group that matched, each once), read before the
+ *  text is cut (Jira mentions anywhere in a long comment). An object (a Jira document body) is
+ *  read as its JSON text. */
 export type FieldSpec = string | string[] | { path: string; match: string };
 
 /** The fields the connector keeps: all an agent, a condition or a limit ever reads. */
@@ -133,11 +136,17 @@ export function pickFields(fields: Record<string, FieldSpec>, body: unknown): Ev
   );
 }
 
-function matches(text: unknown, pattern: string): string[] | null {
-  if (typeof text !== "string") return null;
+function matches(value: unknown, pattern: string): string[] | null {
+  const text =
+    typeof value === "string"
+      ? value
+      : value && typeof value === "object"
+        ? JSON.stringify(value)
+        : null;
+  if (text === null) return null;
   const found = new Set<string>();
-  for (const m of text.matchAll(new RegExp(pattern, "g"))) {
-    const v = m[1] ?? m[0];
+  for (const m of text.slice(0, MAX_PATTERN_TEXT).matchAll(new RegExp(pattern, "g"))) {
+    const v = m.slice(1).find((g) => g !== undefined) ?? m[0];
     if (v) found.add(v.slice(0, MAX_MATCH));
     if (found.size >= MAX_LIST) break;
   }
@@ -180,7 +189,7 @@ export type ConditionContext = {
   trialSeen?: (days: number) => boolean | null;
 };
 
-const WORD_EDGE = /[A-Za-z0-9]/;
+const WORD_EDGE = /[\p{Script=Latin}0-9]/u;
 const LETTER = /[\p{L}\p{N}]/u;
 
 /** Whether a word or phrase is in the text, ignoring case. An end of it that is a Latin letter
@@ -256,16 +265,15 @@ export function seenDays(conditions: Condition[], trial = false): number[] {
   );
 }
 
-/** Whether a condition's list names the app connection's own account. */
-export function namesSelf(conditions: Condition[]): boolean {
+/** Whether a condition's list names the app connection's own account: one that holds the run
+ *  back, or (trial) one inside `logOnly`. */
+export function namesSelf(conditions: Condition[], trial = false): boolean {
   return conditions.some((c) =>
     "anyOf" in c
-      ? namesSelf(c.anyOf)
+      ? namesSelf(c.anyOf, trial)
       : "logOnly" in c
-        ? namesSelf(c.logOnly)
-        : "in" in c
-          ? c.in.includes("{self}")
-          : "notIn" in c && c.notIn.includes("{self}"),
+        ? trial && namesSelf(c.logOnly)
+        : !trial && ("in" in c ? c.in : "notIn" in c ? c.notIn : []).includes("{self}"),
   );
 }
 

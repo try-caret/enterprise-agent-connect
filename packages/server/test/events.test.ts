@@ -494,6 +494,11 @@ test(
     await t.deliver(subscription.id, secret!, item({ actor: undefined, comment }));
     assert.equal(f.started.length, 0);
     assert.ok((await t.audit()).some((l) => /failed Not started: Notes did not say/.test(l)));
+
+    // Inside logOnly, {self} then matches nobody, and the run starts.
+    await t.trigger({ conditions: [{ logOnly: [{ field: "mentions", in: ["{self}"] }] }] });
+    await t.deliver(subscription.id, secret!, item({ actor: undefined, comment }));
+    assert.equal(f.started.length, 1);
   },
 );
 

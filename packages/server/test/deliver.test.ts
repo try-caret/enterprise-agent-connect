@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   eventPrompt,
@@ -112,6 +113,8 @@ test("contains: whole Latin words, ignoring case; other scripts anywhere; except
   assert.ok(hasWord("BOF HR INFO - US - Terminate", "bof hr info"), "a phrase");
   assert.ok(hasWord("OSがフリーズした", "フリーズ"), "Japanese has no spaces");
   assert.ok(hasWord("המחשב לא עובד", "מחשב"), "Hebrew takes prefixes");
+  assert.ok(hasWord("Le café est fermé", "café"));
+  assert.ok(!hasWord("cafétéria", "café"), "an accented Latin end is a word end too");
   const data = { summary: "Printer jammed", labels: ["x", "Laptop-Agent"] };
   assert.equal(failedCondition([{ field: "labels", contains: ["laptop-agent"] }], data), null);
   assert.equal(
@@ -173,6 +176,29 @@ test("a pattern field keeps each match of the whole text, before any cut", () =>
   assert.deepEqual(data.mentions, ["557058:abc-1", "u2"]);
   assert.equal((data.comment as string).length, 2000);
   assert.equal(data.none, null);
+});
+
+test("Jira mentions are read from a text comment and from a document comment", () => {
+  const jira = JSON.parse(
+    readFileSync(new URL("../../../connectors/jira/connector.json", import.meta.url), "utf8"),
+  );
+  const mentions = { mentions: jira.events.fields.mentions };
+  const text = pickFields(mentions, { comment: { body: "[~accountid:712020:a-1] look" } });
+  assert.deepEqual(text.mentions, ["712020:a-1"]);
+  const doc = {
+    type: "doc",
+    version: 1,
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "mention", attrs: { id: "712020:a-1", text: "@Agents" } },
+          { type: "text", text: " look" },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(pickFields(mentions, { comment: { body: doc } }).mentions, ["712020:a-1"]);
 });
 
 test("fill puts a list where a whole placeholder stood, text elsewhere", () => {

@@ -289,7 +289,7 @@ refuses unless exactly 0009-0013 are applied. Checked on Postgres 17 against the
 package: the schema after it equals a fresh 0.3.0 install, 0.3.0 starts and reads its rows back,
 and migrating forward again equals a fresh install of this version. `rollback/to-0.4.0.sql`
 undoes 0014 (drops `event_runs.would_filter`); it refuses unless exactly 0014 is applied, or while
-a trigger holds a condition 0.4.0 cannot read (contains, anyOf, seen, logOnly).
+a trigger holds a condition 0.4.0 cannot read (contains, anyOf, seen, logOnly) or `{self}`.
 
 ## Deploy
 

@@ -177,7 +177,8 @@ All conditions must hold. Each is one of:
 
 - `{"field": f, "in": [...]}` / `{"field": f, "notIn": [...]}`: exact values (any item of a list).
   `"{self}"` in the list is the app connection's own account (its `events.self`); when the app
-  does not say who that is, the trigger starts nothing and the audit says why.
+  does not say who that is, the trigger starts nothing and the audit says why (inside `logOnly`,
+  `{self}` then matches nobody and the run starts).
 - `{"field": f, "contains": [...]}`: a word or phrase in the text, ignoring case. An end that is a
   Latin letter or digit must end a word (`pc` is not in `npc`); other scripts match anywhere. With
   `"except": [...]`, a value that also has one of those does not match
@@ -191,8 +192,10 @@ All conditions must hold. Each is one of:
   then drop the wrapper to enforce it.
 
 Filtered events are audited `Filtered: ...` and never count against the caps. Jira `mentions`
-are the account ids a comment mentions (`[~accountid:...]`), read from the whole comment;
-`request_type` is Jira Service Management's request type (`customfield_10010`). Jira comment
+are the account ids a comment mentions (`[~accountid:...]` in text, or mention nodes in a
+document body), read from the whole comment;
+`request_type` is Jira Service Management's request type (`customfield_10010`, the usual id;
+a site whose request type field has another id does not get it). Jira comment
 events carry fewer issue fields than issue events (no labels or request type), so put `seen`
 next to field conditions in an `anyOf` to keep a thread's comments.
 
@@ -205,8 +208,9 @@ next to field conditions in an `anyOf` to keep a thread's comments.
 ]}]
 ```
 
-Save conditions of the new kinds only once every replica runs this version: an older one cannot
-read them and starts nothing for that trigger.
+Save conditions of the new kinds only once every replica runs this version: an older one does
+not know them, lets the trigger's events through (`anyOf`, `seen`, `logOnly`) or fails on them
+(`contains`, logged but not audited), and takes `{self}` as text.
 
 With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
 each run is a signed POST of `{type: "event", run, delivery, agent, app, event, deliveryId, thread,
