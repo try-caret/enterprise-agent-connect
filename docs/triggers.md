@@ -178,7 +178,9 @@ All conditions must hold. Each is one of:
 - `{"field": f, "in": [...]}` / `{"field": f, "notIn": [...]}`: exact values (any item of a list).
   `"{self}"` in the list is the app connection's own account (Jira: the agent's account id).
 - `{"field": f, "contains": [...]}`: a word or phrase in the text, ignoring case. An end that is a
-  Latin letter or digit must end a word (`pc` is not in `npc`); other scripts match anywhere.
+  Latin letter or digit must end a word (`pc` is not in `npc`); other scripts match anywhere. With
+  `"except": [...]`, a value that also has one of those does not match
+  (`"contains": ["laptop"], "except": ["laptop shipment for"]`).
 - `{"seen": {"days": n}}`: this trigger started a run on the event's thread (Jira: the issue)
   within n days. Runs that log-only conditions would have filtered do not count.
 - `{"anyOf": [...]}`: one of the field conditions or `seen` inside holds.
@@ -188,13 +190,13 @@ All conditions must hold. Each is one of:
 
 Filtered events are audited `Filtered: ...` and never count against the caps. Jira `mentions`
 are the account ids a comment mentions (`[~accountid:...]`), read from the whole comment;
-`request_type` is Jira Service Management's request type (`customfield_10010`). Comment events
-from Jira carry fewer issue fields than issue events (no labels or request type), so put
-`seen` next to field conditions in an `anyOf` to keep a thread's comments.
+`request_type` is Jira Service Management's request type (`customfield_10010`). Jira comment
+events carry fewer issue fields than issue events (no labels or request type), so put `seen`
+next to field conditions in an `anyOf` to keep a thread's comments.
 
 ```json
 "conditions": [{"anyOf": [
-  {"field": "summary", "contains": ["laptop", "computer", "bsod"]},
+  {"field": "summary", "contains": ["laptop", "computer"], "except": ["laptop shipment for"]},
   {"field": "request_type", "in": ["Hardware Issue"]},
   {"field": "mentions", "in": ["{self}"]},
   {"seen": {"days": 30}}

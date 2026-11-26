@@ -7,14 +7,7 @@ import {
 import { tokensEqual } from "../secrets.js";
 import type { AuditEntry } from "../store.js";
 import { readCappedBytes } from "../teams/runtime.js";
-import {
-  fill,
-  pickFields,
-  rawAt,
-  valueAt,
-  type EventData,
-  type FieldSpec,
-} from "./deliver.js";
+import { fill, pickFields, rawAt, valueAt, type EventData, type FieldSpec } from "./deliver.js";
 import type { EventsStore, SubscriptionRow, WatchRow } from "./store.js";
 
 // Microsoft Graph change notifications as an event source (a connector's `events.graph`,
@@ -43,23 +36,15 @@ const TURN_WAIT_MS = 15_000;
  *  wait for its turn. */
 export class SubscriptionBusy extends ConnectError {
   constructor() {
-    super(
-      "Another change to this app's events is still being made. Try again in a minute.",
-    );
+    super("Another change to this app's events is still being made. Try again in a minute.");
   }
 }
 
 export type GraphDeps = {
   events: EventsStore;
   publicUrl: string | null;
-  appCall(
-    org: string,
-    app: string,
-    request: VendorRequest,
-  ): Promise<VendorResponse | null>;
-  audit(
-    entry: Omit<AuditEntry, "vendorStatus"> & { vendorStatus?: number | null },
-  ): Promise<void>;
+  appCall(org: string, app: string, request: VendorRequest): Promise<VendorResponse | null>;
+  audit(entry: Omit<AuditEntry, "vendorStatus"> & { vendorStatus?: number | null }): Promise<void>;
   delivery(
     sub: SubscriptionRow,
     target: string,
@@ -81,8 +66,7 @@ export type GraphDeps = {
 const lower = (v: unknown) => String(v).toLowerCase();
 const listOf = (v: EventData[string] | undefined) =>
   v === null || v === undefined ? [] : Array.isArray(v) ? v : [v];
-const ok = (res: VendorResponse | null) =>
-  res !== null && res.status >= 200 && res.status < 300;
+const ok = (res: VendorResponse | null) => res !== null && res.status >= 200 && res.status < 300;
 const why = (res: VendorResponse | null) => {
   if (!res) return "the app is not connected";
   const message = rawAt(res.data, "error.message");
@@ -90,9 +74,7 @@ const why = (res: VendorResponse | null) => {
 };
 // A key with dots in it, as Graph's "@odata.nextLink".
 const prop = (data: unknown, name: string) =>
-  data && typeof data === "object"
-    ? (data as Record<string, unknown>)[name]
-    : undefined;
+  data && typeof data === "object" ? (data as Record<string, unknown>)[name] : undefined;
 // Graph's next and delta links are absolute; only their path and query are kept, so a call
 // with one stays on the app's own origin.
 const pathOf = (link: string) => {
@@ -113,9 +95,7 @@ export function graphItem(
     const got = from.flatMap((f) => listOf(data[f]));
     data[name] = got.length > 0 && got.every((v) => lower(v) === lower(value));
   }
-  const own = g.own.some((f) =>
-    listOf(data[f]).some((v) => lower(v) === lower(value)),
-  );
+  const own = g.own.some((f) => listOf(data[f]).some((v) => lower(v) === lower(value)));
   return { data, own };
 }
 
@@ -123,20 +103,11 @@ export function createGraphSource(deps: GraphDeps) {
   const { events } = deps;
   const urlOf = (sub: SubscriptionRow) => `${deps.publicUrl}/events/${sub.id}`;
   // Under the subscription's lease, `signal` stops the work once another process took it over.
-  const call = (
-    sub: SubscriptionRow,
-    request: VendorRequest,
-    signal?: AbortSignal,
-  ) => {
+  const call = (sub: SubscriptionRow, request: VendorRequest, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     return deps.appCall(sub.organizationId, sub.connectorId, request);
   };
-  const failed = (
-    sub: SubscriptionRow,
-    target: string,
-    reason: string,
-    status?: number,
-  ) =>
+  const failed = (sub: SubscriptionRow, target: string, reason: string, status?: number) =>
     deps.audit({
       organizationId: sub.organizationId,
       agentId: null,
@@ -160,11 +131,7 @@ export function createGraphSource(deps: GraphDeps) {
 
   /** POST /events/:subscription for a Graph subscription: the validation handshake, or a
    *  batch of notifications, each proven by its clientState. */
-  async function inbound(
-    sub: SubscriptionRow,
-    connector: Connector,
-    req: Request,
-  ) {
+  async function inbound(sub: SubscriptionRow, connector: Connector, req: Request) {
     const token = new URL(req.url).searchParams.get("validationToken");
     // Graph's check that the address answers, sent before the subscription exists here, so
     // it proves nothing and starts nothing: the token is echoed as plain text.
@@ -196,78 +163,45 @@ export function createGraphSource(deps: GraphDeps) {
       return typeof state === "string" && tokensEqual(state, secret);
     });
     if (proven.length < items.length)
-      await deps.refused(
-        sub,
-        "Refused: a notification's clientState did not match",
-      );
+      await deps.refused(sub, "Refused: a notification's clientState did not match");
     if (!proven.length) return new Response(null, { status: 401 });
     for (const n of proven) later(notified(sub, connector, n));
     return new Response(null, { status: 202 });
   }
 
-  async function notified(
-    sub: SubscriptionRow,
-    connector: Connector,
-    n: unknown,
-  ) {
+  async function notified(sub: SubscriptionRow, connector: Connector, n: unknown) {
     const g = connector.events!.graph!;
     const remoteId = rawAt(n, "subscriptionId");
     const watch =
-      typeof remoteId === "string"
-        ? await events.watchByRemote(sub.id, remoteId)
-        : null;
+      typeof remoteId === "string" ? await events.watchByRemote(sub.id, remoteId) : null;
     // A Graph subscription removed here lapses on its own.
     if (!watch) return;
     const lifecycle = rawAt(n, "lifecycleEvent");
     if (typeof lifecycle === "string") {
-      await deps.delivery(
-        sub,
-        `${lifecycle} ${watch.value}`,
-        "allowed",
-        `Lifecycle: ${lifecycle}`,
-      );
+      await deps.delivery(sub, `${lifecycle} ${watch.value}`, "allowed", `Lifecycle: ${lifecycle}`);
       // A sync may be subscribing this watch right now, and may have replaced it by its turn.
       return inTurn(sub, async (signal) => {
         const now = await events.watchByRemote(sub.id, watch.remoteId!);
         if (!now) return;
-        if (lifecycle === "reauthorizationRequired")
-          await subscribe(sub, g, now, signal);
+        if (lifecycle === "reauthorizationRequired") await subscribe(sub, g, now, signal);
         else if (lifecycle === "subscriptionRemoved") {
-          await events.watchSubscribed(
-            now.id,
-            null,
-            null,
-            "Removed by Microsoft",
-          );
+          await events.watchSubscribed(now.id, null, null, "Removed by Microsoft");
           await subscribe(sub, g, { ...now, remoteId: null }, signal);
           await catchUp(sub, connector, now, signal);
-        } else if (lifecycle === "missed")
-          await catchUp(sub, connector, now, signal);
+        } else if (lifecycle === "missed") await catchUp(sub, connector, now, signal);
       }).catch(async (error) => {
         if (!(error instanceof SubscriptionBusy)) throw error;
         // Left to the scheduler's next round, which renews a watch with no expiry, subscribes
         // one with no Graph subscription and catches every watch up.
-        if (
-          lifecycle === "reauthorizationRequired" ||
-          lifecycle === "subscriptionRemoved"
-        )
-          await events.watchLapsed(
-            watch.id,
-            watch.remoteId!,
-            lifecycle === "subscriptionRemoved",
-          );
+        if (lifecycle === "reauthorizationRequired" || lifecycle === "subscriptionRemoved")
+          await events.watchLapsed(watch.id, watch.remoteId!, lifecycle === "subscriptionRemoved");
         await events.pollSoon(sub.id);
       });
     }
     await events.watchNotified(watch.id);
     const id = rawAt(n, "resourceData.id");
     if (typeof id !== "string" || !id || id.length > MAX_ID)
-      return deps.delivery(
-        sub,
-        `unknown ${watch.value}`,
-        "denied",
-        "Ignored: no item id",
-      );
+      return deps.delivery(sub, `unknown ${watch.value}`, "denied", "Ignored: no item id");
     const res = await call(sub, {
       ...g.read,
       path: fill(g.read.path, {
@@ -278,14 +212,8 @@ export function createGraphSource(deps: GraphDeps) {
     // Gone already (moved or deleted): nothing to start on. Any other failure is read again
     // by the next catch-up.
     if (res?.status === 404)
-      return deps.delivery(
-        sub,
-        `${g.type} ${id}`,
-        "denied",
-        "Ignored: the item is gone",
-      );
-    if (!ok(res))
-      return failed(sub, `read ${watch.value}`, why(res), res?.status);
+      return deps.delivery(sub, `${g.type} ${id}`, "denied", "Ignored: the item is gone");
+    if (!ok(res)) return failed(sub, `read ${watch.value}`, why(res), res?.status);
     await offer(sub, connector, watch, res!.data, false);
   }
 
@@ -300,18 +228,10 @@ export function createGraphSource(deps: GraphDeps) {
     const body = { [g.wrap]: item, [g.per]: watch.value };
     const received = Date.parse(String(valueAt(body, g.received)));
     // Not news: from before the watch started (a message moved back in), or too old.
-    if (!(
-      received >= Date.parse(watch.createdAt) && received > Date.now() - NEWS_MS
-    ))
-      return;
+    if (!(received >= Date.parse(watch.createdAt) && received > Date.now() - NEWS_MS)) return;
     const deliveryId = valueAt(body, g.deliveryId);
     if (typeof deliveryId !== "string" || !deliveryId) return;
-    const { data, own } = graphItem(
-      g,
-      connector.events!.fields,
-      watch.value,
-      item,
-    );
+    const { data, own } = graphItem(g, connector.events!.fields, watch.value, item);
     if (own) {
       if (!quiet)
         await deps.delivery(
@@ -371,21 +291,11 @@ export function createGraphSource(deps: GraphDeps) {
     );
     const remoteId = ok(res) ? rawAt(res!.data, "id") : null;
     if (typeof remoteId !== "string") {
-      await events.watchSubscribed(
-        watch.id,
-        null,
-        null,
-        `Subscribing: ${why(res)}`,
-      );
+      await events.watchSubscribed(watch.id, null, null, `Subscribing: ${why(res)}`);
       return res?.status;
     }
     const at = rawAt(res!.data, "expirationDateTime");
-    await events.watchSubscribed(
-      watch.id,
-      remoteId,
-      typeof at === "string" ? at : expires,
-      null,
-    );
+    await events.watchSubscribed(watch.id, remoteId, typeof at === "string" ? at : expires, null);
     return undefined;
   }
 
@@ -405,11 +315,7 @@ export function createGraphSource(deps: GraphDeps) {
         since: watch.createdAt,
       }) as string);
     for (let page = 0; page < DELTA_PAGES; page++) {
-      const res = await call(
-        sub,
-        { method: g.delta.method, path: link } as VendorRequest,
-        signal,
-      );
+      const res = await call(sub, { method: g.delta.method, path: link } as VendorRequest, signal);
       // A delta link Graph no longer knows: start again from the watch's start.
       if (res?.status === 410) {
         await events.watchCaughtUp(watch.id, null);
@@ -425,17 +331,9 @@ export function createGraphSource(deps: GraphDeps) {
         await offer(sub, connector, watch, item, true);
       const next = prop(res!.data, "@odata.nextLink");
       const delta = prop(res!.data, "@odata.deltaLink");
-      const after =
-        typeof next === "string"
-          ? next
-          : typeof delta === "string"
-            ? delta
-            : null;
+      const after = typeof next === "string" ? next : typeof delta === "string" ? delta : null;
       if (!after) {
-        await events.watchFailed(
-          watch.id,
-          "Catching up: Microsoft gave no next or delta link",
-        );
+        await events.watchFailed(watch.id, "Catching up: Microsoft gave no next or delta link");
         await failed(sub, `delta ${watch.value}`, "No next or delta link");
         return undefined;
       }
@@ -449,11 +347,7 @@ export function createGraphSource(deps: GraphDeps) {
 
   // The values of the `per` limit agents with a trigger on hold now.
   async function wanted(sub: SubscriptionRow, g: Graph) {
-    const raw = await events.watchedValues(
-      sub.organizationId,
-      sub.connectorId,
-      g.per,
-    );
+    const raw = await events.watchedValues(sub.organizationId, sub.connectorId, g.per);
     return new Set(
       raw
         .flatMap((v) => (Array.isArray(v) ? v : [v]))
@@ -461,18 +355,11 @@ export function createGraphSource(deps: GraphDeps) {
     );
   }
 
-  async function release(
-    sub: SubscriptionRow,
-    watch: WatchRow,
-    signal: AbortSignal,
-  ) {
+  async function release(sub: SubscriptionRow, watch: WatchRow, signal: AbortSignal) {
     if (watch.remoteId) {
       const res = await call(
         sub,
-        {
-          method: "DELETE",
-          path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}`,
-        },
+        { method: "DELETE", path: `${SUBSCRIPTIONS}/${encodeURIComponent(watch.remoteId)}` },
         signal,
       );
       // It lapses at its expiry anyway, and its notifications find no watch here.
@@ -487,11 +374,7 @@ export function createGraphSource(deps: GraphDeps) {
   /** Watches exactly the values agents with a trigger hold, renews subscriptions past half their
    *  life, and catches each one up. Answers the first failing watch's error and the HTTP status of
    *  this round's first refused call. */
-  async function syncOnce(
-    sub: SubscriptionRow,
-    connector: Connector,
-    signal: AbortSignal,
-  ) {
+  async function syncOnce(sub: SubscriptionRow, connector: Connector, signal: AbortSignal) {
     const g = connector.events!.graph!;
     const want = await wanted(sub, g);
     for (const w of await events.watches(sub.id))
@@ -500,11 +383,7 @@ export function createGraphSource(deps: GraphDeps) {
     const halfLife = (g.maxMinutes * 60_000) / 2;
     let status: number | undefined;
     for (const w of await events.watches(sub.id)) {
-      if (
-        !w.remoteId ||
-        !w.expiresAt ||
-        Date.parse(w.expiresAt) - Date.now() < halfLife
-      ) {
+      if (!w.remoteId || !w.expiresAt || Date.parse(w.expiresAt) - Date.now() < halfLife) {
         const refused = await subscribe(sub, g, w, signal);
         status ??= refused;
       }
@@ -513,9 +392,7 @@ export function createGraphSource(deps: GraphDeps) {
     }
     const errors = (await events.watches(sub.id)).filter((w) => w.lastError);
     return {
-      error: errors.length
-        ? `${errors[0].value}: ${errors[0].lastError}`
-        : null,
+      error: errors.length ? `${errors[0].value}: ${errors[0].lastError}` : null,
       status,
     };
   }
@@ -527,17 +404,10 @@ export function createGraphSource(deps: GraphDeps) {
   // (each call its own), not a lock held on one of the pool's few connections. One that loses it
   // (stalled past its term, another took it) makes no further Graph call. Waiting for the turn
   // gives up after TURN_WAIT_MS with SubscriptionBusy.
-  async function inTurn<T>(
-    sub: SubscriptionRow,
-    work: (signal: AbortSignal) => Promise<T>,
-  ) {
+  async function inTurn<T>(sub: SubscriptionRow, work: (signal: AbortSignal) => Promise<T>) {
     const until = Date.now() + TURN_WAIT_MS;
     for (;;) {
-      const done = await events.withLease(
-        `graph-sync:${sub.id}`,
-        LEASE_SECONDS,
-        work,
-      );
+      const done = await events.withLease(`graph-sync:${sub.id}`, LEASE_SECONDS, work);
       if (done) return done.value;
       if (Date.now() >= until) throw new SubscriptionBusy();
       await new Promise((r) => setTimeout(r, LEASE_WAIT_MS));
@@ -555,8 +425,7 @@ export function createGraphSource(deps: GraphDeps) {
      *  that nothing would delete. SubscriptionBusy (the admin's "try again") past the wait. */
     releaseAll: <T>(sub: SubscriptionRow, remove: () => Promise<T>) =>
       inTurn(sub, async (signal) => {
-        for (const w of await events.watches(sub.id))
-          await release(sub, w, signal);
+        for (const w of await events.watches(sub.id)) await release(sub, w, signal);
         return remove();
       }),
     async settle() {

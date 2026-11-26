@@ -6565,6 +6565,16 @@
                                     "minLength": 1,
                                     "maxLength": 100
                                   }
+                                },
+                                "except": {
+                                  "minItems": 1,
+                                  "maxItems": 100,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
                                 }
                               },
                               "required": [
@@ -6662,6 +6672,16 @@
                                           "contains": {
                                             "minItems": 1,
                                             "maxItems": 200,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 100
+                                            }
+                                          },
+                                          "except": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
                                             "type": "array",
                                             "items": {
                                               "type": "string",
@@ -6780,6 +6800,16 @@
                                               "minLength": 1,
                                               "maxLength": 100
                                             }
+                                          },
+                                          "except": {
+                                            "minItems": 1,
+                                            "maxItems": 100,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 100
+                                            }
                                           }
                                         },
                                         "required": [
@@ -6877,6 +6907,16 @@
                                                     "contains": {
                                                       "minItems": 1,
                                                       "maxItems": 200,
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 100
+                                                      }
+                                                    },
+                                                    "except": {
+                                                      "minItems": 1,
+                                                      "maxItems": 100,
                                                       "type": "array",
                                                       "items": {
                                                         "type": "string",
@@ -11953,6 +11993,12 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "except": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       },
                       "required": [
@@ -12038,6 +12084,12 @@
                                     "type": "string"
                                   },
                                   "contains": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "except": {
                                     "type": "array",
                                     "items": {
                                       "type": "string"
@@ -12140,6 +12192,12 @@
                                     "items": {
                                       "type": "string"
                                     }
+                                  },
+                                  "except": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
                                   }
                                 },
                                 "required": [
@@ -12225,6 +12283,12 @@
                                               "type": "string"
                                             },
                                             "contains": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "except": {
                                               "type": "array",
                                               "items": {
                                                 "type": "string"

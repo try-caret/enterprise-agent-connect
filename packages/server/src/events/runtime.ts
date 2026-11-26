@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  effectiveCapabilities,
-  type Connector,
-} from "../../../connector-kit/src/connector.js";
+import { effectiveCapabilities, type Connector } from "../../../connector-kit/src/connector.js";
 import {
   ConnectError,
   type VendorRequest,
@@ -93,11 +90,7 @@ export type EventsRuntimeDeps = {
   // Apps with `events`, by id.
   connectors: Map<string, Connector>;
   // A call with the organization's own connection; null when the app is not connected.
-  appCall(
-    org: string,
-    app: string,
-    request: VendorRequest,
-  ): Promise<VendorResponse | null>;
+  appCall(org: string, app: string, request: VendorRequest): Promise<VendorResponse | null>;
   runners: Map<string, TriggerRunner>;
   // Where Graph sends notifications.
   publicUrl: string | null;
@@ -129,14 +122,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     return events.polled(sub.id, cursor, error);
   };
 
-  const audit = (
-    entry: Omit<AuditEntry, "vendorStatus"> & { vendorStatus?: number | null },
-  ) =>
-    deps.store.audit({
-      vendorStatus: null,
-      ...entry,
-      reason: entry.reason?.slice(0, 500) ?? null,
-    });
+  const audit = (entry: Omit<AuditEntry, "vendorStatus"> & { vendorStatus?: number | null }) =>
+    deps.store.audit({ vendorStatus: null, ...entry, reason: entry.reason?.slice(0, 500) ?? null });
   const delivery = (
     sub: SubscriptionRow,
     target: string,
@@ -171,10 +158,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
 
   /** POST /events/:subscription. The proof is checked on the raw body before anything in it
    *  is read; accepted deliveries are queued and answered at once. */
-  async function inbound(
-    subscriptionId: string,
-    req: Request,
-  ): Promise<Response> {
+  async function inbound(subscriptionId: string, req: Request): Promise<Response> {
     if (req.headers.has("origin")) return reply(403);
     const sub = await events.subscription(subscriptionId);
     const connector = sub ? connectors.get(sub.connectorId) : undefined;
@@ -197,8 +181,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     }
     const type = locate(hook.type, body, req.headers);
     const deliveryId =
-      (hook.deliveryId && locate(hook.deliveryId, body, req.headers)) ||
-      bodyHash(raw);
+      (hook.deliveryId && locate(hook.deliveryId, body, req.headers)) || bodyHash(raw);
     if (hook.timestamp && !fresh(hook.timestamp, body, req.headers)) {
       await delivery(
         sub,
@@ -209,22 +192,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       return reply(200);
     }
     const handshake = hook.handshake;
-    if (
-      handshake &&
-      locate(handshake.at, body, req.headers) === handshake.equals
-    ) {
+    if (handshake && locate(handshake.at, body, req.headers) === handshake.equals) {
       const echo = valueAt(body, handshake.echo);
       if (typeof echo !== "string") return reply(400);
-      await delivery(
-        sub,
-        handshake.equals,
-        "allowed",
-        "Answered the app's check of the address",
-      );
-      return new Response(echo, {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      });
+      await delivery(sub, handshake.equals, "allowed", "Answered the app's check of the address");
+      return new Response(echo, { status: 200, headers: { "content-type": "text/plain" } });
     }
     await accept(
       sub,
@@ -249,16 +221,8 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   ) {
     const target = `${type ?? "unknown"} ${deliveryId}`;
     if (!type || !connector.events!.types.some((t) => t.id === type))
-      return delivery(
-        sub,
-        target,
-        "denied",
-        "Ignored: not an event type this app declares",
-      );
-    const sealed = key.seal(
-      { data: JSON.stringify(data) },
-      eventAad(sub.id, deliveryId),
-    );
+      return delivery(sub, target, "denied", "Ignored: not an event type this app declares");
+    const sealed = key.seal({ data: JSON.stringify(data) }, eventAad(sub.id, deliveryId));
     const id = await events.insertEvent({
       subscriptionId: sub.id,
       deliveryId,
@@ -268,12 +232,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     });
     if (!id) {
       if (!quietDuplicates)
-        await delivery(
-          sub,
-          target,
-          "denied",
-          "Ignored: already received (a retry or a replay)",
-        );
+        await delivery(sub, target, "denied", "Ignored: already received (a retry or a replay)");
       return;
     }
     await delivery(sub, target, "allowed", "Received");
@@ -319,10 +278,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         eventAad(event.subscriptionId, event.deliveryId),
       ).data,
     ) as EventData;
-    const triggers = await events.triggersFor(
-      event.organizationId,
-      event.connectorId,
-    );
+    const triggers = await events.triggersFor(event.organizationId, event.connectorId);
     if (!triggers.length) return "no triggers";
     const fields = connector.events.self?.fields ?? [];
     // Asked only when the event says who made it (a poll's records do not).
@@ -330,19 +286,13 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       ? await selfId(event.organizationId, connector)
       : null;
     const fromSelf =
-      self instanceof Error
-        ? self
-        : self !== null && fields.some((f) => data[f] === self);
+      self instanceof Error ? self : self !== null && fields.some((f) => data[f] === self);
     let started = 0;
     for (const trigger of triggers) {
       try {
-        if (await consider(event, connector, data, trigger, fromSelf))
-          started++;
+        if (await consider(event, connector, data, trigger, fromSelf)) started++;
       } catch (error) {
-        console.error(
-          `[events] trigger ${trigger.id} on event ${event.id}`,
-          error,
-        );
+        console.error(`[events] trigger ${trigger.id} on event ${event.id}`, error);
       }
     }
     return `${started} run(s) started`;
@@ -351,23 +301,13 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   // The app connection's own account id (connector `self`), cached an hour. An Error when the
   // app does not say: no run starts then, since an agent's own change would start it again.
   const selves = new Map<string, { id: string; at: number }>();
-  async function selfId(
-    org: string,
-    connector: Connector,
-  ): Promise<string | Error> {
+  async function selfId(org: string, connector: Connector): Promise<string | Error> {
     const self = connector.events!.self!;
     const k = `${org}:${connector.id}`;
     const hit = selves.get(k);
     if (hit && Date.now() - hit.at < SELF_TTL_MS) return hit.id;
-    const res = await deps.appCall(
-      org,
-      connector.id,
-      self.request as VendorRequest,
-    );
-    const id =
-      res && res.status >= 200 && res.status < 300
-        ? rawAt(res.data, self.id)
-        : null;
+    const res = await deps.appCall(org, connector.id, self.request as VendorRequest);
+    const id = res && res.status >= 200 && res.status < 300 ? rawAt(res.data, self.id) : null;
     if (typeof id !== "string")
       return new Error(
         `${connector.name} did not say which account the connection is (${res ? `it answered ${res.status}` : "not connected"}), so an agent's own change cannot be told apart. Check the connection has every scope its setup lists.`,
@@ -377,11 +317,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   }
 
   /** The trigger's id for the event's thread (connector `thread`), or null. */
-  function threadOf(
-    connector: Connector,
-    trigger: EventTriggerRow,
-    data: EventData,
-  ) {
+  function threadOf(connector: Connector, trigger: EventTriggerRow, data: EventData) {
     const field = connector.events!.thread;
     const value = field ? data[field] : null;
     return value === null || value === undefined || Array.isArray(value)
@@ -398,10 +334,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     thread: string | null,
   ): Promise<ConditionContext> {
     let self: string | null = null;
-    if (
-      connector.events!.self &&
-      JSON.stringify(trigger.conditions).includes('"{self}"')
-    ) {
+    if (connector.events!.self && JSON.stringify(trigger.conditions).includes('"{self}"')) {
       const id = await selfId(org, connector);
       self = typeof id === "string" ? id : null;
     }
@@ -409,10 +342,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (thread)
       for (const days of new Set(seenDays(trigger.conditions)))
         seen.set(days, await events.threadSeen(trigger.id, thread, days));
-    return {
-      self,
-      seen: (days) => (thread ? (seen.get(days) ?? false) : null),
-    };
+    return { self, seen: (days) => (thread ? (seen.get(days) ?? false) : null) };
   }
 
   /** Why the event may not start a run of the trigger, as the agent's access and the trigger
@@ -430,34 +360,18 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (!trigger.eventTypes.includes(eventType))
       return ["denied", "Filtered: not one of the trigger's event types"];
     const capabilities =
-      state?.agentStatus === "active" &&
-      state.grant &&
-      state.connection?.connected
-        ? effectiveCapabilities(
-            connector,
-            state.grant.capabilities,
-            state.connection.capabilities,
-          )
+      state?.agentStatus === "active" && state.grant && state.connection?.connected
+        ? effectiveCapabilities(connector, state.grant.capabilities, state.connection.capabilities)
         : [];
     if (!capabilities.length)
-      return [
-        "denied",
-        `Not started: the agent has no access to ${connector.name}`,
-      ];
-    const outside = outsideLimits(
-      connector.events!.limits,
-      data,
-      state!.grant!.limits,
-    );
+      return ["denied", `Not started: the agent has no access to ${connector.name}`];
+    const outside = outsideLimits(connector.events!.limits, data, state!.grant!.limits);
     if (outside) return ["denied", `Out of limits: ${outside}`];
     const failed = failedCondition(trigger.conditions, data, ctx);
     if (failed) return ["denied", `Filtered: ${failed}`];
     const runner = deps.runners.get(trigger.runner);
     if (!runner?.startEvent)
-      return [
-        "failed",
-        `Not started: this deployment cannot run ${trigger.runner}`,
-      ];
+      return ["failed", `Not started: this deployment cannot run ${trigger.runner}`];
     const unready = await runner.unready(org);
     if (unready) return ["failed", `Not started: ${unready}`];
     return null;
@@ -487,25 +401,13 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     };
     if (!trigger.eventTypes.includes(event.eventType))
       return decide("denied", "Filtered: not one of the trigger's event types");
-    if (fromSelf instanceof Error)
-      return decide("failed", `Not started: ${fromSelf.message}`);
+    if (fromSelf instanceof Error) return decide("failed", `Not started: ${fromSelf.message}`);
     if (fromSelf)
-      return decide(
-        "denied",
-        `Filtered: made by ${connector.name}'s own connection (an agent)`,
-      );
+      return decide("denied", `Filtered: made by ${connector.name}'s own connection (an agent)`);
     const org = event.organizationId;
     const thread = threadOf(connector, trigger, data);
     const ctx = await conditionContext(org, connector, trigger, thread);
-    const refused = await refusal(
-      org,
-      connector,
-      event.eventType,
-      data,
-      trigger,
-      state,
-      ctx,
-    );
+    const refused = await refusal(org, connector, event.eventType, data, trigger, state, ctx);
     if (refused) return decide(...refused);
     const runner = deps.runners.get(trigger.runner)!;
     // Log-only conditions: what enforcing them would filter is audited, and the run starts.
@@ -563,13 +465,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         deliveryId: event.deliveryId,
         data,
       }),
-      event: {
-        app: connector.id,
-        type: type.id,
-        deliveryId: event.deliveryId,
-        thread,
-        data,
-      },
+      event: { app: connector.id, type: type.id, deliveryId: event.deliveryId, thread, data },
     };
     return handOver(run, runner, trigger, sent, 1, Date.now());
   }
@@ -619,10 +515,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         event: sent.event,
       });
       await events.updateRun(run.runId, { state: "running", sessionId });
-      await runAudit(run, trigger.agentId)(
-        "allowed",
-        `Started run ${run.runId}${after}`,
-      );
+      await runAudit(run, trigger.agentId)("allowed", `Started run ${run.runId}${after}`);
       return true;
     } catch (error) {
       const at =
@@ -654,18 +547,14 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     attempts: number,
   ) {
     const why = error instanceof Error ? error.message : String(error);
-    if (!(error instanceof ConnectError))
-      console.error(`[events] run ${run.runId}`, error);
+    if (!(error instanceof ConnectError)) console.error(`[events] run ${run.runId}`, error);
     report("event_run_start_failed", error, {
       app: run.connectorId,
       org: run.org,
       agent: trigger.agentId,
       runner: trigger.runner,
     });
-    await events.updateRun(run.runId, {
-      state: "failed",
-      error: why.slice(0, 500),
-    });
+    await events.updateRun(run.runId, { state: "failed", error: why.slice(0, 500) });
     const after = attempts > 1 ? ` after ${attempts} attempts` : "";
     const reason = `Run ${run.runId} could not start: ${why}${after}`;
     await runAudit(run, trigger.agentId)("failed", reason);
@@ -677,9 +566,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     // Whatever stops a hand-over fails its run: left starting, it would be claimed again forever.
     await retry(row)
       .catch((error) => failStart(runOf(row, ""), row, error, row.attempts))
-      .catch((error) =>
-        console.error(`[events] retrying run ${row.id}`, error),
-      );
+      .catch((error) => console.error(`[events] retrying run ${row.id}`, error));
     return true;
   });
 
@@ -695,39 +582,26 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   // The next hand-over of a run the runner did not take, as the trigger stands now.
   async function retry(row: EventRetryRow) {
     const sent = JSON.parse(
-      key.open(
-        { ciphertext: row.delivery, keyId: row.deliveryKeyId },
-        deliveryAad(row.id),
-      ).delivery,
+      key.open({ ciphertext: row.delivery, keyId: row.deliveryKeyId }, deliveryAad(row.id))
+        .delivery,
     ) as Delivery;
     const [trigger, state] = await Promise.all([
       events.triggerById(row.triggerId),
       events.agentState(row.agentId, row.connectorId),
     ]);
     const run = runOf(row, state?.agentName ?? "");
-    const fail = (why: string) =>
-      failStart(run, row, new ConnectError(why), row.attempts);
+    const fail = (why: string) => failStart(run, row, new ConnectError(why), row.attempts);
     const since = Date.parse(row.startedAt);
-    if (Date.now() > since + retryWindowMs)
-      return fail("The runner did not take it in time");
+    if (Date.now() > since + retryWindowMs) return fail("The runner did not take it in time");
     const connector = connectors.get(row.connectorId);
-    if (!connector?.events)
-      return fail(`${row.connectorId} is no longer offered`);
+    if (!connector?.events) return fail(`${row.connectorId} is no longer offered`);
     if (!trigger || trigger.runner !== row.runner)
       return fail("Its trigger was turned off or changed runner");
     // Access may have changed while it waited. The caps were checked when it first came, and it
     // has held its place among them since, so they are not counted again.
     const data = sent.event.data as EventData;
     const ctx = await conditionContext(run.org, connector, trigger, row.thread);
-    const refused = await refusal(
-      run.org,
-      connector,
-      row.eventType,
-      data,
-      trigger,
-      state,
-      ctx,
-    );
+    const refused = await refusal(run.org, connector, row.eventType, data, trigger, state, ctx);
     if (refused) return fail(`No longer allowed: ${refused[1]}`);
     const runner = deps.runners.get(row.runner)!;
     await handOver(run, runner, trigger, sent, row.attempts + 1, since);
@@ -772,22 +646,15 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     const minutes =
       Math.max(
         1,
-        Math.ceil(
-          (Date.now() - (Number.isFinite(since) ? since : Date.now())) / 60_000,
-        ),
+        Math.ceil((Date.now() - (Number.isFinite(since) ? since : Date.now())) / 60_000),
       ) + 1;
     const request = fill(p.request, {
       minutes: String(minutes),
       cursor,
-      filter:
-        sub.filter && p.filter ? p.filter.replace("{value}", sub.filter) : "",
+      filter: sub.filter && p.filter ? p.filter.replace("{value}", sub.filter) : "",
     }) as VendorRequest;
     try {
-      const res = await deps.appCall(
-        sub.organizationId,
-        sub.connectorId,
-        request,
-      );
+      const res = await deps.appCall(sub.organizationId, sub.connectorId, request);
       if (!res) return polled(sub, null, `${connector!.name} is not connected`);
       if (res.status < 200 || res.status >= 300) {
         await audit({
@@ -801,13 +668,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
           reason: `${connector!.name} answered ${res.status}`,
           vendorStatus: res.status,
         });
-        return polled(
-          sub,
-          null,
-          `${connector!.name} answered ${res.status}`,
-          null,
-          res.status,
-        );
+        return polled(sub, null, `${connector!.name} answered ${res.status}`, null, res.status);
       }
       // ponytail: one page per poll; the next continues from the newest item read. More changes
       // than a page within the overlap minute would be read again and again: page then.
@@ -819,14 +680,10 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
           const at = valueAt(body, path);
           return typeof at === "string" && Date.parse(at) > since;
         };
-        const type =
-          p.types.find((t) => !t.since || after(t.since))?.type ?? null;
-        const deliveryId = p.deliveryId
-          .map((path) => String(valueAt(body, path) ?? ""))
-          .join("@");
+        const type = p.types.find((t) => !t.since || after(t.since))?.type ?? null;
+        const deliveryId = p.deliveryId.map((path) => String(valueAt(body, path) ?? "")).join("@");
         const at = valueAt(body, p.cursor);
-        if (typeof at === "string" && Date.parse(at) > Date.parse(newest))
-          newest = at;
+        if (typeof at === "string" && Date.parse(at) > Date.parse(newest)) newest = at;
         await accept(
           sub,
           connector!,
@@ -839,8 +696,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
       await events.polled(sub.id, newest, null);
     } catch (error) {
       console.error(`[events] poll ${sub.id}`, error);
-      const why =
-        error instanceof ConnectError ? error.message : "Internal error";
+      const why = error instanceof ConnectError ? error.message : "Internal error";
       await polled(sub, null, why, error);
     }
   }
@@ -850,11 +706,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
   async function sync(sub: SubscriptionRow): Promise<boolean> {
     const connector = connectors.get(sub.connectorId);
     if (!connector?.events?.graph) {
-      await polled(
-        sub,
-        null,
-        `${sub.connectorId} sends no Graph notifications`,
-      );
+      await polled(sub, null, `${sub.connectorId} sends no Graph notifications`);
       return true;
     }
     try {
@@ -863,8 +715,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     } catch (error) {
       if (error instanceof SubscriptionBusy) return false;
       console.error(`[events] graph sync ${sub.id}`, error);
-      const why =
-        error instanceof ConnectError ? error.message : "Internal error";
+      const why = error instanceof ConnectError ? error.message : "Internal error";
       await polled(sub, null, why, error);
     }
     return true;
@@ -888,8 +739,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
 
   async function watch() {
     const stale = await events.failStaleStarts();
-    if (stale)
-      console.error(`[events] ${stale} run(s) failed after not starting`);
+    if (stale) console.error(`[events] ${stale} run(s) failed after not starting`);
     for (const run of await events.runningRuns()) {
       // Passes can overlap (one whose lease another process took over): what one read is
       // written only if the run is still running.
@@ -914,11 +764,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
         }
         const costCents = s.costCents ?? undefined;
         if (s.status === "idle" && s.atBudget)
-          await finish({
-            state: "failed",
-            error: "Stopped at its spending limit",
-            costCents,
-          });
+          await finish({ state: "failed", error: "Stopped at its spending limit", costCents });
         else if (s.status === "idle" || s.status === "terminated")
           await finish({ state: "ended", costCents });
         else if (Date.now() - Date.parse(run.startedAt) > STUCK_MS) {
@@ -943,9 +789,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     if (watching) return;
     watching = true;
     try {
-      await events.withLease("events-watch", WATCH_LEASE_SECONDS, () =>
-        watch(),
-      );
+      await events.withLease("events-watch", WATCH_LEASE_SECONDS, () => watch());
     } finally {
       watching = false;
     }
@@ -961,8 +805,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
      *  outlasts the wait, at the scheduler's next round. */
     async syncApp(org: string, app: string) {
       const sub = await events.subscriptionFor(org, app);
-      if (sub?.source === "graph" && !(await sync(sub)))
-        await events.pollSoon(sub.id);
+      if (sub?.source === "graph" && !(await sync(sub))) await events.pollSoon(sub.id);
     },
     releaseAll: graph.releaseAll,
     settle: graph.settle,
@@ -981,15 +824,11 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
           watchTurn().catch((error) => console.error("[events] watch", error));
         }, 5000),
         setInterval(
-          () =>
-            pollDue().catch((error) => console.error("[events] poll", error)),
+          () => pollDue().catch((error) => console.error("[events] poll", error)),
           15_000,
         ),
         setInterval(
-          () =>
-            events
-              .pruneEvents()
-              .catch((error) => console.error("[events] prune", error)),
+          () => events.pruneEvents().catch((error) => console.error("[events] prune", error)),
           3600_000,
         ),
       ];

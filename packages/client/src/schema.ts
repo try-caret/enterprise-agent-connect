@@ -1972,6 +1972,7 @@ export interface components {
             } | {
                 field: string;
                 contains: string[];
+                except?: string[];
             }) | {
                 seen: {
                     days: number;
@@ -1986,6 +1987,7 @@ export interface components {
                 } | {
                     field: string;
                     contains: string[];
+                    except?: string[];
                 }) | {
                     seen: {
                         days: number;
@@ -2001,6 +2003,7 @@ export interface components {
                 } | {
                     field: string;
                     contains: string[];
+                    except?: string[];
                 }) | {
                     seen: {
                         days: number;
@@ -2015,6 +2018,7 @@ export interface components {
                     } | {
                         field: string;
                         contains: string[];
+                        except?: string[];
                     }) | {
                         seen: {
                             days: number;
@@ -6705,6 +6709,7 @@ export interface operations {
                     } | {
                         field: string;
                         contains: string[];
+                        except?: string[];
                     }) | {
                         seen: {
                             days: number;
@@ -6719,6 +6724,7 @@ export interface operations {
                         } | {
                             field: string;
                             contains: string[];
+                            except?: string[];
                         }) | {
                             seen: {
                                 days: number;
@@ -6734,6 +6740,7 @@ export interface operations {
                         } | {
                             field: string;
                             contains: string[];
+                            except?: string[];
                         }) | {
                             seen: {
                                 days: number;
@@ -6748,6 +6755,7 @@ export interface operations {
                             } | {
                                 field: string;
                                 contains: string[];
+                                except?: string[];
                             }) | {
                                 seen: {
                                     days: number;
