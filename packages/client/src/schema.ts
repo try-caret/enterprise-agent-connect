@@ -1709,7 +1709,10 @@ export interface components {
                     label: string;
                 }[];
                 fields: {
-                    [key: string]: string | string[];
+                    [key: string]: string | string[] | {
+                        path: string;
+                        match: string;
+                    };
                 };
                 /** @default {} */
                 limits: {
@@ -1960,12 +1963,64 @@ export interface components {
             connectorId: string;
             enabled: boolean;
             eventTypes: string[];
-            conditions: ({
+            conditions: (({
                 field: string;
                 in: string[];
             } | {
                 field: string;
                 notIn: string[];
+            } | {
+                field: string;
+                contains: string[];
+            }) | {
+                seen: {
+                    days: number;
+                };
+            } | {
+                anyOf: (({
+                    field: string;
+                    in: string[];
+                } | {
+                    field: string;
+                    notIn: string[];
+                } | {
+                    field: string;
+                    contains: string[];
+                }) | {
+                    seen: {
+                        days: number;
+                    };
+                })[];
+            } | {
+                logOnly: (({
+                    field: string;
+                    in: string[];
+                } | {
+                    field: string;
+                    notIn: string[];
+                } | {
+                    field: string;
+                    contains: string[];
+                }) | {
+                    seen: {
+                        days: number;
+                    };
+                } | {
+                    anyOf: (({
+                        field: string;
+                        in: string[];
+                    } | {
+                        field: string;
+                        notIn: string[];
+                    } | {
+                        field: string;
+                        contains: string[];
+                    }) | {
+                        seen: {
+                            days: number;
+                        };
+                    })[];
+                })[];
             })[];
             prompt: string;
             runner: string;
@@ -6641,12 +6696,64 @@ export interface operations {
                     enabled: boolean;
                     eventTypes: string[];
                     /** @default [] */
-                    conditions?: ({
+                    conditions?: (({
                         field: string;
                         in: string[];
                     } | {
                         field: string;
                         notIn: string[];
+                    } | {
+                        field: string;
+                        contains: string[];
+                    }) | {
+                        seen: {
+                            days: number;
+                        };
+                    } | {
+                        anyOf: (({
+                            field: string;
+                            in: string[];
+                        } | {
+                            field: string;
+                            notIn: string[];
+                        } | {
+                            field: string;
+                            contains: string[];
+                        }) | {
+                            seen: {
+                                days: number;
+                            };
+                        })[];
+                    } | {
+                        logOnly: (({
+                            field: string;
+                            in: string[];
+                        } | {
+                            field: string;
+                            notIn: string[];
+                        } | {
+                            field: string;
+                            contains: string[];
+                        }) | {
+                            seen: {
+                                days: number;
+                            };
+                        } | {
+                            anyOf: (({
+                                field: string;
+                                in: string[];
+                            } | {
+                                field: string;
+                                notIn: string[];
+                            } | {
+                                field: string;
+                                contains: string[];
+                            }) | {
+                                seen: {
+                                    days: number;
+                                };
+                            })[];
+                        })[];
                     })[];
                     prompt: string;
                     /** @default claude-managed-agents */

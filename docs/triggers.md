@@ -171,7 +171,35 @@ PUT /agent-connect/admin/v1/orgs/{org}/agents/{agent}/event-triggers/jira
 event's data never goes into the instructions; it follows them as quoted data. The fields a
 condition can name are the app's `events.fields` (Jira: key, project, issue_type, status,
 priority, labels, summary, assignee, reporter, changed_by, changed, comment, comment_by,
-updated). With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
+mentions, request_type, updated).
+
+All conditions must hold. Each is one of:
+
+- `{"field": f, "in": [...]}` / `{"field": f, "notIn": [...]}`: exact values (any item of a list).
+  `"{self}"` in the list is the app connection's own account (Jira: the agent's account id).
+- `{"field": f, "contains": [...]}`: a word or phrase in the text, ignoring case. An end that is a
+  Latin letter or digit must end a word (`pc` is not in `npc`); other scripts match anywhere.
+- `{"seen": {"days": n}}`: this trigger started a run on the event's thread (Jira: the issue)
+  within n days. Runs that log-only conditions would have filtered do not count.
+- `{"anyOf": [...]}`: one of the field conditions or `seen` inside holds.
+- `{"logOnly": [...]}`: never stops a run; when the conditions inside fail, the run is audited
+  `Would filter (log only): ...` first. Use it to try a filter on real traffic, then drop the
+  wrapper to enforce it.
+
+Filtered events are audited `Filtered: ...` and never count against the caps. Jira `mentions`
+are the account ids a comment mentions (`[~accountid:...]`), read from the whole comment;
+`request_type` is Jira Service Management's request type (`customfield_10010`). Comment events
+from Jira carry fewer issue fields than issue events (no labels or request type), so put
+`seen` next to field conditions in an `anyOf` to keep a thread's comments.
+
+```json
+"conditions": [{"anyOf": [
+  {"field": "summary", "contains": ["laptop", "computer", "bsod"]},
+  {"field": "request_type", "in": ["Hardware Issue"]},
+  {"field": "mentions", "in": ["{self}"]},
+  {"seen": {"days": 30}}
+]}]
+``` With `"runner": "webhook"`, `"settings": {"url": "https://…"}` and a `signingSecret`,
 each run is a signed POST of `{type: "event", run, delivery, agent, app, event, deliveryId, thread,
 data, text, mcpUrl}` instead (`X-Agent-Connect-Signature` as for Teams; `delivery` is this
 service's id for the hand-over, `deliveryId` the app's id for the event). `GET …/event-triggers` lists an

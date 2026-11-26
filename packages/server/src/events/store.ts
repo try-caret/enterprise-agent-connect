@@ -26,7 +26,21 @@ export type SubscriptionRow = {
   createdAt: string;
 };
 
-export type Condition = { field: string; in: string[] } | { field: string; notIn: string[] };
+// A trigger's conditions (docs/triggers.md), all of which must hold: a field's value `in` or
+// `notIn` a list, or containing one of a list's words (`contains`); `anyOf`, a group of which one
+// must hold; `seen`, the trigger started a run on the event's thread within so many days; and
+// `logOnly`, a group whose failure is audited but stops nothing (to try conditions out first).
+export type FieldCondition =
+  | { field: string; in: string[] }
+  | { field: string; notIn: string[] }
+  | { field: string; contains: string[] };
+type SeenCondition = { seen: { days: number } };
+type AnyOfCondition = { anyOf: (FieldCondition | SeenCondition)[] };
+export type Condition =
+  | FieldCondition
+  | SeenCondition
+  | AnyOfCondition
+  | { logOnly: (FieldCondition | SeenCondition | AnyOfCondition)[] };
 
 export type EventTriggerRow = {
   id: string;
@@ -85,6 +99,8 @@ type NewEventRun = {
   deliveryId: string;
   thread: string | null;
   runner: string;
+  // Started only because the failed conditions were log-only.
+  wouldFilter?: boolean;
 };
 
 export type QueuedEvent = {
@@ -202,7 +218,10 @@ export function createEventsStore(sql: Sql, schema: string) {
       );
     },
 
-    async deleteSubscription(org: string, id: string): Promise<SubscriptionRow | null> {
+    async deleteSubscription(
+      org: string,
+      id: string,
+    ): Promise<SubscriptionRow | null> {
       const [row] = await sql.unsafe<SubscriptionRow[]>(
         `delete from ${t.event_subscriptions} where organization_id = $1 and id = $2
          returning ${SUBSCRIPTION}`,
@@ -211,7 +230,12 @@ export function createEventsStore(sql: Sql, schema: string) {
       return row ?? null;
     },
 
-    async setSecret(org: string, id: string, secret: Buffer, keyId: string): Promise<boolean> {
+    async setSecret(
+      org: string,
+      id: string,
+      secret: Buffer,
+      keyId: string,
+    ): Promise<boolean> {
       const rows = await sql`
         update ${t.event_subscriptions} set secret = ${secret}, secret_key_id = ${keyId}
          where organization_id = ${org} and id = ${id} and source = 'webhook' returning id`;
@@ -222,7 +246,10 @@ export function createEventsStore(sql: Sql, schema: string) {
       await sql`update ${t.event_subscriptions} set registered = ${registered} where id = ${id}`;
     },
 
-    async subscriptionFor(org: string, connectorId: string): Promise<SubscriptionRow | null> {
+    async subscriptionFor(
+      org: string,
+      connectorId: string,
+    ): Promise<SubscriptionRow | null> {
       const [row] = await sql.unsafe<SubscriptionRow[]>(
         `select ${SUBSCRIPTION} from ${t.event_subscriptions}
           where organization_id = $1 and connector_id = $2`,
@@ -254,7 +281,11 @@ export function createEventsStore(sql: Sql, schema: string) {
 
     // A round's end. A null polled_at is kept: pollSoon set it while the round ran (a change the
     // round may have read before), and the next round must still come at once.
-    async polled(id: string, cursor: string | null, error: string | null): Promise<void> {
+    async polled(
+      id: string,
+      cursor: string | null,
+      error: string | null,
+    ): Promise<void> {
       await sql`
         update ${t.event_subscriptions}
            set polled_at = case when polled_at is null then null else now() end,
@@ -265,7 +296,14 @@ export function createEventsStore(sql: Sql, schema: string) {
     // During a key rotation: the secrets still sealed with another key than `keyId`.
     async staleSecrets(keyId: string) {
       const [subscriptions, triggers] = await Promise.all([
-        sql<{ id: string; organizationId: string; secret: Buffer; secretKeyId: string }[]>`
+        sql<
+          {
+            id: string;
+            organizationId: string;
+            secret: Buffer;
+            secretKeyId: string;
+          }[]
+        >`
           select s.id::text, s.organization_id::text as "organizationId", s.secret,
                  s.secret_key_id as "secretKeyId"
             from ${t.event_subscriptions} s
@@ -312,7 +350,10 @@ export function createEventsStore(sql: Sql, schema: string) {
       );
     },
 
-    async watchByRemote(subscriptionId: string, remoteId: string): Promise<WatchRow | null> {
+    async watchByRemote(
+      subscriptionId: string,
+      remoteId: string,
+    ): Promise<WatchRow | null> {
       const [row] = await sql.unsafe<WatchRow[]>(
         `select ${WATCH} from ${t.event_watches} where subscription_id = $1 and remote_id = $2`,
         [subscriptionId, remoteId],
@@ -345,7 +386,11 @@ export function createEventsStore(sql: Sql, schema: string) {
     // A lifecycle event left to the next sync (its turn was busy), while the watch still holds
     // the Graph subscription it named: no expiry makes the sync renew it, and no Graph
     // subscription (`removed`) subscribe again.
-    async watchLapsed(id: string, remoteId: string, removed: boolean): Promise<void> {
+    async watchLapsed(
+      id: string,
+      remoteId: string,
+      removed: boolean,
+    ): Promise<void> {
       await sql`
         update ${t.event_watches}
            set expires_at = null,
@@ -374,7 +419,11 @@ export function createEventsStore(sql: Sql, schema: string) {
 
     // The values of an app's limit held by active agents whose trigger on the app is on, as
     // stored (a text limit's string, a list limit's array).
-    async watchedValues(org: string, connectorId: string, limit: string): Promise<unknown[]> {
+    async watchedValues(
+      org: string,
+      connectorId: string,
+      limit: string,
+    ): Promise<unknown[]> {
       const rows = await sql<{ value: unknown }[]>`
         select g.limits -> ${limit} as value
           from ${t.event_triggers} tr join ${t.agents} a on a.id = tr.agent_id
@@ -424,7 +473,11 @@ export function createEventsStore(sql: Sql, schema: string) {
     },
 
     // The payload is kept only until the event is handled.
-    async finishEvent(id: string, state: "done" | "failed", reason: string | null) {
+    async finishEvent(
+      id: string,
+      state: "done" | "failed",
+      reason: string | null,
+    ) {
       await sql`
         update ${t.app_events}
            set state = ${state}, reason = ${reason}, payload = null, payload_key_id = null
@@ -437,7 +490,10 @@ export function createEventsStore(sql: Sql, schema: string) {
 
     // ---- triggers ----
 
-    async agentState(agentId: string, connectorId: string): Promise<AgentAppState | null> {
+    async agentState(
+      agentId: string,
+      connectorId: string,
+    ): Promise<AgentAppState | null> {
       const [row] = await sql<AgentAppState[]>`
         select a.name as "agentName", a.status as "agentStatus",
                case when g.agent_id is null then null else
@@ -458,7 +514,10 @@ export function createEventsStore(sql: Sql, schema: string) {
     },
 
     // Every enabled trigger on the app, of the organization's agents.
-    async triggersFor(org: string, connectorId: string): Promise<EventTriggerRow[]> {
+    async triggersFor(
+      org: string,
+      connectorId: string,
+    ): Promise<EventTriggerRow[]> {
       return sql.unsafe(
         `select ${TRIGGER} from ${t.event_triggers} t join ${t.agents} a on a.id = t.agent_id
           where a.organization_id = $1 and t.connector_id = $2 and t.enabled
@@ -484,7 +543,10 @@ export function createEventsStore(sql: Sql, schema: string) {
       return row ?? null;
     },
 
-    async agentTriggers(org: string, agentId: string): Promise<EventTriggerRow[]> {
+    async agentTriggers(
+      org: string,
+      agentId: string,
+    ): Promise<EventTriggerRow[]> {
       return sql.unsafe(
         `select ${TRIGGER} from ${t.event_triggers} t join ${t.agents} a on a.id = t.agent_id
           where a.organization_id = $1 and t.agent_id = $2 order by t.connector_id`,
@@ -524,7 +586,11 @@ export function createEventsStore(sql: Sql, schema: string) {
       return rows.length > 0;
     },
 
-    async removeTrigger(org: string, agentId: string, connectorId: string): Promise<boolean> {
+    async removeTrigger(
+      org: string,
+      agentId: string,
+      connectorId: string,
+    ): Promise<boolean> {
       const rows = await sql`
         delete from ${t.event_triggers} t using ${t.agents} a
          where a.id = t.agent_id and a.organization_id = ${org} and t.agent_id = ${agentId}
@@ -553,19 +619,45 @@ export function createEventsStore(sql: Sql, schema: string) {
     async admitRun(
       input: NewEventRun,
       caps: Caps,
-    ): Promise<{ runId: string } | { cap: NonNullable<ReturnType<typeof capReached>> }> {
-      return withAdvisoryLock(sql, `${schema}.event-runs:${input.triggerId}`, async (tx) => {
-        const cap = capReached(await this.runCounts(input.triggerId, tx), caps);
-        return cap ? { cap } : { runId: await this.startRun(input, tx) };
-      });
+    ): Promise<
+      { runId: string } | { cap: NonNullable<ReturnType<typeof capReached>> }
+    > {
+      return withAdvisoryLock(
+        sql,
+        `${schema}.event-runs:${input.triggerId}`,
+        async (tx) => {
+          const cap = capReached(
+            await this.runCounts(input.triggerId, tx),
+            caps,
+          );
+          return cap ? { cap } : { runId: await this.startRun(input, tx) };
+        },
+      );
+    },
+
+    // Whether the trigger started a run on the thread within the last days, not counting runs
+    // its conditions would have filtered out (the `seen` condition).
+    async threadSeen(
+      triggerId: string,
+      thread: string,
+      days: number,
+    ): Promise<boolean> {
+      const [row] = await sql<{ seen: boolean }[]>`
+        select exists (
+          select 1 from ${t.event_runs}
+           where trigger_id = ${triggerId} and thread = ${thread} and not would_filter
+             and started_at > now() - make_interval(days => ${days})) as seen`;
+      return row.seen;
     },
 
     async startRun(input: NewEventRun, db: Sql = sql): Promise<string> {
       const [row] = await db<{ id: string }[]>`
         insert into ${t.event_runs}
-          (agent_id, trigger_id, event_id, event_type, delivery_id, thread, runner, state)
+          (agent_id, trigger_id, event_id, event_type, delivery_id, thread, runner, state,
+           would_filter)
         values (${input.agentId}, ${input.triggerId}, ${input.eventId}, ${input.eventType},
-                ${input.deliveryId}, ${input.thread}, ${input.runner}, 'starting')
+                ${input.deliveryId}, ${input.thread}, ${input.runner}, 'starting',
+                ${input.wouldFilter ?? false})
         returning id::text`;
       return row.id;
     },
@@ -654,7 +746,11 @@ export function createEventsStore(sql: Sql, schema: string) {
       );
     },
 
-    async recentRuns(org: string, agentId: string, limit: number): Promise<EventRunRow[]> {
+    async recentRuns(
+      org: string,
+      agentId: string,
+      limit: number,
+    ): Promise<EventRunRow[]> {
       return sql.unsafe(
         `select ${RUN} from ${t.event_runs} r join ${t.event_triggers} t on t.id = r.trigger_id
           where r.agent_id = $2 and exists (select 1 from ${t.agents} a

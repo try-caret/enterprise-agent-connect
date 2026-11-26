@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
 import { z } from "zod";
 import { parseConnector } from "../../connector-kit/src/connector.ts";
-import type { VendorRequest, VendorResponse } from "../../connector-kit/src/types.ts";
+import type {
+  VendorRequest,
+  VendorResponse,
+} from "../../connector-kit/src/types.ts";
 import { createApp } from "../src/app.ts";
 import { createEventsAdmin } from "../src/events/admin.ts";
 import { createEventsRuntime } from "../src/events/runtime.ts";
@@ -45,7 +48,10 @@ after(async () => {
 const key = new CredentialKey(Buffer.alloc(32, 7).toString("base64"));
 const PUBLIC = "https://svc.example/agent-connect";
 const jiraJson = JSON.parse(
-  readFileSync(new URL("../../../connectors/jira/connector.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../../../connectors/jira/connector.json", import.meta.url),
+    "utf8",
+  ),
 );
 const tracker = parseConnector(
   {
@@ -57,39 +63,68 @@ const tracker = parseConnector(
         { id: "created", label: "Item created" },
         { id: "updated", label: "Item updated" },
       ],
-      fields: { key: "item.key", project: "item.project", type: "item.type", by: "actor" },
+      fields: {
+        key: "item.key",
+        project: "item.project",
+        type: "item.type",
+        by: "actor",
+      },
       limits: { projects: "project" },
-      self: { request: { method: "GET", path: "/me" }, id: "id", fields: ["by"] },
+      self: {
+        request: { method: "GET", path: "/me" },
+        id: "id",
+        fields: ["by"],
+      },
       webhook: {
         verify: { type: "hmac-sha256", header: "X-Sig", prefix: "sha256=" },
         type: { field: "event" },
         deliveryId: { header: "X-Delivery" },
         timestamp: { at: { field: "ts" }, unit: "ms", toleranceSeconds: 300 },
         setup: [
-          { title: "Add it", body: "Paste the address.", click: ["Settings > Hooks > {url}"] },
+          {
+            title: "Add it",
+            body: "Paste the address.",
+            click: ["Settings > Hooks > {url}"],
+          },
         ],
         register: {
           method: "POST",
           path: "/hooks",
-          body: { url: "{url}", secret: "{secret}", events: "{events}", filter: "{filter}" },
+          body: {
+            url: "{url}",
+            secret: "{secret}",
+            events: "{events}",
+            filter: "{filter}",
+          },
           location: "self",
         },
       },
       poll: {
-        request: { method: "POST", path: "/search", body: { q: "{filter}since -{minutes}m" } },
+        request: {
+          method: "POST",
+          path: "/search",
+          body: { q: "{filter}since -{minutes}m" },
+        },
         filter: "({value}) and ",
         items: "items",
         wrap: "item",
         cursor: "item.updated",
         deliveryId: ["item.key", "item.updated"],
-        types: [{ type: "created", since: "item.created" }, { type: "updated" }],
+        types: [
+          { type: "created", since: "item.created" },
+          { type: "updated" },
+        ],
       },
     },
   },
   "tracker",
 );
 
-type Fake = { runner: TriggerRunner; started: EventRunInput[]; states: Map<string, string> };
+type Fake = {
+  runner: TriggerRunner;
+  started: EventRunInput[];
+  states: Map<string, string>;
+};
 // A runner that records each start; a run stays running until its state is set.
 function fakeRunner(id = "fake"): Fake {
   const started: EventRunInput[] = [];
@@ -109,7 +144,11 @@ function fakeRunner(id = "fake"): Fake {
     continue: async () => {},
     async state(run) {
       const s = states.get(run.sessionId!) ?? "running";
-      return { status: s as "running", costCents: s === "idle" ? 30 : 0, atBudget: false };
+      return {
+        status: s as "running",
+        costCents: s === "idle" ? 30 : 0,
+        atBudget: false,
+      };
     },
     stop: async () => {},
   };
@@ -141,7 +180,11 @@ async function setup(
     ["/me", { status: 200, data: { id: "svc" } }],
     ["/hooks", { status: 403, data: null }],
   ]);
-  const appCall = async (_org: string, _app: string, request: VendorRequest) => {
+  const appCall = async (
+    _org: string,
+    _app: string,
+    request: VendorRequest,
+  ) => {
     calls.push(request);
     return answers.get(request.path) ?? { status: 404, data: null };
   };
@@ -173,11 +216,17 @@ async function setup(
     const res = await app.fetch(
       new Request(`http://svc/agent-connect/admin/v1/orgs/${org}${path}`, {
         method,
-        headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+        headers: {
+          authorization: `Bearer ${ADMIN_TOKEN}`,
+          "content-type": "application/json",
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
       }),
     );
-    return { status: res.status, body: (res.status === 204 ? null : await res.json()) as any };
+    return {
+      status: res.status,
+      body: (res.status === 204 ? null : await res.json()) as any,
+    };
   }
   async function subscribe(source: "webhook" | "poll" = "webhook", extra = {}) {
     const res = await call("POST", "/event-subscriptions", {
@@ -195,15 +244,19 @@ async function setup(
     };
   }
   async function trigger(over: Record<string, unknown> = {}) {
-    const res = await call("PUT", `/agents/${agentId}/event-triggers/${appId}`, {
-      enabled: true,
-      eventTypes: ["created"],
-      prompt: "Triage it.",
-      runner: runners[0].id,
-      budgetCents: 50,
-      by: "ann",
-      ...over,
-    });
+    const res = await call(
+      "PUT",
+      `/agents/${agentId}/event-triggers/${appId}`,
+      {
+        enabled: true,
+        eventTypes: ["created"],
+        prompt: "Triage it.",
+        runner: runners[0].id,
+        budgetCents: 50,
+        by: "ann",
+        ...over,
+      },
+    );
     assert.equal(res.status, 200, JSON.stringify(res.body));
     return res.body;
   }
@@ -216,23 +269,28 @@ async function setup(
   ) {
     const raw = JSON.stringify({ ts: Date.now(), ...body });
     const res = await app.fetch(
-      new Request(`${PUBLIC.replace("https://svc.example", "http://svc")}/events/${subId}`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-delivery": opts.delivery ?? `d${++n}`,
-          "x-sig": opts.sig ?? `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`,
+      new Request(
+        `${PUBLIC.replace("https://svc.example", "http://svc")}/events/${subId}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-delivery": opts.delivery ?? `d${++n}`,
+            "x-sig":
+              opts.sig ??
+              `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`,
+          },
+          body: raw,
         },
-        body: raw,
-      }),
+      ),
     );
     await runtime.idle();
     return res.status;
   }
   const audit = async () =>
-    (await store.recentAudit(org, 200, { agentId: null, connectorId: null })).map(
-      (a) => `${a.tool} ${a.decision} ${a.reason}`,
-    );
+    (
+      await store.recentAudit(org, 200, { agentId: null, connectorId: null })
+    ).map((a) => `${a.tool} ${a.decision} ${a.reason}`);
   const runs = async () => events.recentRuns(org, agentId, 50);
   return {
     org,
@@ -271,7 +329,10 @@ test(
     const { subscription, secret } = await t.subscribe();
     await t.trigger();
 
-    assert.equal(await t.deliver(subscription.id, secret!, item(), { delivery: "one" }), 200);
+    assert.equal(
+      await t.deliver(subscription.id, secret!, item(), { delivery: "one" }),
+      200,
+    );
     assert.equal(f.started.length, 1);
     assert.equal(f.started[0].event.type, "created");
     assert.deepEqual(f.started[0].event.data, {
@@ -283,28 +344,48 @@ test(
     assert.match(f.started[0].text, /^Triage it\./);
 
     // The same delivery again (a retry, or a replay within the window).
-    assert.equal(await t.deliver(subscription.id, secret!, item(), { delivery: "one" }), 200);
+    assert.equal(
+      await t.deliver(subscription.id, secret!, item(), { delivery: "one" }),
+      200,
+    );
     // Signed with another secret, or not signed at all.
     assert.equal(await t.deliver(subscription.id, "b".repeat(64), item()), 401);
-    assert.equal(await t.deliver(subscription.id, secret!, item(), { sig: "sha256=00" }), 401);
+    assert.equal(
+      await t.deliver(subscription.id, secret!, item(), { sig: "sha256=00" }),
+      401,
+    );
     // Signed, but stamped long ago.
     assert.equal(
-      await t.deliver(subscription.id, secret!, item({ ts: Date.now() - 600_000 })),
+      await t.deliver(
+        subscription.id,
+        secret!,
+        item({ ts: Date.now() - 600_000 }),
+      ),
       200,
     );
     // Not an event the app declares.
-    assert.equal(await t.deliver(subscription.id, secret!, item({ event: "exploded" })), 200);
+    assert.equal(
+      await t.deliver(subscription.id, secret!, item({ event: "exploded" })),
+      200,
+    );
     assert.equal(f.started.length, 1);
 
     const log = await t.audit();
     assert.ok(log.includes("events:delivery allowed Received"));
     assert.ok(
-      log.includes("events:delivery denied Ignored: already received (a retry or a replay)"),
+      log.includes(
+        "events:delivery denied Ignored: already received (a retry or a replay)",
+      ),
     );
     // Two refusals within a minute: one audit row.
-    assert.equal(log.filter((l) => l.includes("signature did not match")).length, 1);
+    assert.equal(
+      log.filter((l) => l.includes("signature did not match")).length,
+      1,
+    );
     assert.ok(log.some((l) => l.includes("Refused: sent too long ago")));
-    assert.ok(log.some((l) => l.includes("not an event type this app declares")));
+    assert.ok(
+      log.some((l) => l.includes("not an event type this app declares")),
+    );
     assert.ok(log.some((l) => l.startsWith("events:run allowed Started run")));
     // A subscription that does not exist, and a browser.
     assert.equal(await t.deliver(randomUUID(), secret!, item()), 404);
@@ -330,7 +411,8 @@ test(
       eventTypes: ["created", "updated"],
       conditions: [{ field: "type", in: ["Bug", "Task"] }],
     });
-    const send = (over: Record<string, unknown>) => t.deliver(subscription.id, secret!, item(over));
+    const send = (over: Record<string, unknown>) =>
+      t.deliver(subscription.id, secret!, item(over));
 
     await send({ item: { key: "HELP-1", project: "HELP", type: "Bug" } });
     await send({ item: { key: "X-1", type: "Bug" } });
@@ -354,6 +436,175 @@ test(
   },
 );
 
+// Tracker with a summary, a comment and the accounts it mentions, and items as threads.
+const notes = parseConnector(
+  {
+    ...jiraJson,
+    id: "notes",
+    name: "Notes",
+    events: {
+      ...tracker.events,
+      fields: {
+        ...tracker.events!.fields,
+        summary: "item.summary",
+        comment: "comment",
+        mentions: {
+          path: "comment",
+          match: "\\[~accountid:([A-Za-z0-9:_-]{1,128})\\]",
+        },
+      },
+      thread: "key",
+    },
+  },
+  "notes",
+);
+
+test(
+  "anyOf, contains, seen and {self} start only matching events; the rest are filtered, audited",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({
+      eventTypes: ["created", "updated"],
+      conditions: [
+        {
+          anyOf: [
+            { field: "summary", contains: ["laptop", "pc"] },
+            { field: "mentions", in: ["{self}"] },
+            { seen: { days: 30 } },
+          ],
+        },
+      ],
+      maxConcurrent: 10,
+    });
+    const send = (key: string, summary: string, comment?: string) =>
+      t.deliver(
+        subscription.id,
+        secret!,
+        item({
+          event: "updated",
+          item: { key, project: "KAN", summary },
+          comment,
+        }),
+      );
+    await send("KAN-1", "Printer jammed");
+    await send("KAN-1", "Printer jammed", "NPC?");
+    assert.equal(f.started.length, 0);
+    await send("KAN-2", "My laptop is dead");
+    assert.equal(f.started.length, 1);
+    // A later event on the same item passes on seen, whatever its summary.
+    await send("KAN-2", "Renamed", "any update?");
+    assert.equal(f.started.length, 2);
+    // A mention of the connection's own account (svc) passes; another account's does not.
+    await send("KAN-3", "Printer", "[~accountid:other] look");
+    assert.equal(f.started.length, 2);
+    await send(
+      "KAN-3",
+      "Printer",
+      "x".repeat(2500) + " [~accountid:svc] can you help?",
+    );
+    assert.equal(f.started.length, 3);
+
+    const log = await t.audit();
+    assert.equal(
+      log.filter((l) =>
+        l.includes("Filtered: none of summary, mentions, seen matched"),
+      ).length,
+      3,
+    );
+  },
+);
+
+test(
+  "logOnly conditions start every event, audit what they would filter, and seen ignores those runs",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger({
+      eventTypes: ["created", "updated"],
+      conditions: [
+        {
+          logOnly: [
+            {
+              anyOf: [
+                { field: "summary", contains: ["laptop"] },
+                { seen: { days: 30 } },
+              ],
+            },
+          ],
+        },
+      ],
+      maxConcurrent: 10,
+    });
+    const send = (key: string, summary: string) =>
+      t.deliver(
+        subscription.id,
+        secret!,
+        item({ item: { key, project: "KAN", summary } }),
+      );
+    await send("KAN-1", "Printer jammed");
+    await send("KAN-1", "Printer jammed again");
+    await send("KAN-2", "Laptop dead");
+    await send("KAN-2", "Renamed");
+    assert.equal(f.started.length, 4);
+    const log = await t.audit();
+    // KAN-1 twice: its first run was a would-filter one, so it does not count as seen.
+    assert.equal(
+      log.filter((l) =>
+        l.includes("Would filter (log only): none of summary, seen matched"),
+      ).length,
+      2,
+    );
+    const runs = await sql!`select would_filter as w from ${name("event_runs")}
+                             where agent_id = ${t.agentId} order by started_at`;
+    assert.deepEqual(
+      runs.map((r) => r.w),
+      [true, true, false, false],
+    );
+  },
+);
+
+test(
+  "conditions name only declared fields, at most one level of groups",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner], { projects: ["KAN"] }, notes);
+    await t.subscribe();
+    const put = (conditions: unknown) =>
+      t.call("PUT", `/agents/${t.agentId}/event-triggers/notes`, {
+        enabled: true,
+        eventTypes: ["created"],
+        conditions,
+        prompt: "Do it",
+        runner: "fake",
+        settings: {},
+        budgetCents: 100,
+        by: "ann",
+      });
+    assert.equal(
+      (await put([{ anyOf: [{ field: "summary", contains: ["a"] }] }])).status,
+      200,
+    );
+    assert.match(
+      (await put([{ anyOf: [{ field: "nope", contains: ["a"] }] }])).body.error,
+      /no field nope/,
+    );
+    assert.equal(
+      (await put([{ anyOf: [{ anyOf: [{ seen: { days: 1 } }] }] }])).status,
+      400,
+    );
+    assert.equal(
+      (await put([{ logOnly: [{ logOnly: [{ seen: { days: 1 } }] }] }])).status,
+      400,
+    );
+  },
+);
+
 test(
   "when the app will not say who the connection is, a change naming its maker starts nothing",
   { skip: !sql },
@@ -366,7 +617,9 @@ test(
     await t.deliver(subscription.id, secret!, item());
     assert.equal(f.started.length, 0);
     assert.ok(
-      (await t.audit()).some((l) => /Tracker did not say which account .*answered 401/.test(l)),
+      (await t.audit()).some((l) =>
+        /Tracker did not say which account .*answered 401/.test(l),
+      ),
     );
     // A record that names no maker (as a poll's) still starts.
     await t.deliver(subscription.id, secret!, item({ actor: undefined }));
@@ -382,7 +635,9 @@ test("a trigger's caps hold back runs past them", { skip: !sql }, async () => {
   await t.deliver(subscription.id, secret!, item());
   await t.deliver(subscription.id, secret!, item());
   assert.equal(f.started.length, 1);
-  assert.ok((await t.audit()).some((l) => /Capped: runs at once reached/.test(l)));
+  assert.ok(
+    (await t.audit()).some((l) => /Capped: runs at once reached/.test(l)),
+  );
 
   // The first ends (with its cost), so the next one runs.
   f.states.set(`s-${f.started[0].runId}`, "idle");
@@ -400,15 +655,27 @@ test(
   async () => {
     const f = fakeRunner();
     const t = await setup([f.runner]);
-    const { subscription, secret } = await t.subscribe("poll", { filter: "project = KAN" });
+    const { subscription, secret } = await t.subscribe("poll", {
+      filter: "project = KAN",
+    });
     assert.equal(secret, null);
     assert.equal(subscription.url, null);
     await t.trigger({ eventTypes: ["created", "updated"] });
     const later = (s: number) => new Date(Date.now() + s * 1000).toISOString();
     // KAN-1 is new: created after the subscription, its update stamped just after (as Jira
     // does). KAN-2 was made before and changed since.
-    const a = { key: "KAN-1", project: "KAN", created: later(1), updated: later(1.2) };
-    const b = { key: "KAN-2", project: "KAN", created: later(-3600), updated: later(2) };
+    const a = {
+      key: "KAN-1",
+      project: "KAN",
+      created: later(1),
+      updated: later(1.2),
+    };
+    const b = {
+      key: "KAN-2",
+      project: "KAN",
+      created: later(-3600),
+      updated: later(2),
+    };
     t.answers.set("/search", { status: 200, data: { items: [a, b] } });
 
     const sub = async () => (await t.events.subscription(subscription.id))!;
@@ -422,7 +689,10 @@ test(
       ],
     );
     const search = t.calls.find((c) => c.path === "/search")!;
-    assert.match(String((search.body as { q: string }).q), /^\(project = KAN\) and since -\d+m$/);
+    assert.match(
+      String((search.body as { q: string }).q),
+      /^\(project = KAN\) and since -\d+m$/,
+    );
     assert.equal((await sub()).cursor, b.updated);
 
     // The overlap brings both back: nothing new starts and nothing is audited as a repeat.
@@ -452,7 +722,9 @@ test(
       return new Response(null, { status: 200 });
     }) as never;
     const ctx = {
-      teams: { claudeKey: async () => null } as unknown as RunnerContext["teams"],
+      teams: {
+        claudeKey: async () => null,
+      } as unknown as RunnerContext["teams"],
       key,
       publicUrl: PUBLIC,
     };
@@ -465,7 +737,10 @@ test(
       settings: { url: "https://hooks.example/events" },
       signingSecret: receiverSecret,
     });
-    assert.equal((saved as { hasSigningSecret: boolean }).hasSigningSecret, true);
+    assert.equal(
+      (saved as { hasSigningSecret: boolean }).hasSigningSecret,
+      true,
+    );
     assert.equal(JSON.parse(got[0].body).type, "ping");
 
     await t.deliver(subscription.id, secret!, item());
@@ -473,12 +748,19 @@ test(
     assert.equal(sent.type, "event");
     assert.equal(sent.app, "tracker");
     assert.equal(sent.event, "created");
-    assert.deepEqual(sent.data, { key: "KAN-1", project: "KAN", type: "Bug", by: "ann" });
+    assert.deepEqual(sent.data, {
+      key: "KAN-1",
+      project: "KAN",
+      type: "Bug",
+      by: "ann",
+    });
     assert.equal(sent.mcpUrl, `${PUBLIC}/mcp/${t.agentId}`);
     // What a receiver checks: the HMAC of "<t>.<body>" with its secret.
     const [, ts, v1] = /^t=(\d+),v1=([0-9a-f]{64})$/.exec(got[1].sig)!;
     assert.equal(
-      createHmac("sha256", receiverSecret).update(`${ts}.${got[1].body}`).digest("hex"),
+      createHmac("sha256", receiverSecret)
+        .update(`${ts}.${got[1].body}`)
+        .digest("hex"),
       v1,
     );
 
@@ -495,10 +777,18 @@ test(
   async () => {
     const f = fakeRunner();
     const t = await setup([f.runner]);
-    const created = await t.subscribe("webhook", { register: true, filter: "project = KAN" });
-    assert.equal(created.subscription.url, `${PUBLIC}/events/${created.subscription.id}`);
+    const created = await t.subscribe("webhook", {
+      register: true,
+      filter: "project = KAN",
+    });
+    assert.equal(
+      created.subscription.url,
+      `${PUBLIC}/events/${created.subscription.id}`,
+    );
     assert.match(created.secret!, /^[0-9a-f]{64}$/);
-    assert.deepEqual(created.setup[0].click, [`Settings > Hooks > ${created.subscription.url}`]);
+    assert.deepEqual(created.setup[0].click, [
+      `Settings > Hooks > ${created.subscription.url}`,
+    ]);
     assert.equal(created.registration!.ok, false);
     const reg = t.calls.find((c) => c.path === "/hooks")!;
     assert.deepEqual(reg.body, {
@@ -511,17 +801,29 @@ test(
     assert.ok(!JSON.stringify(listed.body).includes(created.secret!));
     // One per app.
     assert.equal(
-      (await t.call("POST", "/event-subscriptions", { app: "tracker", source: "poll", by: "a" }))
-        .status,
+      (
+        await t.call("POST", "/event-subscriptions", {
+          app: "tracker",
+          source: "poll",
+          by: "a",
+        })
+      ).status,
       400,
     );
 
-    const rotated = await t.call("POST", `/event-subscriptions/${created.subscription.id}/secret`, {
-      by: "ann",
-    });
+    const rotated = await t.call(
+      "POST",
+      `/event-subscriptions/${created.subscription.id}/secret`,
+      {
+        by: "ann",
+      },
+    );
     assert.equal(rotated.status, 200);
     assert.notEqual(rotated.body.secret, created.secret);
-    assert.equal(await t.deliver(created.subscription.id, created.secret!, item()), 401);
+    assert.equal(
+      await t.deliver(created.subscription.id, created.secret!, item()),
+      401,
+    );
 
     const bad = (over: Record<string, unknown>) =>
       t.call("PUT", `/agents/${t.agentId}/event-triggers/tracker`, {
@@ -533,13 +835,22 @@ test(
         by: "ann",
         ...over,
       });
-    assert.match((await bad({ eventTypes: ["exploded"] })).body.error, /no event exploded/);
+    assert.match(
+      (await bad({ eventTypes: ["exploded"] })).body.error,
+      /no event exploded/,
+    );
     assert.match(
       (await bad({ conditions: [{ field: "nope", in: ["a"] }] })).body.error,
       /no field nope/,
     );
-    assert.match((await bad({ runner: "claude-managed-agents" })).body.error, /no runner/);
-    assert.equal((await bad({ budgetCents: 600, maxCentsPerDay: 500 })).status, 400);
+    assert.match(
+      (await bad({ runner: "claude-managed-agents" })).body.error,
+      /no runner/,
+    );
+    assert.equal(
+      (await bad({ budgetCents: 600, maxCentsPerDay: 500 })).status,
+      400,
+    );
     assert.equal(
       (
         await t.call("PUT", `/agents/${randomUUID()}/event-triggers/tracker`, {
@@ -555,20 +866,40 @@ test(
     );
 
     await t.trigger();
-    assert.equal((await t.call("GET", `/agents/${t.agentId}/event-triggers`)).body.length, 1);
-    assert.equal((await t.call("GET", `/agents/${t.agentId}/event-runs`)).status, 200);
     assert.equal(
-      (await t.call("DELETE", `/agents/${t.agentId}/event-triggers/tracker`, { by: "ann" })).status,
+      (await t.call("GET", `/agents/${t.agentId}/event-triggers`)).body.length,
+      1,
+    );
+    assert.equal(
+      (await t.call("GET", `/agents/${t.agentId}/event-runs`)).status,
+      200,
+    );
+    assert.equal(
+      (
+        await t.call("DELETE", `/agents/${t.agentId}/event-triggers/tracker`, {
+          by: "ann",
+        })
+      ).status,
       204,
     );
     assert.equal(
-      (await t.call("DELETE", `/event-subscriptions/${created.subscription.id}`, { by: "ann" }))
-        .status,
+      (
+        await t.call(
+          "DELETE",
+          `/event-subscriptions/${created.subscription.id}`,
+          { by: "ann" },
+        )
+      ).status,
       204,
     );
     assert.equal(
-      (await t.call("DELETE", `/event-subscriptions/${created.subscription.id}`, { by: "ann" }))
-        .status,
+      (
+        await t.call(
+          "DELETE",
+          `/event-subscriptions/${created.subscription.id}`,
+          { by: "ann" },
+        )
+      ).status,
       404,
     );
     const log = await t.audit();
@@ -591,9 +922,15 @@ test(
   { skip: !sql },
   async () => {
     const t = await setup([fakeRunner().runner]);
-    t.answers.set("/hooks", { status: 201, data: { self: "https://tracker.example/hooks/7" } });
+    t.answers.set("/hooks", {
+      status: 201,
+      data: { self: "https://tracker.example/hooks/7" },
+    });
     const created = await t.subscribe("webhook", { register: true });
-    assert.deepEqual(created.registration, { ok: true, message: "Registered in Tracker" });
+    assert.deepEqual(created.registration, {
+      ok: true,
+      message: "Registered in Tracker",
+    });
     assert.equal(
       (created.subscription as { registered?: string }).registered,
       "https://tracker.example/hooks/7",
@@ -606,17 +943,27 @@ test(
 // limit and the bot's own messages.
 const slack = parseConnector(
   JSON.parse(
-    readFileSync(new URL("../../../connectors/slack/connector.json", import.meta.url), "utf8"),
+    readFileSync(
+      new URL("../../../connectors/slack/connector.json", import.meta.url),
+      "utf8",
+    ),
   ),
   "slack",
 );
 const SLACK_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
 
-async function slackSetup(limits: Record<string, unknown> = { channels: ["C123"] }) {
+async function slackSetup(
+  limits: Record<string, unknown> = { channels: ["C123"] },
+) {
   const f = fakeRunner();
   const t = await setup([f.runner], limits, slack);
-  t.answers.set("/auth.test", { status: 200, data: { ok: true, user_id: "UBOT", bot_id: "B1" } });
-  const { subscription } = await t.subscribe("webhook", { secret: SLACK_SECRET });
+  t.answers.set("/auth.test", {
+    status: 200,
+    data: { ok: true, user_id: "UBOT", bot_id: "B1" },
+  });
+  const { subscription } = await t.subscribe("webhook", {
+    secret: SLACK_SECRET,
+  });
   async function post(
     body: Record<string, unknown>,
     opts: { secret?: string; at?: number; retry?: string } = {},
@@ -633,7 +980,9 @@ async function slackSetup(limits: Record<string, unknown> = { channels: ["C123"]
           "content-type": "application/json",
           "x-slack-request-timestamp": at,
           "x-slack-signature": `v0=${sig}`,
-          ...(opts.retry ? { "x-slack-retry-num": opts.retry, "x-slack-retry-reason": "x" } : {}),
+          ...(opts.retry
+            ? { "x-slack-retry-num": opts.retry, "x-slack-retry-reason": "x" }
+            : {}),
         },
         body: raw,
       }),
@@ -645,7 +994,10 @@ async function slackSetup(limits: Record<string, unknown> = { channels: ["C123"]
 }
 
 let mentions = 0;
-const mention = (event: Record<string, unknown> = {}, id = `Ev${++mentions}`) => ({
+const mention = (
+  event: Record<string, unknown> = {},
+  id = `Ev${++mentions}`,
+) => ({
   token: "legacy",
   team_id: "T1",
   api_app_id: "A1",
@@ -684,24 +1036,38 @@ test(
     });
 
     // Slack's retry of the same event (same event_id, X-Slack-Retry-Num) starts nothing.
-    assert.equal((await post(mention({}, "EvFirst"), { retry: "1" })).status, 200);
+    assert.equal(
+      (await post(mention({}, "EvFirst"), { retry: "1" })).status,
+      200,
+    );
     assert.equal(f.started.length, 1);
 
     // Inside a thread: the reply goes to the thread, not the message.
-    await post(mention({ ts: "1730700100.000200", thread_ts: "1730700000.000100" }));
+    await post(
+      mention({ ts: "1730700100.000200", thread_ts: "1730700000.000100" }),
+    );
     assert.equal(f.started.length, 2);
     assert.equal(f.started[1].event.data.thread_ts, "1730700000.000100");
     assert.equal(f.started[1].event.data.ts, "1730700100.000200");
 
     // Another signing secret; a stamp older than five minutes (also refused when re-signed).
-    assert.equal((await post(mention(), { secret: "x".repeat(32) })).status, 401);
-    assert.equal((await post(mention(), { at: Math.floor(Date.now() / 1000) - 600 })).status, 200);
+    assert.equal(
+      (await post(mention(), { secret: "x".repeat(32) })).status,
+      401,
+    );
+    assert.equal(
+      (await post(mention(), { at: Math.floor(Date.now() / 1000) - 600 }))
+        .status,
+      200,
+    );
     assert.equal(f.started.length, 2);
     const log = await t.audit();
     assert.ok(log.some((l) => l.includes("signature did not match")));
     assert.ok(log.some((l) => l.includes("Refused: sent too long ago")));
     assert.ok(
-      log.includes("events:delivery denied Ignored: already received (a retry or a replay)"),
+      log.includes(
+        "events:delivery denied Ignored: already received (a retry or a replay)",
+      ),
     );
   },
 );
@@ -725,7 +1091,11 @@ test(
     assert.equal((await post(check, { secret: "x".repeat(32) })).status, 401);
     assert.equal((await post({ type: "url_verification" })).status, 400);
     assert.equal(f.started.length, 0);
-    assert.ok((await t.audit()).some((l) => l.includes("Answered the app's check of the address")));
+    assert.ok(
+      (await t.audit()).some((l) =>
+        l.includes("Answered the app's check of the address"),
+      ),
+    );
   },
 );
 
@@ -745,7 +1115,9 @@ test(
     const log = await t.audit();
     assert.ok(log.some((l) => /Out of limits: channels C999/.test(l)));
     assert.ok(log.some((l) => /made by Slack's own connection/.test(l)));
-    assert.ok(t.calls.some((c) => c.method === "GET" && c.path === "/auth.test"));
+    assert.ok(
+      t.calls.some((c) => c.method === "GET" && c.path === "/auth.test"),
+    );
   },
 );
 
@@ -760,10 +1132,15 @@ test(
       by: "ann",
     });
     assert.equal(missing.status, 400);
-    assert.match(JSON.stringify(missing.body), /makes the signing secret itself/);
+    assert.match(
+      JSON.stringify(missing.body),
+      /makes the signing secret itself/,
+    );
     const created = await t.subscribe("webhook", { secret: SLACK_SECRET });
     assert.equal(created.secret, null);
-    assert.ok(created.setup[0].click.some((c) => c.includes(created.subscription.url!)));
+    assert.ok(
+      created.setup[0].click.some((c) => c.includes(created.subscription.url!)),
+    );
     const poll = await t.call("POST", "/event-subscriptions", {
       app: "slack",
       source: "poll",
@@ -773,7 +1150,10 @@ test(
 
     const path = `/event-subscriptions/${created.subscription.id}/secret`;
     assert.equal((await t.call("POST", path, { by: "ann" })).status, 400);
-    const rotated = await t.call("POST", path, { by: "ann", secret: "n".repeat(32) });
+    const rotated = await t.call("POST", path, {
+      by: "ann",
+      secret: "n".repeat(32),
+    });
     assert.equal(rotated.status, 200);
     assert.equal(rotated.body.secret, null);
 
@@ -799,7 +1179,9 @@ test(
       throw new Error("the runner said no to someone@example.com");
     };
     const t = await setup([f.runner]);
-    const { subscription } = await t.subscribe("poll", { filter: "project = KAN" });
+    const { subscription } = await t.subscribe("poll", {
+      filter: "project = KAN",
+    });
     await t.trigger();
     const sub = async () => (await t.events.subscription(subscription.id))!;
     const polls = () => t.reports.filter((r) => r.kind === "event_poll_failed");
@@ -826,52 +1208,91 @@ test(
     const later = new Date(Date.now() + 1000).toISOString();
     t.answers.set("/search", {
       status: 200,
-      data: { items: [{ key: "KAN-9", project: "KAN", created: later, updated: later }] },
+      data: {
+        items: [
+          { key: "KAN-9", project: "KAN", created: later, updated: later },
+        ],
+      },
     });
     await t.runtime.poll(await sub());
     await t.runtime.idle();
     const start = t.reports.find((r) => r.kind === "event_run_start_failed")!;
-    assert.deepEqual(start.tags, { app: "tracker", org: t.org, agent: t.agentId, runner: "fake" });
+    assert.deepEqual(start.tags, {
+      app: "tracker",
+      org: t.org,
+      agent: t.agentId,
+      runner: "fake",
+    });
     assert.ok(start.error instanceof Error);
   },
 );
 
-test("a run whose row cannot be written is reported", { skip: !sql }, async () => {
-  const f = fakeRunner();
-  const t = await setup([f.runner]);
-  const { subscription, secret } = await t.subscribe();
-  await t.trigger();
-  t.events.startRun = async () => {
-    throw new Error("the database is gone");
-  };
-  assert.equal(await t.deliver(subscription.id, secret!, item()), 200);
-  const start = t.reports.find((r) => r.kind === "event_run_start_failed")!;
-  assert.deepEqual(start.tags, { app: "tracker", org: t.org, agent: t.agentId, runner: "fake" });
-  assert.match((start.error as Error).message, /database is gone/);
-  assert.equal(f.started.length, 0);
-});
+test(
+  "a run whose row cannot be written is reported",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    const t = await setup([f.runner]);
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger();
+    t.events.startRun = async () => {
+      throw new Error("the database is gone");
+    };
+    assert.equal(await t.deliver(subscription.id, secret!, item()), 200);
+    const start = t.reports.find((r) => r.kind === "event_run_start_failed")!;
+    assert.deepEqual(start.tags, {
+      app: "tracker",
+      org: t.org,
+      agent: t.agentId,
+      runner: "fake",
+    });
+    assert.match((start.error as Error).message, /database is gone/);
+    assert.equal(f.started.length, 0);
+  },
+);
 
 // A signed webhook runner whose receiver answers each event post with the next of `answers`
 // (200 once they run out), recording the delivery header and body.
-async function flakyReceiver(answers: number[], opts: { retryWindowMs?: number } = {}) {
+async function flakyReceiver(
+  answers: number[],
+  opts: { retryWindowMs?: number } = {},
+) {
   const posts: { delivery: string; body: any }[] = [];
   const fetch = (async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
     if (body.type === "ping") return new Response(null, { status: 200 });
-    posts.push({ delivery: (init.headers as Record<string, string>)[DELIVERY_HEADER], body });
+    posts.push({
+      delivery: (init.headers as Record<string, string>)[DELIVERY_HEADER],
+      body,
+    });
     return new Response(null, { status: answers.shift() ?? 200 });
   }) as never;
-  const ctx = { teams: { claudeKey: async () => null } as never, key, publicUrl: PUBLIC };
-  const t = await setup([signedWebhook(fetch)(ctx)], undefined, undefined, opts);
+  const ctx = {
+    teams: { claudeKey: async () => null } as never,
+    key,
+    publicUrl: PUBLIC,
+  };
+  const t = await setup(
+    [signedWebhook(fetch)(ctx)],
+    undefined,
+    undefined,
+    opts,
+  );
   const { subscription, secret } = await t.subscribe();
   await t.trigger({
     runner: "webhook",
     settings: { url: "https://hooks.example/events" },
     signingSecret: "r".repeat(40),
   });
-  const due = () => sql!`update ${name("event_runs")} set next_attempt_at = now()
+  const due =
+    () => sql!`update ${name("event_runs")} set next_attempt_at = now()
                           where agent_id = ${t.agentId} and next_attempt_at is not null`;
-  return { t, posts, due, send: () => t.deliver(subscription.id, secret!, item()) };
+  return {
+    t,
+    posts,
+    due,
+    send: () => t.deliver(subscription.id, secret!, item()),
+  };
 }
 
 test(
@@ -893,7 +1314,11 @@ test(
     assert.equal(posts.length, 3);
     assert.equal((await t.runs())[0].state, "running");
     assert.equal(new Set(posts.map((p) => p.delivery)).size, 1);
-    assert.ok(posts.every((p) => p.body.delivery === p.delivery && p.body.run === run.id));
+    assert.ok(
+      posts.every(
+        (p) => p.body.delivery === p.delivery && p.body.run === run.id,
+      ),
+    );
     assert.deepEqual(
       (await t.audit()).filter((l) => l.startsWith("events:run")),
       [`events:run allowed Started run ${run.id} after 3 attempts`],
@@ -985,7 +1410,9 @@ test(
     const [failed] = await broken.t.runs();
     assert.equal(failed.state, "failed");
     assert.ok(
-      (await broken.t.audit()).some((l) => l.startsWith(`events:run failed Run ${run.id}`)),
+      (await broken.t.audit()).some((l) =>
+        l.startsWith(`events:run failed Run ${run.id}`),
+      ),
     );
     const [row] = await sql!`
       select next_attempt_at, delivery from ${name("event_runs")} where id = ${run.id}`;
@@ -1004,24 +1431,30 @@ test(
   },
 );
 
-test("an event run taken on a late attempt has its full 30 minutes", { skip: !sql }, async () => {
-  const f = fakeRunner();
-  let refusals = 1;
-  const startEvent = f.runner.startEvent!;
-  f.runner.startEvent = async (input) => {
-    if (refusals-- > 0) throw new RetryLater("not yet");
-    return startEvent(input);
-  };
-  const t = await setup([f.runner], undefined, undefined, { retryWindowMs: 3600_000 });
-  const { subscription, secret } = await t.subscribe();
-  await t.trigger();
-  await t.deliver(subscription.id, secret!, item());
-  await sql!`update ${name("event_runs")}
+test(
+  "an event run taken on a late attempt has its full 30 minutes",
+  { skip: !sql },
+  async () => {
+    const f = fakeRunner();
+    let refusals = 1;
+    const startEvent = f.runner.startEvent!;
+    f.runner.startEvent = async (input) => {
+      if (refusals-- > 0) throw new RetryLater("not yet");
+      return startEvent(input);
+    };
+    const t = await setup([f.runner], undefined, undefined, {
+      retryWindowMs: 3600_000,
+    });
+    const { subscription, secret } = await t.subscribe();
+    await t.trigger();
+    await t.deliver(subscription.id, secret!, item());
+    await sql!`update ${name("event_runs")}
                   set started_at = now() - interval '40 minutes', next_attempt_at = now()
                 where agent_id = ${t.agentId}`;
-  await t.runtime.retryDue();
-  assert.equal(f.started.length, 1);
-  assert.equal((await t.runs())[0].state, "running");
-  await t.runtime.watch();
-  assert.equal((await t.runs())[0].state, "running");
-});
+    await t.runtime.retryDue();
+    assert.equal(f.started.length, 1);
+    assert.equal((await t.runs())[0].state, "running");
+    await t.runtime.watch();
+    assert.equal((await t.runs())[0].state, "running");
+  },
+);

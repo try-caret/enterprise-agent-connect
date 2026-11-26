@@ -11,8 +11,12 @@ import type { CredentialKey } from "../secrets.js";
 import { InvalidInput } from "../service.js";
 import type { Store } from "../store.js";
 import { CLAUDE_RUNNER, type TriggerRunner } from "../teams/runner.js";
-import { fill, rawAt } from "./deliver.js";
-import { eventTriggerAad, subscriptionAad, type EventsRuntime } from "./runtime.js";
+import { conditionFields, fill, rawAt, seenDays } from "./deliver.js";
+import {
+  eventTriggerAad,
+  subscriptionAad,
+  type EventsRuntime,
+} from "./runtime.js";
 import type { EventTriggerRow, EventsStore, SubscriptionRow } from "./store.js";
 
 // The admin side of app events: each organization's subscription per app (webhook or poll),
@@ -39,11 +43,40 @@ export const subscriptionSchema = z.object({
   by,
 });
 
-export const rotateSecretSchema = z.object({ secret: appSecret.optional(), by });
+export const rotateSecretSchema = z.object({
+  secret: appSecret.optional(),
+  by,
+});
 
+const values = z.array(z.string().max(500)).min(1).max(100);
+const fieldCondition = z.union([
+  z.strictObject({ field: z.string(), in: values }),
+  z.strictObject({ field: z.string(), notIn: values }),
+  z.strictObject({
+    field: z.string(),
+    contains: z.array(z.string().min(1).max(100)).min(1).max(200),
+  }),
+]);
+const seen = z.strictObject({
+  seen: z.strictObject({ days: z.number().int().min(1).max(90) }),
+});
+// One level of groups: anyOf holds field conditions and seen; logOnly anything but logOnly.
+const anyOf = z.strictObject({
+  anyOf: z
+    .array(z.union([fieldCondition, seen]))
+    .min(1)
+    .max(20),
+});
 const condition = z.union([
-  z.strictObject({ field: z.string(), in: z.array(z.string().max(500)).min(1).max(100) }),
-  z.strictObject({ field: z.string(), notIn: z.array(z.string().max(500)).min(1).max(100) }),
+  fieldCondition,
+  seen,
+  anyOf,
+  z.strictObject({
+    logOnly: z
+      .array(z.union([fieldCondition, seen, anyOf]))
+      .min(1)
+      .max(20),
+  }),
 ]);
 
 export const eventTriggerSchema = z
@@ -79,14 +112,24 @@ export function createEventsAdmin(deps: {
   events: EventsStore;
   key: CredentialKey;
   connectors: Map<string, Connector>;
-  appCall(org: string, app: string, request: VendorRequest): Promise<VendorResponse | null>;
+  appCall(
+    org: string,
+    app: string,
+    request: VendorRequest,
+  ): Promise<VendorResponse | null>;
   runners: Map<string, TriggerRunner>;
   publicUrl: string | null;
   runtime: Pick<EventsRuntime, "syncApp" | "releaseAll">;
 }) {
   const { store, events, key } = deps;
 
-  const log = (org: string, who: string, app: string, action: string, target: string) =>
+  const log = (
+    org: string,
+    who: string,
+    app: string,
+    action: string,
+    target: string,
+  ) =>
     store.audit({
       organizationId: org,
       agentId: null,
@@ -101,12 +144,15 @@ export function createEventsAdmin(deps: {
 
   function eventsOf(app: string) {
     const connector = deps.connectors.get(app);
-    if (!connector?.events) throw new InvalidInput(`${app} has no events agents can start from`);
+    if (!connector?.events)
+      throw new InvalidInput(`${app} has no events agents can start from`);
     return { connector, events: connector.events };
   }
 
   const urlOf = (sub: SubscriptionRow) =>
-    sub.source !== "poll" && deps.publicUrl ? `${deps.publicUrl}/events/${sub.id}` : null;
+    sub.source !== "poll" && deps.publicUrl
+      ? `${deps.publicUrl}/events/${sub.id}`
+      : null;
 
   function publicSubscription(sub: SubscriptionRow) {
     const { secret: _s, secretKeyId: _k, organizationId: _o, ...rest } = sub;
@@ -128,16 +174,22 @@ export function createEventsAdmin(deps: {
         `${connector.name} makes the signing secret itself: copy it from its app settings and give it as secret`,
       );
     if (!fromApp && given)
-      throw new InvalidInput(`The secret for ${connector.name} is made here; leave secret out`);
+      throw new InvalidInput(
+        `The secret for ${connector.name} is made here; leave secret out`,
+      );
     return { secret: given ?? newSecret(), fromApp };
   }
 
   // Live runs of a trigger are stopped before it changes runner or goes.
   async function stopRuns(org: string, triggerId: string, runner?: string) {
     for (const run of await events.runningRuns()) {
-      if (run.triggerId !== triggerId || (runner && run.runner !== runner)) continue;
+      if (run.triggerId !== triggerId || (runner && run.runner !== runner))
+        continue;
       await deps.runners.get(run.runner)?.stop(run.sessionId!, org);
-      await events.updateRun(run.id, { state: "failed", error: "Stopped by an administrator" });
+      await events.updateRun(run.id, {
+        state: "failed",
+        error: "Stopped by an administrator",
+      });
     }
   }
 
@@ -155,20 +207,32 @@ export function createEventsAdmin(deps: {
           `${connector.name} sends no webhooks; read it on an interval instead`,
         );
       if (input.source === "poll" && !declared.poll)
-        throw new InvalidInput(`${connector.name} cannot be read on an interval; use its webhook`);
+        throw new InvalidInput(
+          `${connector.name} cannot be read on an interval; use its webhook`,
+        );
       if (input.source === "graph" && !declared.graph)
-        throw new InvalidInput(`${connector.name} sends no Microsoft Graph notifications`);
+        throw new InvalidInput(
+          `${connector.name} sends no Microsoft Graph notifications`,
+        );
       if (!(await store.getConnection(org, input.app)))
         throw new InvalidInput(`Connect ${connector.name} first`);
       if (input.source !== "poll" && !deps.publicUrl)
-        throw new ConnectError("This deployment has no public address for the app to send to");
+        throw new ConnectError(
+          "This deployment has no public address for the app to send to",
+        );
       const subId = randomUUID();
       if (input.source !== "webhook" && input.secret)
-        throw new InvalidInput(`A ${input.source} subscription takes no secret; leave secret out`);
-      const made = input.source === "webhook" ? secretFor(connector, input.secret) : null;
+        throw new InvalidInput(
+          `A ${input.source} subscription takes no secret; leave secret out`,
+        );
+      const made =
+        input.source === "webhook" ? secretFor(connector, input.secret) : null;
       // Graph's is the clientState, which the service hands Microsoft itself: never shown.
-      const secret = made?.secret ?? (input.source === "graph" ? newSecret() : null);
-      const sealed = secret ? key.seal({ secret }, subscriptionAad(org, subId)) : null;
+      const secret =
+        made?.secret ?? (input.source === "graph" ? newSecret() : null);
+      const sealed = secret
+        ? key.seal({ secret }, subscriptionAad(org, subId))
+        : null;
       const sub = await events.createSubscription({
         id: subId,
         organizationId: org,
@@ -183,7 +247,9 @@ export function createEventsAdmin(deps: {
         createdBy: input.by,
       });
       if (!sub)
-        throw new InvalidInput(`${connector.name} already sends events here; remove that first`);
+        throw new InvalidInput(
+          `${connector.name} already sends events here; remove that first`,
+        );
       const url = urlOf(sub);
       let registration: { ok: boolean; message: string } | null = null;
       if (input.register && hook?.register && url && secret) {
@@ -198,17 +264,32 @@ export function createEventsAdmin(deps: {
             filter: input.filter,
           }) as VendorRequest,
         );
-        const location = res && res.status < 300 ? rawAt(res.data, hook.register.location) : null;
+        const location =
+          res && res.status < 300
+            ? rawAt(res.data, hook.register.location)
+            : null;
         if (res && res.status >= 200 && res.status < 300) {
-          await events.setRegistered(sub.id, typeof location === "string" ? location : "yes");
-          registration = { ok: true, message: `Registered in ${connector.name}` };
+          await events.setRegistered(
+            sub.id,
+            typeof location === "string" ? location : "yes",
+          );
+          registration = {
+            ok: true,
+            message: `Registered in ${connector.name}`,
+          };
         } else
           registration = {
             ok: false,
             message: `${connector.name} did not let its connection register the webhook (${res?.status ?? "not connected"}). Add it by hand with the steps.`,
           };
       }
-      await log(org, input.by, input.app, "subscribe_events", `${input.source} ${sub.id}`);
+      await log(
+        org,
+        input.by,
+        input.app,
+        "subscribe_events",
+        `${input.source} ${sub.id}`,
+      );
       if (input.source === "graph") await deps.runtime.syncApp(org, input.app);
       const fresh = (await events.subscription(sub.id))!;
       return {
@@ -222,17 +303,29 @@ export function createEventsAdmin(deps: {
       };
     },
 
-    async rotateSecret(org: string, subId: string, input: z.output<typeof rotateSecretSchema>) {
+    async rotateSecret(
+      org: string,
+      subId: string,
+      input: z.output<typeof rotateSecretSchema>,
+    ) {
       const sub = await events.subscription(subId);
-      if (!sub || sub.organizationId !== org || sub.source !== "webhook") return null;
+      if (!sub || sub.organizationId !== org || sub.source !== "webhook")
+        return null;
       const connector = deps.connectors.get(sub.connectorId);
-      if (!connector) throw new InvalidInput(`${sub.connectorId} is no longer offered`);
+      if (!connector)
+        throw new InvalidInput(`${sub.connectorId} is no longer offered`);
       const { secret, fromApp } = secretFor(connector, input.secret);
       const who = input.by;
       const sealed = key.seal({ secret }, subscriptionAad(org, subId));
-      if (!(await events.setSecret(org, subId, sealed.ciphertext, sealed.keyId))) return null;
+      if (
+        !(await events.setSecret(org, subId, sealed.ciphertext, sealed.keyId))
+      )
+        return null;
       await log(org, who, sub.connectorId, "rotate_event_secret", subId);
-      return { subscription: publicSubscription(sub), secret: fromApp ? null : secret };
+      return {
+        subscription: publicSubscription(sub),
+        secret: fromApp ? null : secret,
+      };
     },
 
     async unsubscribe(org: string, subId: string, who: string) {
@@ -242,7 +335,8 @@ export function createEventsAdmin(deps: {
         existing?.organizationId === org && existing.source === "graph"
           ? await deps.runtime.releaseAll(existing, remove)
           : await remove();
-      if (sub) await log(org, who, sub.connectorId, "unsubscribe_events", subId);
+      if (sub)
+        await log(org, who, sub.connectorId, "unsubscribe_events", subId);
       return sub !== null;
     },
 
@@ -259,20 +353,36 @@ export function createEventsAdmin(deps: {
     ) {
       const { connector, events: declared } = eventsOf(app);
       const { by: who, signingSecret, settings: rawSettings, ...rest } = input;
-      const unknownType = rest.eventTypes.find((t) => !declared.types.some((x) => x.id === t));
-      if (unknownType) throw new InvalidInput(`${connector.name} has no event ${unknownType}`);
-      const fields = [...Object.keys(declared.fields), ...Object.keys(declared.graph?.only ?? {})];
-      const unknownField = rest.conditions.find((c) => !fields.includes(c.field));
+      const unknownType = rest.eventTypes.find(
+        (t) => !declared.types.some((x) => x.id === t),
+      );
+      if (unknownType)
+        throw new InvalidInput(`${connector.name} has no event ${unknownType}`);
+      const fields = [
+        ...Object.keys(declared.fields),
+        ...Object.keys(declared.graph?.only ?? {}),
+      ];
+      const unknownField = rest.conditions
+        .flatMap(conditionFields)
+        .find((f) => !fields.includes(f));
       if (unknownField)
         throw new InvalidInput(
-          `${connector.name} events have no field ${unknownField.field}; they have ${fields.join(", ")}`,
+          `${connector.name} events have no field ${unknownField}; they have ${fields.join(", ")}`,
+        );
+      if (seenDays(rest.conditions).length && !declared.thread)
+        throw new InvalidInput(
+          `${connector.name} events have no thread for a seen condition`,
         );
       const runner = deps.runners.get(rest.runner);
       if (!runner?.startEvent)
-        throw new InvalidInput(`This deployment offers no runner ${rest.runner} for app events`);
+        throw new InvalidInput(
+          `This deployment offers no runner ${rest.runner} for app events`,
+        );
       const settings = runner.settings.safeParse(rawSettings);
-      if (!settings.success) throw new InvalidInput(z.prettifyError(settings.error));
-      if (!deps.publicUrl) throw new ConnectError("This deployment has no public address");
+      if (!settings.success)
+        throw new InvalidInput(z.prettifyError(settings.error));
+      if (!deps.publicUrl)
+        throw new ConnectError("This deployment has no public address");
       const existing = await events.trigger(org, agentId, app);
       const aad = eventTriggerAad(org, agentId, app);
       const sealed = signingSecret
@@ -307,7 +417,12 @@ export function createEventsAdmin(deps: {
       return publicTrigger((await events.trigger(org, agentId, app))!);
     },
 
-    async removeTrigger(org: string, agentId: string, app: string, who: string) {
+    async removeTrigger(
+      org: string,
+      agentId: string,
+      app: string,
+      who: string,
+    ) {
       const existing = await events.trigger(org, agentId, app);
       if (!existing) return false;
       await stopRuns(org, existing.id);
@@ -324,7 +439,9 @@ export function createEventsAdmin(deps: {
       return (await events.watches(subId)).map((w) => ({
         value: w.value,
         subscribed:
-          w.remoteId !== null && w.expiresAt !== null && Date.parse(w.expiresAt) > Date.now(),
+          w.remoteId !== null &&
+          w.expiresAt !== null &&
+          Date.parse(w.expiresAt) > Date.now(),
         expiresAt: w.expiresAt,
         lastNotificationAt: w.lastNotificationAt,
         caughtUpAt: w.caughtUpAt,
@@ -343,20 +460,46 @@ export type EventsAdmin = ReturnType<typeof createEventsAdmin>;
 
 /** During a key rotation, moves every webhook and trigger secret still sealed with an old key
  *  onto the current one. */
-export async function resealEventSecrets(events: EventsStore, key: CredentialKey) {
+export async function resealEventSecrets(
+  events: EventsStore,
+  key: CredentialKey,
+) {
   if (!key.previousIds.length) return 0;
   const stale = await events.staleSecrets(key.id);
   let n = 0;
   for (const s of stale.subscriptions) {
     const aad = subscriptionAad(s.organizationId, s.id);
-    const sealed = key.seal(key.open({ ciphertext: s.secret, keyId: s.secretKeyId }, aad), aad);
-    if (await events.reseal("event_subscriptions", s.id, s.secret, sealed.ciphertext, sealed.keyId))
+    const sealed = key.seal(
+      key.open({ ciphertext: s.secret, keyId: s.secretKeyId }, aad),
+      aad,
+    );
+    if (
+      await events.reseal(
+        "event_subscriptions",
+        s.id,
+        s.secret,
+        sealed.ciphertext,
+        sealed.keyId,
+      )
+    )
       n++;
   }
   for (const t of stale.triggers) {
     const aad = eventTriggerAad(t.organizationId, t.agentId, t.connectorId);
-    const sealed = key.seal(key.open({ ciphertext: t.secret, keyId: t.secretKeyId }, aad), aad);
-    if (await events.reseal("event_triggers", t.id, t.secret, sealed.ciphertext, sealed.keyId)) n++;
+    const sealed = key.seal(
+      key.open({ ciphertext: t.secret, keyId: t.secretKeyId }, aad),
+      aad,
+    );
+    if (
+      await events.reseal(
+        "event_triggers",
+        t.id,
+        t.secret,
+        sealed.ciphertext,
+        sealed.keyId,
+      )
+    )
+      n++;
   }
   return n;
 }

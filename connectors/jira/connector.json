@@ -207,6 +207,11 @@
       "changed": "changelog.items[].field",
       "comment": "comment.body",
       "comment_by": "comment.author.accountId",
+      "mentions": {
+        "path": "comment.body",
+        "match": "\\[~accountid:([A-Za-z0-9:_-]{1,128})\\]"
+      },
+      "request_type": "issue.fields.customfield_10010.requestType.name",
       "updated": "issue.fields.updated"
     },
     "limits": {

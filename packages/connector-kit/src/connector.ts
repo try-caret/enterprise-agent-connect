@@ -97,7 +97,12 @@ const agentStep = agentStepSchema.refine(...clickRule);
 // under its id. An option's `scopes` are vendor permissions the app then needs too, e.g.
 // reading every site.
 const optionSchema = z
-  .object({ value: slug, label: text, description: text, scopes: z.array(text).optional() })
+  .object({
+    value: slug,
+    label: text,
+    description: text,
+    scopes: z.array(text).optional(),
+  })
   .strict();
 
 const fieldSchema = z
@@ -130,7 +135,8 @@ const limitSchema = z
   })
   .strict()
   .refine((l) => (l.kind === "map") === Boolean(l.keys), {
-    message: "A map limit names the list limit it is keyed by (keys), and only it",
+    message:
+      "A map limit names the list limit it is keyed by (keys), and only it",
   });
 
 // The path up to and including its last list (`items[]` of `items[].id`), or "" without one.
@@ -147,7 +153,9 @@ const httpProbeSchema = z
     // "items[].id", name "items[].name").
     name: text.optional(),
     // Keeps only list items whose fields equal these values, e.g. objects agents can query.
-    match: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    match: z
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+      .optional(),
     body: z.record(z.string(), z.unknown()).optional(),
     // Shown to the admin when the probe finds nothing, e.g. a missing project permission.
     ifEmpty: text.optional(),
@@ -184,14 +192,20 @@ const HOST_NAME =
 const HOST_LABEL = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 type Place = "host" | "label" | "segment";
 
-function fillPlaces(address: string, fill: (id: string, place: Place) => string): string {
+function fillPlaces(
+  address: string,
+  fill: (id: string, place: Place) => string,
+): string {
   const m = /^(https?:\/\/)([^/?#]*)([^?#]*)([?#].*)?$/.exec(address);
-  if (!m || /[{}]/.test(m[4] ?? "")) throw new Error(`Not an address: ${address}`);
+  if (!m || /[{}]/.test(m[4] ?? ""))
+    throw new Error(`Not an address: ${address}`);
   const one = (part: string, place: Place) => {
     const id = WHOLE.exec(part)?.[1];
     if (id) return fill(id, place);
     if (/[{}]/.test(part))
-      throw new Error(`A {field} is a whole host, label or segment: ${address}`);
+      throw new Error(
+        `A {field} is a whole host, label or segment: ${address}`,
+      );
     return part;
   };
   const host = WHOLE.test(m[2])
@@ -242,7 +256,10 @@ export function checkHost(url: URL, allowed: string[] | undefined) {
 
 const addressSchema = z
   .string()
-  .refine(validAddress, "An http(s) address; a {field} in it is a whole host, label or segment");
+  .refine(
+    validAddress,
+    "An http(s) address; a {field} in it is a whole host, label or segment",
+  );
 
 /** The address filled with the connection's values; a value that does not fit its place is
  *  refused, so it can never move the call to another host or path. */
@@ -255,7 +272,13 @@ export function fillAddress(
     const value = config[id] ?? "";
     if (place === "host" && HOST_NAME.test(value)) return value;
     if (place === "label" && HOST_LABEL.test(value)) return value;
-    if (place === "segment" && value && !value.includes("/") && value !== "." && value !== "..")
+    if (
+      place === "segment" &&
+      value &&
+      !value.includes("/") &&
+      value !== "." &&
+      value !== ".."
+    )
       return encodeURIComponent(value);
     throw new ConnectError(
       place === "host"
@@ -283,7 +306,9 @@ const keyAuths = [
     })
     .strict(),
   z.object({ type: z.literal("bearer"), token: slug }).strict(),
-  z.object({ type: z.literal("basic"), username: slug, password: slug }).strict(),
+  z
+    .object({ type: z.literal("basic"), username: slug, password: slug })
+    .strict(),
 ] as const;
 const scopeSchema = z
   .string()
@@ -313,7 +338,11 @@ const queryAuth = z
     value: slug,
   })
   .strict();
-const httpAuthSchema = z.discriminatedUnion("type", [...keyAuths, oauth2Auth, queryAuth]);
+const httpAuthSchema = z.discriminatedUnion("type", [
+  ...keyAuths,
+  oauth2Auth,
+  queryAuth,
+]);
 
 // A whole connect form field as a value, e.g. "{auth_host}".
 export const fieldRef = (v: string) => /^\{([a-z][a-z0-9_]*)\}$/.exec(v)?.[1];
@@ -362,7 +391,9 @@ const authFields = (a: HttpAuth): [string, boolean][] =>
               [a.issuer, false],
               [a.subject, false],
               [a.privateKey, true],
-              ...(fieldRef(a.audience) ? [[fieldRef(a.audience)!, false] as [string, boolean]] : []),
+              ...(fieldRef(a.audience)
+                ? [[fieldRef(a.audience)!, false] as [string, boolean]]
+                : []),
             ];
 
 const scalarType = z.enum(["string", "number", "integer", "boolean"]);
@@ -421,7 +452,8 @@ const httpParamSchema = z
     message: "A pattern is for string params without an enum",
   })
   .refine((p) => (p.type === "array") === Boolean(p.items), {
-    message: "An array param names its item type (items), and only an array param",
+    message:
+      "An array param names its item type (items), and only an array param",
   })
   .refine((p) => !p.join || (p.type === "array" && p.in === "query"), {
     message: "join is for array params in the query",
@@ -429,8 +461,15 @@ const httpParamSchema = z
   .refine(
     (p) =>
       !p.field ||
-      (p.type === "string" && p.in !== "path" && p.default === undefined && !p.enum && !p.limit),
-    { message: "A field param is a string in the query or body, with no default, enum or limit" },
+      (p.type === "string" &&
+        p.in !== "path" &&
+        p.default === undefined &&
+        !p.enum &&
+        !p.limit),
+    {
+      message:
+        "A field param is a string in the query or body, with no default, enum or limit",
+    },
   )
   .refine(
     (p) => {
@@ -445,7 +484,10 @@ const httpParamSchema = z
             : fits(p.default)))
       );
     },
-    { message: "A param's enum and default match its type, and the default is one of its enum" },
+    {
+      message:
+        "A param's enum and default match its type, and the default is one of its enum",
+    },
   );
 
 // Picks what the agent sees of a successful answer. `items`: a dot path to the list in the
@@ -453,9 +495,14 @@ const httpParamSchema = z
 // without `items`); a path through a list keeps that field of each of its items.
 const dotPath = z.string().regex(/^[A-Za-z0-9_$@-]+(\.[A-Za-z0-9_$@-]+)*$/);
 const httpResultSchema = z
-  .object({ items: dotPath.optional(), fields: z.array(dotPath).min(1).optional() })
+  .object({
+    items: dotPath.optional(),
+    fields: z.array(dotPath).min(1).optional(),
+  })
   .strict()
-  .refine((r) => r.items || r.fields, { message: "A result names items, fields or both" });
+  .refine((r) => r.items || r.fields, {
+    message: "A result names items, fields or both",
+  });
 
 // One page per call: `param` takes the cursor in, and the answer gives the next one from a
 // dot path in its body, a header, or the rel="next" address of its Link header (the value of
@@ -467,7 +514,9 @@ const httpPagingSchema = z.union([
 ]);
 
 // A JSON body's content type: application/json or a +json type such as application/vnd.api+json.
-const jsonContentType = z.string().regex(/^application\/(json|[A-Za-z0-9.-]+\+json)$/);
+const jsonContentType = z
+  .string()
+  .regex(/^application\/(json|[A-Za-z0-9.-]+\+json)$/);
 
 // With nestedBody, a body param's wire name is a dot path into the body (a.b.c builds
 // {"a":{"b":{"c":…}}}, a numeric segment indexes a list); without it the name is one key, as
@@ -489,10 +538,12 @@ function bodyPlacesFit(t: {
     .map(([k, p]) => (t.nestedBody ? (p.name ?? k).split(".") : [p.name ?? k]));
   const fixed = t.body ? bodyLeaves(t.body) : [];
   // A param's numeric segment indexes a list, so it stays small: 0 to 99.
-  const index = (seg: string) => !/^\d+$/.test(seg) || /^(0|[1-9]\d?)$/.test(seg);
+  const index = (seg: string) =>
+    !/^\d+$/.test(seg) || /^(0|[1-9]\d?)$/.test(seg);
   if (params.some((path) => !path.every(index))) return false;
   const all = [...params, ...fixed];
-  if (all.some((path) => path.some((seg) => !seg || UNSAFE_KEYS.has(seg)))) return false;
+  if (all.some((path) => path.some((seg) => !seg || UNSAFE_KEYS.has(seg))))
+    return false;
   // One path the same as or inside another (a param's own duplicates are refused elsewhere).
   const within = (a: string[], b: string[]) =>
     a.length <= b.length && a.every((seg, i) => seg === b[i]);
@@ -500,16 +551,21 @@ function bodyPlacesFit(t: {
   // dropped or the body changes shape with the params' order. Fixed values are objects down to
   // their leaves.
   const kinds = new Map<string, boolean>();
-  for (const [path, isParam] of [...params.map((p) => [p, true] as const), ...fixed.map((f) => [f, false] as const)])
+  for (const [path, isParam] of [
+    ...params.map((p) => [p, true] as const),
+    ...fixed.map((f) => [f, false] as const),
+  ])
     for (let i = 1; i < path.length; i++) {
-      const at = path.slice(0, i).join("."), isList = isParam && /^\d+$/.test(path[i]);
+      const at = path.slice(0, i).join("."),
+        isList = isParam && /^\d+$/.test(path[i]);
       if ((kinds.get(at) ?? isList) !== isList) return false;
       kinds.set(at, isList);
     }
   return params.every(
     (p, i) =>
-      params.every((q, j) => i === j || p.length === q.length || !within(p, q)) &&
-      fixed.every((f) => !within(p, f) && !within(f, p)),
+      params.every(
+        (q, j) => i === j || p.length === q.length || !within(p, q),
+      ) && fixed.every((f) => !within(p, f) && !within(f, p)),
   );
 }
 
@@ -526,18 +582,31 @@ const httpToolSchema = z
     // Checked in the answer, for calls whose params cannot be limited (e.g. an order by id):
     // while the agent has values of `limit`, the answer's `field` (a dot path; every item of a
     // list) must be one of them, else nothing is returned. A missing field is refused.
-    answerLimits: z.array(z.object({ field: dotPath, limit: slug }).strict()).default([]),
+    answerLimits: z
+      .array(z.object({ field: dotPath, limit: slug }).strict())
+      .default([]),
     result: httpResultSchema.optional(),
     paging: httpPagingSchema.optional(),
     // Fixed JSON merged into the body, never seen by the agent, e.g. a JSON:API
     // {"data": {"type": "PersonSearch"}}.
     // zod drops a "__proto__" key quietly, so it is refused before the parse.
     body: z
-      .preprocess((v, ctx) => {
-        if (v && typeof v === "object" && Object.keys(v).some((k) => UNSAFE_KEYS.has(k)))
-          ctx.issues.push({ code: "custom", message: "A body has no __proto__, constructor or prototype", input: v });
-        return v;
-      }, z.record(z.string(), z.unknown()))
+      .preprocess(
+        (v, ctx) => {
+          if (
+            v &&
+            typeof v === "object" &&
+            Object.keys(v).some((k) => UNSAFE_KEYS.has(k))
+          )
+            ctx.issues.push({
+              code: "custom",
+              message: "A body has no __proto__, constructor or prototype",
+              input: v,
+            });
+          return v;
+        },
+        z.record(z.string(), z.unknown()),
+      )
       .optional(),
     contentType: jsonContentType.optional(),
     // Body param names are dot paths into nested objects (see bodyPlacesFit).
@@ -553,19 +622,34 @@ const httpToolSchema = z
   })
   .strict()
   .refine(
-    (t) => !t.binary || (t.method === "GET" && !t.result && !t.paging && !t.answerLimits.length),
-    { message: "A binary tool is a GET with no result, paging or answerLimits" },
+    (t) =>
+      !t.binary ||
+      (t.method === "GET" && !t.result && !t.paging && !t.answerLimits.length),
+    {
+      message: "A binary tool is a GET with no result, paging or answerLimits",
+    },
   )
   .refine(
     (t) =>
       !t.text ||
-      (t.method === "GET" && !t.binary && !t.result && !t.paging && !t.answerLimits.length),
-    { message: "A text tool is a GET, not binary, with no result, paging or answerLimits" },
+      (t.method === "GET" &&
+        !t.binary &&
+        !t.result &&
+        !t.paging &&
+        !t.answerLimits.length),
+    {
+      message:
+        "A text tool is a GET, not binary, with no result, paging or answerLimits",
+    },
   )
   .refine(
     (t) => {
-      const inPath = [...t.path.matchAll(/\{([a-z][a-z0-9_]*)\}/g)].map((m) => m[1]);
-      const declared = Object.entries(t.params).filter(([, p]) => p.in === "path");
+      const inPath = [...t.path.matchAll(/\{([a-z][a-z0-9_]*)\}/g)].map(
+        (m) => m[1],
+      );
+      const declared = Object.entries(t.params).filter(
+        ([, p]) => p.in === "path",
+      );
       return (
         inPath.every(
           (n) =>
@@ -582,7 +666,9 @@ const httpToolSchema = z
     },
   )
   .refine(
-    (t) => !(t.body || Object.values(t.params).some((p) => p.in === "body")) || t.method !== "GET",
+    (t) =>
+      !(t.body || Object.values(t.params).some((p) => p.in === "body")) ||
+      t.method !== "GET",
     { message: "A GET tool has no body params or body" },
   )
   .refine((t) => !(t.readOnly && (t.destructive || t.method === "DELETE")), {
@@ -599,13 +685,21 @@ const httpToolSchema = z
   .refine(
     (t) => {
       const p = t.paging && t.params[t.paging.param];
-      return !t.paging || (p && p.in !== "path" && p.type !== "array" && p.type !== "boolean");
+      return (
+        !t.paging ||
+        (p && p.in !== "path" && p.type !== "array" && p.type !== "boolean")
+      );
     },
-    { message: "paging.param is one of the tool's query or body params, a string or number" },
+    {
+      message:
+        "paging.param is one of the tool's query or body params, a string or number",
+    },
   )
   .refine(
     (t) => {
-      const wire = Object.entries(t.params).map(([k, p]) => `${p.in}:${p.name ?? k}`);
+      const wire = Object.entries(t.params).map(
+        ([k, p]) => `${p.in}:${p.name ?? k}`,
+      );
       return new Set(wire).size === wire.length;
     },
     { message: "Two params of a tool are sent under the same name" },
@@ -628,7 +722,10 @@ const CREDENTIAL_LIKE = /auth|token|secret|key|password|session|cookie/i;
 const httpSchema = z
   .object({
     // Every call goes to this origin, under this path, and nowhere else: redirects are refused.
-    baseUrl: addressSchema.refine((u) => !/[?#]/.test(u), "No query or fragment"),
+    baseUrl: addressSchema.refine(
+      (u) => !/[?#]/.test(u),
+      "No query or fragment",
+    ),
     allowedHosts: allowedHostsSchema,
     auth: httpAppAuthSchema,
     // The content type of every tool's JSON body, unless the tool names its own.
@@ -646,10 +743,13 @@ const httpSchema = z
   .refine(
     (h) =>
       h.allowInsecureHttp ||
-      [h.baseUrl, ...("tokenUrl" in h.auth ? [h.auth.tokenUrl] : [])].every((u) =>
-        u.startsWith("https://"),
+      [h.baseUrl, ...("tokenUrl" in h.auth ? [h.auth.tokenUrl] : [])].every(
+        (u) => u.startsWith("https://"),
       ),
-    { message: "baseUrl and tokenUrl must be https unless allowInsecureHttp is true" },
+    {
+      message:
+        "baseUrl and tokenUrl must be https unless allowInsecureHttp is true",
+    },
   )
   .refine(
     (h) =>
@@ -657,7 +757,10 @@ const httpSchema = z
         (name) =>
           !RESERVED_HEADERS.has(name.toLowerCase()) &&
           !CREDENTIAL_LIKE.test(name) &&
-          !(h.auth.type === "header" && h.auth.header.toLowerCase() === name.toLowerCase()),
+          !(
+            h.auth.type === "header" &&
+            h.auth.header.toLowerCase() === name.toLowerCase()
+          ),
       ),
     {
       message:
@@ -669,8 +772,13 @@ const httpSchema = z
       Object.keys(h.fieldHeaders).every(
         (name) =>
           !RESERVED_HEADERS.has(name.toLowerCase()) &&
-          !(h.auth.type === "header" && h.auth.header.toLowerCase() === name.toLowerCase()) &&
-          !Object.keys(h.headers).some((k) => k.toLowerCase() === name.toLowerCase()),
+          !(
+            h.auth.type === "header" &&
+            h.auth.header.toLowerCase() === name.toLowerCase()
+          ) &&
+          !Object.keys(h.headers).some(
+            (k) => k.toLowerCase() === name.toLowerCase(),
+          ),
       ),
     {
       message:
@@ -682,14 +790,18 @@ const httpSchema = z
       h.auth.type !== "query" ||
       h.tools.every((t) =>
         Object.entries(t.params).every(
-          ([k, p]) => p.in !== "query" || (p.name ?? k) !== (h.auth as { param: string }).param,
+          ([k, p]) =>
+            p.in !== "query" ||
+            (p.name ?? k) !== (h.auth as { param: string }).param,
         ),
       ),
     { message: "No tool param may be sent as the query auth param" },
   );
 export type HttpApp = z.infer<typeof httpSchema>;
 
-const answerLimitsSchema = z.array(z.object({ field: dotPath, limit: slug }).strict()).default([]);
+const answerLimitsSchema = z
+  .array(z.object({ field: dotPath, limit: slug }).strict())
+  .default([]);
 const secure = (allowInsecure: boolean, ...urls: string[]) =>
   allowInsecure || urls.every((u) => u.startsWith("https://"));
 
@@ -743,15 +855,22 @@ const soapToolSchema = z
         Object.keys(t.params).every((n) => used.includes(n))
       );
     },
-    { message: "Each param is a {param} placeholder in the tool's body, once, and only those" },
+    {
+      message:
+        "Each param is a {param} placeholder in the tool's body, once, and only those",
+    },
   )
   .refine(
     (t) =>
       Object.entries(t.params).every(
         ([n, p]) =>
-          p.required || new RegExp(`<([\\w.:-]+)(\\s[^>]*)?>\\{${n}\\}</\\1>`).test(t.body),
+          p.required ||
+          new RegExp(`<([\\w.:-]+)(\\s[^>]*)?>\\{${n}\\}</\\1>`).test(t.body),
       ),
-    { message: "An optional param's placeholder is the whole content of an element" },
+    {
+      message:
+        "An optional param's placeholder is the whole content of an element",
+    },
   )
   .refine((t) => !t.answerLimits.length || t.readOnly, {
     message: "answerLimits are for readOnly tools only",
@@ -767,21 +886,30 @@ const soapSchema = z
     // Prefixes declared on the Envelope for the tools' bodies, e.g. {"hr": "urn:example:hr"}.
     namespaces: z
       .record(
-        xmlName.refine((p) => !["soap", "wsse", "wsu", "xml", "xmlns"].includes(p), "Reserved"),
+        xmlName.refine(
+          (p) => !["soap", "wsse", "wsu", "xml", "xmlns"].includes(p),
+          "Reserved",
+        ),
         z.string().regex(/^[^"<>&\s]+$/),
       )
       .default({}),
     auth: z.discriminatedUnion("type", [...keyAuths]).optional(),
     // WS-Security UsernameToken in the SOAP header, with or without other auth.
     wsSecurity: z
-      .object({ username: slug, password: slug, digest: z.boolean().default(false) })
+      .object({
+        username: slug,
+        password: slug,
+        digest: z.boolean().default(false),
+      })
       .strict()
       .optional(),
     // The call the connector's `operation` check makes: a tool, its arguments, what to show.
     verify: z
       .object({
         tool: slug,
-        args: z.record(slug, z.union([z.string(), z.number(), z.boolean()])).default({}),
+        args: z
+          .record(slug, z.union([z.string(), z.number(), z.boolean()]))
+          .default({}),
         show: text,
       })
       .strict()
@@ -790,7 +918,9 @@ const soapSchema = z
     allowInsecureHttp: z.boolean().default(false),
   })
   .strict()
-  .refine((s) => s.auth || s.wsSecurity, { message: "A soap app needs auth or wsSecurity" })
+  .refine((s) => s.auth || s.wsSecurity, {
+    message: "A soap app needs auth or wsSecurity",
+  })
   .refine((s) => secure(s.allowInsecureHttp, s.endpoint), {
     message: "endpoint must be https unless allowInsecureHttp is true",
   })
@@ -829,13 +959,20 @@ const odataValueSchema = z
   .strict();
 const odataFilterSchema = odataValueSchema
   .extend({
-    op: z.enum(["eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith"]).default("eq"),
+    op: z
+      .enum(["eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith"])
+      .default("eq"),
   })
   .strict()
-  .refine((f) => !f.limit || f.op === "eq", { message: "Only an eq filter can have a limit" })
-  .refine((f) => !["contains", "startswith"].includes(f.op) || f.type === "string", {
-    message: "contains and startswith filter strings",
-  });
+  .refine((f) => !f.limit || f.op === "eq", {
+    message: "Only an eq filter can have a limit",
+  })
+  .refine(
+    (f) => !["contains", "startswith"].includes(f.op) || f.type === "string",
+    {
+      message: "contains and startswith filter strings",
+    },
+  );
 
 const ODATA_KINDS = {
   list: { on: "entitySet", parts: ["filters"] },
@@ -862,7 +999,9 @@ const odataToolSchema = z
     select: z.array(odataName).default([]),
     orderBy: z
       .string()
-      .regex(/^[A-Za-z_][\w./]*( (asc|desc))?(,[A-Za-z_][\w./]*( (asc|desc))?)*$/)
+      .regex(
+        /^[A-Za-z_][\w./]*( (asc|desc))?(,[A-Za-z_][\w./]*( (asc|desc))?)*$/,
+      )
       .optional(),
     // Most items per page: the agent's max_results is capped at it.
     top: z.number().int().min(1).max(1000).default(50),
@@ -878,9 +1017,12 @@ const odataToolSchema = z
         Boolean(t[kind.on]) &&
         !t[kind.on === "entitySet" ? "function" : "entitySet"] &&
         parts.every(
-          (p) => (kind.parts as readonly string[]).includes(p) || !Object.keys(t[p]).length,
+          (p) =>
+            (kind.parts as readonly string[]).includes(p) ||
+            !Object.keys(t[p]).length,
         ) &&
-        (!(kind.parts as readonly string[]).includes("key") || Object.keys(t.key).length > 0) &&
+        (!(kind.parts as readonly string[]).includes("key") ||
+          Object.keys(t.key).length > 0) &&
         (t.kind !== "create" || Object.keys(t.fields).length > 0) &&
         (t.kind === "list" || !t.orderBy) &&
         (kind.on !== "function" || !t.select.length)
@@ -891,9 +1033,13 @@ const odataToolSchema = z
         "A list names an entitySet and filters, get a key, create fields, update a key and fields, function and action a function and params; orderBy is for lists, select not for functions",
     },
   )
-  .refine((t) => !["create", "action"].includes(t.kind) || !t.answerLimits.length, {
-    message: "answerLimits are for reads and updates (checked before the change)",
-  })
+  .refine(
+    (t) => !["create", "action"].includes(t.kind) || !t.answerLimits.length,
+    {
+      message:
+        "answerLimits are for reads and updates (checked before the change)",
+    },
+  )
   .refine(
     (t) => {
       const names = [t.key, t.filters, t.fields, t.params].flatMap(Object.keys);
@@ -902,19 +1048,30 @@ const odataToolSchema = z
         !names.some((n) => n === "cursor" || n === "max_results")
       );
     },
-    { message: "Param names are unique in a tool, and cursor and max_results are taken" },
+    {
+      message:
+        "Param names are unique in a tool, and cursor and max_results are taken",
+    },
   )
   .refine(
     (t) =>
       !t.select.length ||
-      Object.entries(t.filters).every(([n, f]) => !f.limit || t.select.includes(f.property ?? n)),
-    { message: "A limited filter's property must be selected, so answers can be checked" },
+      Object.entries(t.filters).every(
+        ([n, f]) => !f.limit || t.select.includes(f.property ?? n),
+      ),
+    {
+      message:
+        "A limited filter's property must be selected, so answers can be checked",
+    },
   );
 
 const odataSchema = z
   .object({
     // The service root, e.g. https://host/sap/opu/odata/sap/API_BUSINESS_PARTNER.
-    serviceRoot: addressSchema.refine((u) => !/[?#]/.test(u), "No query or fragment"),
+    serviceRoot: addressSchema.refine(
+      (u) => !/[?#]/.test(u),
+      "No query or fragment",
+    ),
     allowedHosts: allowedHostsSchema,
     version: z.enum(["2", "4"]),
     auth: httpAuthSchema,
@@ -925,7 +1082,9 @@ const odataSchema = z
           (h) =>
             !RESERVED_HEADERS.has(h.toLowerCase()) &&
             !CREDENTIAL_LIKE.test(h) &&
-            !/^(accept|if-match|x-http-method|odata-.*|(max)?dataserviceversion|prefer)$/i.test(h),
+            !/^(accept|if-match|x-http-method|odata-.*|(max)?dataserviceversion|prefer)$/i.test(
+              h,
+            ),
           "Set by the service, or a credential (use auth)",
         ),
         headerValue,
@@ -951,7 +1110,10 @@ const odataSchema = z
         o.serviceRoot,
         ...(o.auth.type === "oauth2" ? [o.auth.tokenUrl] : []),
       ),
-    { message: "serviceRoot and tokenUrl must be https unless allowInsecureHttp is true" },
+    {
+      message:
+        "serviceRoot and tokenUrl must be https unless allowInsecureHttp is true",
+    },
   )
   .refine((o) => o.paging === "skip" || o.version === "4", {
     message: "Server paging is for OData v4",
@@ -986,10 +1148,14 @@ const sqlToolSchema = z
     destructive: z.boolean().default(false),
     // While the agent has values of `limit`, every row's `column` must be one of them, else
     // nothing is returned (a write is rolled back). A missing column is refused.
-    answerLimits: z.array(z.object({ column: text, limit: slug }).strict()).default([]),
+    answerLimits: z
+      .array(z.object({ column: text, limit: slug }).strict())
+      .default([]),
   })
   .strict()
-  .refine((t) => !t.destructive || t.write, { message: "A destructive tool is a write" });
+  .refine((t) => !t.destructive || t.write, {
+    message: "A destructive tool is a write",
+  });
 
 const sqlSchema = z
   .object({
@@ -1014,7 +1180,9 @@ export type SqlApp = z.infer<typeof sqlSchema>;
 
 // Events the app can send (or a poll can read) that start agents (packages/server/src/events,
 // docs/triggers.md). A path is `a.b`, or `a[].b` for every item of a list.
-const eventPath = z.string().regex(/^[A-Za-z0-9_$@-]+(\[\])?(\.[A-Za-z0-9_$@-]+(\[\])?)*$/);
+const eventPath = z
+  .string()
+  .regex(/^[A-Za-z0-9_$@-]+(\[\])?(\.[A-Za-z0-9_$@-]+(\[\])?)*$/);
 const eventId = z.string().regex(/^[A-Za-z0-9_.:-]{1,100}$/);
 // Where a value is in a delivery: a path in its JSON body, or a request header.
 const locator = z.union([
@@ -1032,8 +1200,35 @@ const eventsSchema = z
   .object({
     types: z.array(z.object({ id: eventId, label: text }).strict()).min(1),
     // What an agent is given of each event, and what conditions and limits read: name → path,
-    // or a list of paths whose first with a value is taken (Slack: thread_ts, else ts).
-    fields: z.record(slug, z.union([eventPath, z.array(eventPath).min(2).max(5)])),
+    // a list of paths whose first with a value is taken (Slack: thread_ts, else ts), or the
+    // matches of a pattern in a text, read in full (Jira: the account ids a comment mentions).
+    fields: z.record(
+      slug,
+      z.union([
+        eventPath,
+        z.array(eventPath).min(2).max(5),
+        z
+          .object({
+            path: eventPath,
+            match: z
+              .string()
+              .min(1)
+              .max(200)
+              .refine(
+                (p) => {
+                  try {
+                    new RegExp(p, "g");
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                },
+                { message: "Not a valid pattern" },
+              ),
+          })
+          .strict(),
+      ]),
+    ),
     // A limit's id → the field holding the event's value for it. An agent with that limit set
     // is started only by events whose value is within it.
     limits: z.record(slug, slug).default({}),
@@ -1086,7 +1281,11 @@ const eventsSchema = z
         // url_verification): a delivery whose `at` is `equals` is answered with the text at
         // `echo` and starts nothing.
         handshake: z
-          .object({ at: locator, equals: z.string().min(1).max(100), echo: eventPath })
+          .object({
+            at: locator,
+            equals: z.string().min(1).max(100),
+            echo: eventPath,
+          })
           .strict()
           .optional(),
         // Where the admin pastes the address ({url}) and the secret.
@@ -1094,7 +1293,10 @@ const eventsSchema = z
         // Registers the webhook through the app's API with the connection's credentials, filled
         // with {name} {url} {secret} {events} {filter}. `location`: where the answer gives the
         // webhook's own address.
-        register: eventRequest.extend({ location: dotPath }).strict().optional(),
+        register: eventRequest
+          .extend({ location: dotPath })
+          .strict()
+          .optional(),
       })
       .strict()
       .refine((w) => w.verify.type !== "none" || w.allowInsecure, {
@@ -1104,7 +1306,11 @@ const eventsSchema = z
     // The account the app's connection acts as, so its own changes (an agent's comment) never
     // start agents again: `request` answers its id at `id`; `fields` hold who made the change.
     self: z
-      .object({ request: eventRequest, id: dotPath, fields: z.array(slug).min(1) })
+      .object({
+        request: eventRequest,
+        id: dotPath,
+        fields: z.array(slug).min(1),
+      })
       .strict()
       .optional(),
     // For apps without webhooks: `request` read every interval, filled with {minutes} (since
@@ -1122,7 +1328,11 @@ const eventsSchema = z
         wrap: slug.optional(),
         cursor: eventPath,
         deliveryId: z.array(eventPath).min(1),
-        types: z.array(z.object({ type: eventId, since: eventPath.optional() }).strict()).min(1),
+        types: z
+          .array(
+            z.object({ type: eventId, since: eventPath.optional() }).strict(),
+          )
+          .min(1),
       })
       .strict()
       .optional(),
@@ -1140,7 +1350,9 @@ const eventsSchema = z
       .object({
         per: slug,
         resource: z.string().min(1).includes("{value}"),
-        changeType: z.string().regex(/^(created|updated|deleted)(,(created|updated|deleted))*$/),
+        changeType: z
+          .string()
+          .regex(/^(created|updated|deleted)(,(created|updated|deleted))*$/),
         type: eventId,
         maxMinutes: z.number().int().min(45).max(43200),
         read: eventRequest,
@@ -1165,9 +1377,14 @@ const eventsSchema = z
     (e) =>
       Object.values(e.limits).every((f) => f in e.fields) &&
       (e.self?.fields ?? []).every((f) => f in e.fields) &&
-      (e.poll?.types ?? []).every((t) => e.types.some((x) => x.id === t.type)) &&
+      (e.poll?.types ?? []).every((t) =>
+        e.types.some((x) => x.id === t.type),
+      ) &&
       (e.thread === undefined || e.thread in e.fields),
-    { message: "Event limits, self and thread name fields, and a poll's types are declared types" },
+    {
+      message:
+        "Event limits, self and thread name fields, and a poll's types are declared types",
+    },
   )
   .refine(
     (e) =>
@@ -1177,7 +1394,8 @@ const eventsSchema = z
         e.types.some((x) => x.id === e.graph!.type) &&
         e.graph.own.every((f) => f in e.fields) &&
         Object.entries(e.graph.only).every(
-          ([name, from]) => !(name in e.fields) && from.every((f) => f in e.fields),
+          ([name, from]) =>
+            !(name in e.fields) && from.every((f) => f in e.fields),
         )),
     {
       message:
@@ -1253,7 +1471,8 @@ export const connectorSchema = z
             message: "A required capability cannot be destructive",
           })
           .refine((c) => !c.costs || c.destructive, {
-            message: "A capability that spends money must be destructive, so it asks first",
+            message:
+              "A capability that spends money must be destructive, so it asks first",
           }),
       )
       .min(1),
@@ -1320,13 +1539,18 @@ export const connectorSchema = z
     (c) => {
       const app = described(c);
       if (!app) return true;
-      const lists = new Set(c.limits.filter((l) => l.kind === "list").map((l) => l.id));
+      const lists = new Set(
+        c.limits.filter((l) => l.kind === "list").map((l) => l.id),
+      );
       return (
         app.fields.every(([id, secret]) =>
-          c.fields.some((f) => f.id === id && f.secret === secret && !f.options),
+          c.fields.some(
+            (f) => f.id === id && f.secret === secret && !f.options,
+          ),
         ) &&
         !c.provider &&
-        (c.accountKey === "host" || c.fields.some((f) => f.id === c.accountKey && !f.secret)) &&
+        (c.accountKey === "host" ||
+          c.fields.some((f) => f.id === c.accountKey && !f.secret)) &&
         app.limits.every((l) => lists.has(l))
       );
     },
@@ -1337,7 +1561,8 @@ export const connectorSchema = z
   )
   .refine(
     (c) =>
-      !c.agentAccess || c.limits.some((l) => l.id === c.agentAccess!.limit && l.kind === "text"),
+      !c.agentAccess ||
+      c.limits.some((l) => l.id === c.agentAccess!.limit && l.kind === "text"),
     { message: "agentAccess.limit must be one of the connector's text limits" },
   )
   .refine(
@@ -1345,26 +1570,43 @@ export const connectorSchema = z
       !c.verify.limit &&
       (!c.discover?.limit ||
         c.limits.some((l) => l.id === c.discover!.limit && l.kind === "list")),
-    { message: "discover.limit must be one of the connector's list limits (verify takes none)" },
+    {
+      message:
+        "discover.limit must be one of the connector's list limits (verify takes none)",
+    },
   )
   .refine(
     (c) => {
       if (!c.sql) return true;
-      const writes = new Set(c.sql.tools.filter((t) => t.write).map((t) => t.name));
+      const writes = new Set(
+        c.sql.tools.filter((t) => t.write).map((t) => t.name),
+      );
       return (
-        [c.verify, ...(c.discover ? [c.discover] : [])].every((p) => "check" in p) &&
-        c.capabilities.every((cap) => !cap.required || !cap.tools.some((t) => writes.has(t)))
+        [c.verify, ...(c.discover ? [c.discover] : [])].every(
+          (p) => "check" in p,
+        ) &&
+        c.capabilities.every(
+          (cap) => !cap.required || !cap.tools.some((t) => writes.has(t)),
+        )
       );
     },
-    { message: "An sql app's probes are checks, and a write tool is in no required capability" },
+    {
+      message:
+        "An sql app's probes are checks, and a write tool is in no required capability",
+    },
   )
   .refine(
     (c) =>
-      [...Object.keys(c.agentAccess?.probes ?? {}), ...(c.siteAccess?.write ?? [])].every((id) =>
-        c.capabilities.some((x) => x.id === id),
-      ) &&
-      (!Object.keys(c.agentAccess?.probes ?? {}).length || c.agentAccess?.missing !== undefined),
-    { message: "agentAccess probes and siteAccess.write name capabilities; probes need missing" },
+      [
+        ...Object.keys(c.agentAccess?.probes ?? {}),
+        ...(c.siteAccess?.write ?? []),
+      ].every((id) => c.capabilities.some((x) => x.id === id)) &&
+      (!Object.keys(c.agentAccess?.probes ?? {}).length ||
+        c.agentAccess?.missing !== undefined),
+    {
+      message:
+        "agentAccess probes and siteAccess.write name capabilities; probes need missing",
+    },
   )
   .refine(
     (c) =>
@@ -1383,9 +1625,13 @@ export const connectorSchema = z
       ),
     { message: "fieldHeaders name connect form fields" },
   )
-  .refine((c) => new Set(c.capabilities.map((l) => l.id)).size === c.capabilities.length, {
-    message: "Capability ids must be unique",
-  })
+  .refine(
+    (c) =>
+      new Set(c.capabilities.map((l) => l.id)).size === c.capabilities.length,
+    {
+      message: "Capability ids must be unique",
+    },
+  )
   .refine(
     (c) => {
       const tools = c.capabilities.flatMap((l) => l.tools);
@@ -1394,25 +1640,44 @@ export const connectorSchema = z
     { message: "A tool belongs to one capability only" },
   )
   .refine(
-    (c) => c.provider !== undefined || ![...c.setup, ...c.afterConnect].some((s) => s.settings),
-    { message: "Step settings are kept on a provider connection: only a provider's app has them" },
+    (c) =>
+      c.provider !== undefined ||
+      ![...c.setup, ...c.afterConnect].some((s) => s.settings),
+    {
+      message:
+        "Step settings are kept on a provider connection: only a provider's app has them",
+    },
   )
   .refine(
     (c) => {
-      const isOption = (o: { field: string; value: string }, fields: typeof c.fields) =>
-        fields.some((f) => f.id === o.field && f.options?.some((x) => x.value === o.value));
+      const isOption = (
+        o: { field: string; value: string },
+        fields: typeof c.fields,
+      ) =>
+        fields.some(
+          (f) =>
+            f.id === o.field && f.options?.some((x) => x.value === o.value),
+        );
       return (
-        [...c.setup, ...c.afterConnect].every((s) => !s.option || isOption(s.option, c.fields)) &&
-        c.fields.every((f, i) => !f.requires || isOption(f.requires, c.fields.slice(0, i)))
+        [...c.setup, ...c.afterConnect].every(
+          (s) => !s.option || isOption(s.option, c.fields),
+        ) &&
+        c.fields.every(
+          (f, i) => !f.requires || isOption(f.requires, c.fields.slice(0, i)),
+        )
       );
     },
-    { message: "A step's option and a field's requires name an option of an earlier choice" },
+    {
+      message:
+        "A step's option and a field's requires name an option of an earlier choice",
+    },
   )
   .refine(
     (c) =>
       [...c.setup, ...c.afterConnect].every(
         (s) =>
-          !s.capabilities || s.capabilities.every((id) => c.capabilities.some((x) => x.id === id)),
+          !s.capabilities ||
+          s.capabilities.every((id) => c.capabilities.some((x) => x.id === id)),
       ),
     { message: "A step's capabilities name capabilities of its connector" },
   )
@@ -1422,7 +1687,11 @@ export const connectorSchema = z
   .refine(
     (c) =>
       c.limits.every(
-        (l, i) => !l.keys || c.limits.slice(0, i).some((k) => k.id === l.keys && k.kind === "list"),
+        (l, i) =>
+          !l.keys ||
+          c.limits
+            .slice(0, i)
+            .some((k) => k.id === l.keys && k.kind === "list"),
       ),
     { message: "A map limit's keys must be a list limit listed before it" },
   );
@@ -1438,7 +1707,9 @@ function described(c: {
   const plain = (address: string) =>
     addressFields(address).map((id): [string, boolean] => [id, false]);
   const limitsOf = (...sets: Record<string, { limit?: string }>[]) =>
-    sets.flatMap((s) => Object.values(s).flatMap((p) => (p.limit ? [p.limit] : [])));
+    sets.flatMap((s) =>
+      Object.values(s).flatMap((p) => (p.limit ? [p.limit] : [])),
+    );
   if (c.http)
     return {
       fields: [
@@ -1535,7 +1806,9 @@ export type Provider = z.infer<typeof providerSchema>;
 export type ConnectorContext = { connector: Connector };
 
 /** The code behind one connector: its vendor client and its tools. */
-export type ConnectorModule<Context extends ConnectorContext = ConnectorContext> = {
+export type ConnectorModule<
+  Context extends ConnectorContext = ConnectorContext,
+> = {
   id: string;
   // Its connector.json inline, for a module that has no folder of its own.
   connector?: ConnectorJson;
@@ -1553,7 +1826,8 @@ function parse<T>(raw: unknown, where: string, schema: z.ZodType<T>): T {
     throw new Error(`${where}: ${(error as Error).message}`);
   }
   const parsed = schema.safeParse(filled);
-  if (!parsed.success) throw new Error(`${where}: ${z.prettifyError(parsed.error)}`);
+  if (!parsed.success)
+    throw new Error(`${where}: ${z.prettifyError(parsed.error)}`);
   return parsed.data;
 }
 
@@ -1574,14 +1848,22 @@ function loadDir<T>(
     .sort()
     .map((name) => {
       const where = `${name}/${file}`;
-      const data = parse(JSON.parse(readFileSync(new URL(where, dir), "utf8")), where, schema);
-      if (data.id !== name) throw new Error(`${where}: id must match the folder name`);
+      const data = parse(
+        JSON.parse(readFileSync(new URL(where, dir), "utf8")),
+        where,
+        schema,
+      );
+      if (data.id !== name)
+        throw new Error(`${where}: id must match the folder name`);
       return data;
     });
 }
 
 /** `only`: the folder ids to read, so an app not offered is never parsed. */
-export function loadConnectors(dir = CONNECTORS_DIR, only?: (id: string) => boolean): Connector[] {
+export function loadConnectors(
+  dir = CONNECTORS_DIR,
+  only?: (id: string) => boolean,
+): Connector[] {
   return loadDir(dir, "connector.json", connectorSchema, only);
 }
 
@@ -1595,12 +1877,17 @@ export const choiceFields = (connector: Connector) =>
 
 /** The option chosen for each choice field: the stored one, else the first, which also holds
  *  while the earlier choice it `requires` is not made. */
-export function chosenOptions(connector: Connector, config: Record<string, string> = {}) {
+export function chosenOptions(
+  connector: Connector,
+  config: Record<string, string> = {},
+) {
   const chosen: Record<string, string> = {};
   return connector.fields.flatMap((f) => {
     if (!f.options) return [];
     const asked = !f.requires || chosen[f.requires.field] === f.requires.value;
-    const option = (asked && f.options.find((o) => o.value === config[f.id])) || f.options[0];
+    const option =
+      (asked && f.options.find((o) => o.value === config[f.id])) ||
+      f.options[0];
     chosen[f.id] = option.value;
     return [option];
   });
@@ -1629,21 +1916,34 @@ export function effectiveCapabilities(
   grant: readonly string[],
   ceiling: readonly string[],
 ): Capability[] {
-  return connector.capabilities.filter((c) => grant.includes(c.id) && ceiling.includes(c.id));
+  return connector.capabilities.filter(
+    (c) => grant.includes(c.id) && ceiling.includes(c.id),
+  );
 }
 
 // Keys of a provider connection's own config, which a setting saved beside them must not replace.
-const RESERVED_SETTINGS = new Set(["tenantId", "clientId", "auth", "certificate", "sites"]);
+const RESERVED_SETTINGS = new Set([
+  "tenantId",
+  "clientId",
+  "auth",
+  "certificate",
+  "sites",
+]);
 
 /** The settings a provider's apps ask for in their steps, by id. */
-export function providerSettings(connectors: Connector[], provider: string): Map<string, Setting> {
+export function providerSettings(
+  connectors: Connector[],
+  provider: string,
+): Map<string, Setting> {
   const out = new Map<string, Setting>();
   for (const c of connectors)
     if (c.provider === provider)
       for (const s of [...c.setup, ...c.afterConnect])
         for (const setting of s.settings ?? []) {
           if (RESERVED_SETTINGS.has(setting.id))
-            throw new Error(`${c.id}: setting id ${setting.id} is the connection's own`);
+            throw new Error(
+              `${c.id}: setting id ${setting.id} is the connection's own`,
+            );
           out.set(setting.id, setting);
         }
   return out;
@@ -1652,7 +1952,9 @@ export function providerSettings(connectors: Connector[], provider: string): Map
 export function expandCopy(lines: string[], scopes: string[]): string {
   return lines
     .flatMap((line) =>
-      line.includes("{scope}") ? scopes.map((s) => line.replaceAll("{scope}", s)) : [line],
+      line.includes("{scope}")
+        ? scopes.map((s) => line.replaceAll("{scope}", s))
+        : [line],
     )
     .map((line) => line.replaceAll("{scopes}", scopes.join(" ")))
     .join("\n");
@@ -1688,10 +1990,17 @@ export function pickLabels(
   return out;
 }
 
-function pick(data: unknown, path: string, match: Record<string, unknown> = {}): unknown[] {
+function pick(
+  data: unknown,
+  path: string,
+  match: Record<string, unknown> = {},
+): unknown[] {
   const matches = (v: unknown) =>
     Object.entries(match).every(
-      ([k, want]) => v && typeof v === "object" && (v as Record<string, unknown>)[k] === want,
+      ([k, want]) =>
+        v &&
+        typeof v === "object" &&
+        (v as Record<string, unknown>)[k] === want,
     );
   let values: unknown[] = [data];
   for (const part of path.split(".")) {

@@ -1,7 +1,15 @@
 import { z } from "zod";
-import { connectorSchema, providerSchema, setupStep } from "../../connector-kit/src/connector.js";
+import {
+  connectorSchema,
+  providerSchema,
+  setupStep,
+} from "../../connector-kit/src/connector.js";
 import { brandingSchema } from "../../connector-kit/src/branding.js";
-import { eventTriggerSchema, rotateSecretSchema, subscriptionSchema } from "./events/admin.js";
+import {
+  eventTriggerSchema,
+  rotateSecretSchema,
+  subscriptionSchema,
+} from "./events/admin.js";
 import { triggerSchema } from "./teams/admin.js";
 
 // The admin API's contract: every route once, with its body and the shapes it answers. The
@@ -17,7 +25,9 @@ const redirectUri = z
     (u) => u.startsWith("https://") || /^http:\/\/localhost(:\d+)?\//.test(u),
     "redirectUri must be https",
   )
-  .describe("The admin app's own callback page: https, or http://localhost while developing");
+  .describe(
+    "The admin app's own callback page: https, or http://localhost while developing",
+  );
 const consentFinish = z.object({
   state: z.string().max(4000),
   nonce: z.string().min(1).max(200),
@@ -34,12 +44,17 @@ const definition = z
 const config = z.record(z.string(), z.string());
 
 // Shared shapes, each a named schema in openapi.json (`id`).
-const named = <T extends z.ZodType>(id: string, schema: T) => schema.meta({ id });
+const named = <T extends z.ZodType>(id: string, schema: T) =>
+  schema.meta({ id });
 
 export const schemas = (() => {
   const Organization = named(
     "Organization",
-    z.strictObject({ id: z.guid(), name: z.string().nullable(), createdAt: iso }),
+    z.strictObject({
+      id: z.guid(),
+      name: z.string().nullable(),
+      createdAt: iso,
+    }),
   );
   const Check = named(
     "Check",
@@ -94,7 +109,11 @@ export const schemas = (() => {
     "Limits",
     z.record(
       z.string(),
-      z.union([z.array(z.string()), z.string(), z.record(z.string(), z.string())]),
+      z.union([
+        z.array(z.string()),
+        z.string(),
+        z.record(z.string(), z.string()),
+      ]),
     ),
   );
   const Grant = named(
@@ -118,7 +137,11 @@ export const schemas = (() => {
   const NewAgent = named("NewAgent", z.strictObject(agentFields));
   const Agent = named(
     "Agent",
-    z.strictObject({ ...agentFields, lastUsedAt: iso.nullable(), grants: z.array(Grant) }),
+    z.strictObject({
+      ...agentFields,
+      lastUsedAt: iso.nullable(),
+      grants: z.array(Grant),
+    }),
   );
   const access = z.enum(["granted", "not_granted", "not_found", "failed"]);
   const SiteAccess = named(
@@ -132,7 +155,10 @@ export const schemas = (() => {
   );
   const LiveCheck = named(
     "LiveCheck",
-    z.strictObject({ state: z.enum(["done", "failing", "todo"]), message: z.string() }),
+    z.strictObject({
+      state: z.enum(["done", "failing", "todo"]),
+      message: z.string(),
+    }),
   );
   const botFields = {
     id: z.string(),
@@ -209,7 +235,14 @@ export const schemas = (() => {
       triggerActivityId: z.string(),
       runner: z.string(),
       sessionId: z.string().nullable(),
-      state: z.enum(["starting", "running", "idle", "ended", "failed", "no_reply"]),
+      state: z.enum([
+        "starting",
+        "running",
+        "idle",
+        "ended",
+        "failed",
+        "no_reply",
+      ]),
       error: z.string().nullable(),
       note: z.string().nullable(),
       requestedBy: z.string().nullable(),
@@ -240,6 +273,27 @@ export const schemas = (() => {
       createdAt: iso,
     }),
   );
+  const FieldCondition = z.union([
+    z.strictObject({ field: z.string(), in: z.array(z.string()) }),
+    z.strictObject({ field: z.string(), notIn: z.array(z.string()) }),
+    z.strictObject({ field: z.string(), contains: z.array(z.string()) }),
+  ]);
+  const SeenCondition = z.strictObject({
+    seen: z.strictObject({ days: z.number() }),
+  });
+  const AnyOfCondition = z.strictObject({
+    anyOf: z.array(z.union([FieldCondition, SeenCondition])),
+  });
+  const TriggerCondition = z.union([
+    FieldCondition,
+    SeenCondition,
+    AnyOfCondition,
+    z.strictObject({
+      logOnly: z.array(
+        z.union([FieldCondition, SeenCondition, AnyOfCondition]),
+      ),
+    }),
+  ]);
   const EventTrigger = named(
     "EventTrigger",
     z.strictObject({
@@ -248,12 +302,7 @@ export const schemas = (() => {
       connectorId: z.string(),
       enabled: z.boolean(),
       eventTypes: z.array(z.string()),
-      conditions: z.array(
-        z.union([
-          z.strictObject({ field: z.string(), in: z.array(z.string()) }),
-          z.strictObject({ field: z.string(), notIn: z.array(z.string()) }),
-        ]),
-      ),
+      conditions: z.array(TriggerCondition),
       prompt: z.string(),
       runner: z.string(),
       settings: z.record(z.string(), z.unknown()),
@@ -313,9 +362,18 @@ export const schemas = (() => {
     "ClaudeKey",
     z.union([z.strictObject({ set: z.literal(false) }), keySet]),
   );
-  const ClaudeAgent = named("ClaudeAgent", z.strictObject({ id: z.string(), name: z.string() }));
-  const ClaudeKeySaved = named("ClaudeKeySaved", keySet.extend({ agents: z.array(ClaudeAgent) }));
-  const SignIn = named("SignIn", z.strictObject({ url: z.string(), nonce: z.string() }));
+  const ClaudeAgent = named(
+    "ClaudeAgent",
+    z.strictObject({ id: z.string(), name: z.string() }),
+  );
+  const ClaudeKeySaved = named(
+    "ClaudeKeySaved",
+    keySet.extend({ agents: z.array(ClaudeAgent) }),
+  );
+  const SignIn = named(
+    "SignIn",
+    z.strictObject({ url: z.string(), nonce: z.string() }),
+  );
   const Connector = named("Connector", connectorSchema);
   const InternalApp = named(
     "InternalApp",
@@ -366,13 +424,19 @@ export const schemas = (() => {
       }),
     ),
     Branding: named("Branding", brandingSchema),
-    Provider: named("Provider", providerSchema.extend({ approval: z.boolean() })),
+    Provider: named(
+      "Provider",
+      providerSchema.extend({ approval: z.boolean() }),
+    ),
     ProviderConnection,
     Connection,
     Check,
     CheckOutcome: named(
       "CheckOutcome",
-      z.union([z.strictObject({ ok: z.literal(true), checks: z.array(Check) }), Failed]),
+      z.union([
+        z.strictObject({ ok: z.literal(true), checks: z.array(Check) }),
+        Failed,
+      ]),
     ),
     SignInCheck: named("SignInCheck", z.union([Ok, Failed])),
     ConnectResult,
@@ -380,7 +444,11 @@ export const schemas = (() => {
     SiteAccess,
     AgentAccess: named(
       "AgentAccess",
-      z.strictObject({ value: z.string(), status: access, message: z.string() }),
+      z.strictObject({
+        value: z.string(),
+        status: access,
+        message: z.string(),
+      }),
     ),
     Limits,
     Grant,
@@ -400,7 +468,10 @@ export const schemas = (() => {
         vendorStatus: z.number().nullable(),
       }),
     ),
-    Confirmed: named("Confirmed", z.strictObject({ step: z.string(), by: z.string(), at: iso })),
+    Confirmed: named(
+      "Confirmed",
+      z.strictObject({ step: z.string(), by: z.string(), at: iso }),
+    ),
     LiveCheck,
     TeamsBotRecord,
     TeamsPlace,
@@ -416,7 +487,11 @@ export const schemas = (() => {
     ),
     InstallTarget: named(
       "InstallTarget",
-      z.strictObject({ id: z.string(), name: z.string(), detail: z.string().nullable() }),
+      z.strictObject({
+        id: z.string(),
+        name: z.string(),
+        detail: z.string().nullable(),
+      }),
     ),
     TeamsTrigger,
     TeamsRun,
@@ -432,7 +507,9 @@ export const schemas = (() => {
         // Where to paste the address and secret in the app ({url} filled in).
         setup: z.array(setupStep),
         // Registering through the app's API, when asked.
-        registration: z.strictObject({ ok: z.boolean(), message: z.string() }).nullable(),
+        registration: z
+          .strictObject({ ok: z.boolean(), message: z.string() })
+          .nullable(),
       }),
     ),
     EventTrigger,
@@ -504,7 +581,8 @@ export const routes = {
   ensureOrganization: {
     method: "PUT",
     path: ORG,
-    summary: "Makes the organization with this id if missing, and names it when a name is given",
+    summary:
+      "Makes the organization with this id if missing, and names it when a name is given",
     body: z.object({ name: name.optional() }),
     responses: { 200: s.Organization },
   },
@@ -523,7 +601,8 @@ export const routes = {
   orgConnectors: {
     method: "GET",
     path: `${ORG}/connectors`,
-    summary: "The apps the organization can use: the deployment's and its own internal apps",
+    summary:
+      "The apps the organization can use: the deployment's and its own internal apps",
     responses: { 200: z.array(s.Connector) },
   },
   internalApps: {
@@ -557,7 +636,8 @@ export const routes = {
   draftInternalApp: {
     method: "POST",
     path: "/internal-apps/draft",
-    summary: "Drafts an internal app's definition from an OpenAPI 3.x spec (JSON)",
+    summary:
+      "Drafts an internal app's definition from an OpenAPI 3.x spec (JSON)",
     body: z
       .object({
         spec: z.record(z.string(), z.unknown()),
@@ -565,7 +645,10 @@ export const routes = {
         operations: z.array(z.string()).optional(),
         tags: z.array(z.string()).optional(),
       })
-      .refine((b) => b.operations?.length || b.tags?.length, "Name operations or tags"),
+      .refine(
+        (b) => b.operations?.length || b.tags?.length,
+        "Name operations or tags",
+      ),
     responses: { 200: s.InternalAppDraft },
   },
   providers: {
@@ -603,14 +686,16 @@ export const routes = {
   newCertificate: {
     method: "POST",
     path: `${PROVIDER}/certificate`,
-    summary: "Before connecting, the certificate to upload; after, one to rotate to",
+    summary:
+      "Before connecting, the certificate to upload; after, one to rotate to",
     body: by,
     responses: { 200: s.ProviderConnection },
   },
   activateCertificate: {
     method: "POST",
     path: `${PROVIDER}/certificate/activate`,
-    summary: "Signs in with the new certificate and, if that works, switches to it",
+    summary:
+      "Signs in with the new certificate and, if that works, switches to it",
     body: by,
     responses: { 200: s.ProviderConnection },
   },
@@ -618,7 +703,10 @@ export const routes = {
     method: "PUT",
     path: `${PROVIDER}/settings`,
     summary: "Values the provider's apps ask for in their steps",
-    body: z.object({ values: z.record(z.string(), z.string().max(400)), by: name }),
+    body: z.object({
+      values: z.record(z.string(), z.string().max(400)),
+      by: name,
+    }),
     responses: { 200: z.strictObject({ settings: config }) },
   },
   confirmed: {
@@ -651,7 +739,11 @@ export const routes = {
     method: "PUT",
     path: APP,
     summary: "Turns an app on, checking it before saving",
-    body: z.object({ capabilities: z.array(z.string()), fields, connectedBy: name }),
+    body: z.object({
+      capabilities: z.array(z.string()),
+      fields,
+      connectedBy: name,
+    }),
     responses: { 200: s.ConnectResult },
   },
   setCeiling: {
@@ -732,7 +824,10 @@ export const routes = {
     path: `${ORG}/agents`,
     summary: "Makes an agent; its key is returned this once",
     body: z.object({ name, createdBy: name }),
-    responses: { 201: z.strictObject({ agent: s.NewAgent, key: z.string() }), 409: s.Error },
+    responses: {
+      201: z.strictObject({ agent: s.NewAgent, key: z.string() }),
+      409: s.Error,
+    },
   },
   setAgentStatus: {
     method: "PATCH",
@@ -759,7 +854,11 @@ export const routes = {
     method: "PUT",
     path: `${AGENT}/grants/{app}`,
     summary: "What the agent may do in one app",
-    body: z.object({ capabilities: z.array(z.string()), limits: z.unknown().optional(), by: name }),
+    body: z.object({
+      capabilities: z.array(z.string()),
+      limits: z.unknown().optional(),
+      by: name,
+    }),
     responses: { 204: null, ...notFound },
   },
   removeGrant: {
@@ -773,7 +872,11 @@ export const routes = {
     method: "GET",
     path: `${ORG}/audit`,
     summary: "Recent requests and admin changes, newest first",
-    query: { limit: "1 to 500, default 50", agent: "an agent id", app: "an app id" },
+    query: {
+      limit: "1 to 500, default 50",
+      agent: "an agent id",
+      app: "an app id",
+    },
     responses: { 200: z.array(s.AuditRow) },
   },
   teamsBots: {
@@ -796,7 +899,11 @@ export const routes = {
     summary: "The publishing sign-in came back: publishes the bot's package",
     body: consentFinish.omit({ connectedBy: true }).extend({ by: name }),
     responses: {
-      200: z.strictObject({ agentId: z.string(), version: z.string(), changed: z.boolean() }),
+      200: z.strictObject({
+        agentId: z.string(),
+        version: z.string(),
+        changed: z.boolean(),
+      }),
     },
     teams: true,
   },
@@ -811,7 +918,8 @@ export const routes = {
   connectTeamsBot: {
     method: "PUT",
     path: BOT,
-    summary: "Proves the application ID the setup script printed by signing in as it",
+    summary:
+      "Proves the application ID the setup script printed by signing in as it",
     body: z.object({ botAppId: z.string().max(100), by: name }),
     responses: { 200: s.TeamsBotRecord },
     teams: true,
@@ -834,7 +942,9 @@ export const routes = {
     path: `${BOT}/add`,
     summary: "Makes the agent's bot in the tenant, each part only if missing",
     body: z.object({ displayName: z.string().max(100), by: name }),
-    responses: { 200: z.strictObject({ steps: z.array(s.AddStep), bot: s.TeamsBotRecord }) },
+    responses: {
+      200: z.strictObject({ steps: z.array(s.AddStep), bot: s.TeamsBotRecord }),
+    },
     teams: true,
   },
   startTeamsPublish: {
@@ -862,7 +972,9 @@ export const routes = {
       id: z.string().max(2000),
       by: name,
     }),
-    responses: { 200: z.strictObject({ result: z.enum(["added", "already", "updated"]) }) },
+    responses: {
+      200: z.strictObject({ result: z.enum(["added", "already", "updated"]) }),
+    },
     teams: true,
   },
   teamsKit: {
@@ -918,7 +1030,8 @@ export const routes = {
   activateTeamsCertificate: {
     method: "POST",
     path: `${BOT}/certificate/activate`,
-    summary: "Signs in with the bot's new certificate and, if that works, switches to it",
+    summary:
+      "Signs in with the bot's new certificate and, if that works, switches to it",
     body: by,
     responses: { 200: s.TeamsBotRecord },
     teams: true,
@@ -949,7 +1062,8 @@ export const routes = {
   eventSubscriptions: {
     method: "GET",
     path: `${ORG}/event-subscriptions`,
-    summary: "The apps whose events reach this organization, by webhook or by polling",
+    summary:
+      "The apps whose events reach this organization, by webhook or by polling",
     responses: { 200: z.array(s.EventSubscription) },
     events: true,
   },
@@ -971,7 +1085,10 @@ export const routes = {
       "that makes its own signing secret (Slack), give the new one as secret; null is answered",
     body: rotateSecretSchema,
     responses: {
-      200: z.strictObject({ subscription: s.EventSubscription, secret: z.string().nullable() }),
+      200: z.strictObject({
+        subscription: s.EventSubscription,
+        secret: z.string().nullable(),
+      }),
       ...notFound,
     },
     events: true,
@@ -987,7 +1104,8 @@ export const routes = {
   unsubscribeEvents: {
     method: "DELETE",
     path: `${ORG}/event-subscriptions/{subscription}`,
-    summary: "Stops receiving an app's events (remove the webhook in the app too)",
+    summary:
+      "Stops receiving an app's events (remove the webhook in the app too)",
     body: by,
     responses: { 204: null, ...notFound },
     events: true,
@@ -1002,7 +1120,8 @@ export const routes = {
   setEventTrigger: {
     method: "PUT",
     path: `${AGENT}/event-triggers/{app}`,
-    summary: "Sets which of an app's events start the agent and how, checked by its runner first",
+    summary:
+      "Sets which of an app's events start the agent and how, checked by its runner first",
     body: eventTriggerSchema,
     responses: { 200: s.EventTrigger },
     events: true,
@@ -1033,7 +1152,8 @@ export const routes = {
   setClaudeKey: {
     method: "PUT",
     path: `${ORG}/claude-key`,
-    summary: "Saves the organization's Claude API key, proven by listing its agents",
+    summary:
+      "Saves the organization's Claude API key, proven by listing its agents",
     body: z.object({ apiKey: z.string().max(400), by: name }),
     responses: { 200: s.ClaudeKeySaved },
     teams: true,
