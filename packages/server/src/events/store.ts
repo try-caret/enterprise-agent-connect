@@ -74,6 +74,8 @@ export type EventRunRow = {
   eventType: string;
   deliveryId: string;
   thread: string | null;
+  // Started only because the conditions it failed were log-only.
+  wouldFilter: boolean;
   runner: string;
   sessionId: string | null;
   state: "starting" | "running" | "ended" | "failed";
@@ -152,7 +154,8 @@ const TRIGGER = `t.id::text, t.agent_id::text as "agentId", t.connector_id as "c
 
 const RUN = `r.id::text, r.agent_id::text as "agentId", r.trigger_id::text as "triggerId",
   t.connector_id as "connectorId", r.event_type as "eventType", r.delivery_id as "deliveryId",
-  r.thread, r.runner, r.session_id as "sessionId", r.state, r.error, r.cost_cents as "costCents",
+  r.thread, r.would_filter as "wouldFilter", r.runner, r.session_id as "sessionId", r.state,
+  r.error, r.cost_cents as "costCents",
   ${iso("r.started_at")} as "startedAt", ${iso("r.finished_at")} as "finishedAt"`;
 
 const WATCH = `id::text, subscription_id::text as "subscriptionId", value,

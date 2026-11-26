@@ -1890,6 +1890,7 @@ export interface components {
             eventType: string;
             deliveryId: string;
             thread: string | null;
+            wouldFilter: boolean;
             runner: string;
             sessionId: string | null;
             /** @enum {string} */

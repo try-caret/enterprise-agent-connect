@@ -288,8 +288,8 @@ export function createEventsAdmin(deps: {
         );
       if (namesSelf(rest.conditions) && !declared.self)
         throw new InvalidInput(`${connector.name} does not say who its connection is, for {self}`);
-      const seen = [...seenDays(rest.conditions), ...seenDays(rest.conditions, true)];
-      if (seen.length && !declared.thread)
+      const seenChecks = [...seenDays(rest.conditions), ...seenDays(rest.conditions, true)];
+      if (seenChecks.length && !declared.thread)
         throw new InvalidInput(`${connector.name} events have no thread for a seen condition`);
       const runner = deps.runners.get(rest.runner);
       if (!runner?.startEvent)

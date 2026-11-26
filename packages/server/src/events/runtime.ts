@@ -344,7 +344,9 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     thread: string | null,
   ): Promise<ConditionContext | Error> {
     let self: string | null = null;
-    if (connector.events!.self && namesSelf(trigger.conditions)) {
+    if (namesSelf(trigger.conditions)) {
+      if (!connector.events!.self)
+        return new Error(`${connector.name} does not say who its connection is, for {self}`);
       const id = await selfId(org, connector);
       if (id instanceof Error) return id;
       self = id;
@@ -595,6 +597,7 @@ export function createEventsRuntime(deps: EventsRuntimeDeps) {
     connectorId: row.connectorId,
     eventType: row.eventType,
     deliveryId: row.deliveryId,
+    ...(row.wouldFilter ? { wouldFilter: "a log-only condition failed" } : {}),
   });
 
   // The next hand-over of a run the runner did not take, as the trigger stands now.

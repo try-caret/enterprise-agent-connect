@@ -186,8 +186,9 @@ All conditions must hold. Each is one of:
   within n days. Inside `logOnly`, runs the trial would have filtered do not count.
 - `{"anyOf": [...]}`: one of the field conditions or `seen` inside holds.
 - `{"logOnly": [...]}`: never stops a run; when the conditions inside fail, the run's start is
-  audited with `would filter (log only): ...`. Use it to try a filter on real traffic, then drop the
-  wrapper to enforce it.
+  audited with `would filter (log only): ...`, and the run is marked `wouldFilter` (`GET
+  …/event-runs`), which is what to count a trial by. Use it to try a filter on real traffic,
+  then drop the wrapper to enforce it.
 
 Filtered events are audited `Filtered: ...` and never count against the caps. Jira `mentions`
 are the account ids a comment mentions (`[~accountid:...]`), read from the whole comment;

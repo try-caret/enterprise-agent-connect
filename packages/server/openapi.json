@@ -11585,6 +11585,9 @@
               "null"
             ]
           },
+          "wouldFilter": {
+            "type": "boolean"
+          },
           "runner": {
             "type": "string"
           },
@@ -11639,6 +11642,7 @@
           "eventType",
           "deliveryId",
           "thread",
+          "wouldFilter",
           "runner",
           "sessionId",
           "state",

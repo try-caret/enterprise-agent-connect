@@ -294,6 +294,8 @@ export const schemas = (() => {
       deliveryId: z.string(),
       // The same for every run of one thread of the app (a mail conversation) on this trigger.
       thread: z.string().nullable(),
+      // Started only because the conditions it failed were log-only (a trial of a filter).
+      wouldFilter: z.boolean(),
       runner: z.string(),
       sessionId: z.string().nullable(),
       state: z.enum(["starting", "running", "ended", "failed"]),
